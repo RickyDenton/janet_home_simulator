@@ -8,7 +8,7 @@
             sim_restserver,sup_jsim,
 			sup_location,sup_locations,
 			utils]},
-  {registered,[sup_locations]},             % Registered Names (TODO: FIX)
+  {registered,[sup_locs]},                  % Registered Names
   {applications,[mnesia,stdlib,kernel]},    % Application Dependencies
   {mod,{jsim,[]}}                           % Application Callback Module
  ]

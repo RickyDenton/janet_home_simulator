@@ -80,8 +80,6 @@ is_running(AppName) ->
 
 % Start the Janet Simulator
 start(normal, _Args) ->
- 
- % -- Read DB here? --
  sup_jsim:start_link().
  
 % Stop the Janet Simulator
