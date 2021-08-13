@@ -1,0 +1,19 @@
+{tables,[{sublocation,[{record_name,sublocation},{attributes,[sub_id,name]}]},
+         {location,[{record_name,location},
+                    {attributes,[loc_id,name,user,port]}]},
+         {locmanager,[{record_name,locmanager},{attributes,[loc_id,sup_pid]}]},
+         {device,[{record_name,device},
+                  {attributes,[dev_id,sub_id,type,config]}]},
+         {ctrmanager,[{record_name,ctrmanager},
+                      {attributes,[loc_id,sup_pid,status]}]},
+         {devmanager,[{record_name,devmanager},
+                      {attributes,[dev_id,sup_pid,status]}]}]}.
+{sublocation,{1,0},"(default)"}.
+{sublocation,{1,1},"Bagno"}.
+{sublocation,{2,0},"(default)"}.
+{location,1,"Casa","Riccardo",1242552}.
+{location,2,"Ufficio","Gianni",42}.
+{device,4,{2,0},door,{offline,close,lock}}.
+{device,1,{1,1},fan,{offline,off,0}}.
+{device,3,{1,0},heater,{offline,21,21,0}}.
+{device,2,{1,1},fan,{offline,off,0}}.
