@@ -1,6 +1,7 @@
 -module(db).
--export([add_location/4,add_sublocation/2,add_device/3,update_dev_subloc/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,subtry/0,read_location/1,install/0,clear/0,reset/0,reset/1,dump/0,dump/1,print_table/1,record_by_id/2,print_sublocation/1,print_location/1,recordnum/0]).
-
+-export([add_location/4,add_sublocation/2,add_device/3,update_dev_subloc/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,subtry/0,read_location/1,install/0,clear/0,reset/0,reset/1,dump/0,dump/1,print_table/1,record_by_id/2,recordnum/0]).
+-export([print_tree_sublocation/3,print_tree_location/2,print_tree_user/1]).
+-export([print_tree/1,print_tree/2]).
 %%====================================================================================================================================%%
 %%                                               MNESIA TABLES RECORDS DEFINITIONS                                                    %%
 %%====================================================================================================================================%%
@@ -293,7 +294,331 @@ update_subloc_name(_,_) ->
  {error,badarg}.
  
 
+
+
+
+
+
+
+
+%% DESCRIPTION:  Prints the contents of all or a specific table in the database
+%%
+%% ARGUMENTS:    - (Tabletype): The table whose contents are to be printed, also considering shorthand forms
+%%               - (all):   Print all tables contents   
+%%
+%% RETURNS:      - If it exists, the list of records in the specified table
+%%               - {error,unknown_table} if unknown Tabletype
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none  
+print_table(all) ->
  
+ % Call the function on all tables
+ print_table(location),
+ print_table(sublocation),
+ print_table(device);
+ 
+print_table(Tabletype) when is_atom(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+ 
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+   
+  % Otherwise print the table header and contents
+  _->   
+   print_table_header(Table),
+   print_table_records(get_table_records(Table))
+ end;
+ 
+print_table(_) ->
+ {error,badarg}.
+
+%% Prints the header of a table (print_table helper function) 
+print_table_header(location) ->
+ io:format("~nLOCATION TABLE {loc_id,name,user,port}~n==============~n");
+print_table_header(sublocation) ->
+ io:format("~nSUBLOCATION TABLE {sub_id,name}~n=================~n");
+print_table_header(device) -> 
+ io:format("~nDEVICE TABLE {dev_id,sub_id,type,config}~n============~n").
+
+%% Prints the records in a table (print_table helper function)  
+print_table_records([]) ->
+ io:format("~n");
+print_table_records([H|T]) ->
+ io:format("~s~n",[io_lib:format("~p",[H])]),
+ print_table_records(T).
+ 
+
+%% DESCRIPTION:  Searchs for a record in a table by id
+%%
+%% ARGUMENTS:    - Tabletype: The table where to search the record in, also considering shorthand forms
+%%               - Id: The id of the record to search for
+%%
+%% RETURNS:      - If the record is found, its contents
+%%               - not_found, if the record is not found
+%%               - {error,unknown_table} if unknown Tabletype
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none  
+record_by_id(Tabletype,Id) when is_atom(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+ 
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % Otherwise, search for the record by Id
+  _ ->
+   case mnesia:transaction(fun() -> mnesia:read({Table,Id}) end) of
+    
+	% If the record was found, return it
+    {atomic,[Record]} ->
+	 Record;
+	 
+	% Otherwise, return that it was not found 
+	{atomic,[]} ->
+	 not_exists
+   end
+ end;
+
+record_by_id(_,_) ->
+ {error,badarg}.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+%% DESCRIPTION:  Prints database contents indented as a tree
+%%
+%% ARGUMENTS:    - (all):                prints all locations, sublocations and devices of all users in the database
+%%               - (user,Username):      prints all locations, sublocations and devices of a specific user in the database
+%%               - (location,Loc_id):    prints all sublocations and devices in a specific location
+%%               - (sublocation,Sub_id): prints all devices in a specific sublocation
+%%
+%% RETURNS:      A view of the database indented as a tree, depending on the arguments
+%%
+%% THROWS:       none  
+print_tree(all) ->
+ 
+ % Retrieve all unique users in the database
+ UserList = get_all_users(),
+ 
+ if
+ 
+  % If there is at least one user, print all the users' locations, sublocations and devices as a tree
+  length(UserList) > 0 ->
+   io:format("~n"),
+   print_tree_user(UserList);
+  
+  % Otherwise, inform that there is no user in the database
+  true ->
+   io:format("The database is empty")
+ end;
+
+print_tree(_) ->
+ {error, badarg}.
+
+
+print_tree(user,Username) ->
+ 
+ % Check the user to exist
+ UserLocs = mnesia:dirty_match_object(#location{user = Username, _ = '_'}),
+
+ case UserLocs of
+ 
+  % If the user was not found, return
+  [] ->
+   not_found;
+   
+  % Otherwise print information on all the user's locations, sublocations and devices as a tree, taking the indentation into account
+  _Loclist -> 
+   io:format("~n{user: ~s}~n",[io_lib:format("~p",[Username])]),
+   print_tree_location(UserLocs,"|--"),
+   io:format("~n")
+ end;
+  
+  
+print_tree(Tabletype,Id) when is_atom(Tabletype) ->
+ 
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % The device table is not supported in this case
+  device ->
+   {error,unsupported};
+  
+  location ->
+  
+   % Check the location to exist
+   Location = mnesia:dirty_read({Table,Id}),
+   case Location of
+   
+   	% If it not exists, return an error
+    [] ->
+	 {error,location_not_exists};
+	 
+    % If it exists, print its sublocations and devices as a tree
+    _Location ->
+	 io:format("~n"),
+	 print_tree_location(Location,""),
+	 io:format("~n")
+   end;
+ 
+  sublocation ->
+  
+   % Check the sublocation to exist
+   Sublocation = mnesia:dirty_read({Table,Id}),
+   case Sublocation of
+   
+   	% If it not exists, return an error
+	[] ->
+	 {error,sublocation_not_exists};
+   
+    % If it exists, print its devices as a tree
+    _Sublocation ->
+	 io:format("~n"),
+	 print_tree_sublocation(Sublocation,"",""),
+     io:format("~n")
+   end
+ end;
+ 
+print_tree(_,_) ->
+ {error, badarg}.
+
+%% Prints all locations, sublocations and devices belonging to a list of users as a tree (print_tree(user,Username),print_tree(All) helper function) 
+print_tree_user([]) ->
+ ok;
+print_tree_user([User|NextUser]) ->
+ 
+ % Retrieve the user's locations list
+ Loclist = mnesia:dirty_match_object(#location{user = User, _ = '_'}),
+
+ % Print information on the user
+ io:format("{user: ~s}~n",[io_lib:format("~p",[User])]),
+ 
+ % Print information on all the user's locations, sublocations and devices as a tree, taking the indentation into account
+ print_tree_location(Loclist,"|--"),
+ io:format("~n"),	
+ print_tree_user(NextUser).
+
+
+%% Prints all sublocations and devices in a list of locations as a tree (print_tree(location,Loc_id), print_tree_user([User|NextUser]) helper function)
+print_tree_location([],_) ->
+ ok;
+print_tree_location([Loc|Nextloc],Indent) ->
+ 
+ % Retrieve the list of sublocations in the location (note that at least the "(default)" sublocation is always present)
+ Subloclist = mnesia:dirty_match_object(#sublocation{sub_id = {Loc#location.loc_id,'_'}, _ = '_'}),
+ 
+ % Print information on the location
+ io:format("~s~s~n",[Indent,io_lib:format("~p",[Loc])]),
+ 
+ % Print information on all location's sublocations and devices as a tree, taking the indentation into account
+ case {Indent, Nextloc} of
+  {"",_} ->
+   print_tree_sublocation(Subloclist,"","|--");
+  {_,[]} ->
+   print_tree_sublocation(Subloclist,"   ","|--");
+  {_,_Otherloc} ->
+   print_tree_sublocation(Subloclist,"|  ","|--")
+ end,
+ print_tree_location(Nextloc,Indent).
+
+
+%% Prints all devices in a list of locations as a tree (print_tree(sublocation,Sub_id), print_tree_location([Loc|NextLoc],Indent) helper function)
+print_tree_sublocation([],_,_) ->
+ ok;
+print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) ->
+
+ % Retrieve the list of devices in the sublocation
+ Devlist = mnesia:dirty_match_object(#device{sub_id=Subloc#sublocation.sub_id, _ = '_'}),
+ 
+ case Devlist of
+  [] ->
+   
+   % If the sublocation is empty, just print its information
+   io:format("~s~s (empty)~n",[Indent1++Indent2,io_lib:format("~p",[Subloc])]);
+		  
+  _Devices ->
+   
+   % Otherwise also print the devices within the location as a tree, taking the indentation into account
+   io:format("~s~s~n",[Indent1++Indent2,io_lib:format("~p",[Subloc])]),
+   case {Indent2, NextSubloc} of
+    {"|--",[]} ->
+	 print_tree_device(Devlist,Indent1 ++ "   " ++ Indent2);
+    {"|--",_OtherSubloc} ->
+     print_tree_device(Devlist,Indent1 ++ "|  " ++ Indent2);
+	{"",[]} ->
+	 print_tree_device(Devlist,"|--")
+   end
+ end,
+ print_tree_sublocation(NextSubloc,Indent1,Indent2).
+
+
+%% Prints all devices in a location as a tree (print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) helper function) 
+print_tree_device([],_) ->
+ ok;
+print_tree_device([Dev|NextDev],Indent) ->
+ io:format("~s~s~n",[Indent,io_lib:format("~p",[Dev])]),
+ print_tree_device(NextDev,Indent).
+
+
+
+
+
+
+
+
+
+
+%% DESCRIPTION:  Prints the number of records in each of the database's disc_copies tables
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      The number of records in each of the database's disc_copies tables
+%%
+%% THROWS:       none  
+recordnum() ->
+
+ % Retrieve the number of records in each of the database's disc_copies tables and print it
+ LocationKeysNum = get_table_keys_num(location),
+ SublocationKeysNum = get_table_keys_num(sublocation),
+ DeviceKeysNum = get_table_keys_num(device),
+ io:format("~p location(s), ~p sublocation(s), ~p device(s)~n",[LocationKeysNum,SublocationKeysNum,DeviceKeysNum]).
+
+
+
  
  
 %% Utility 
@@ -316,25 +641,6 @@ read_location(Loc_id) ->
   {atomic,[#location{loc_id=Loc_id,name=Name,user=User,port=Port}]} ->
    {Loc_id,Name,User,Port}
   end.
-
-
-% -----------------------------------  TODO!!!!!!!!!!!!!
-
-%addlocation(Id,Port,Name,User) ->
-% F = fun() ->
-%	 mnesia:write(#location{id=Id,port=Port,status=offline,name=Name,user=User,devlist=[],sublocations=[]})
-%	 end,
-% mnesia:transaction(F).
- 
-%findlocation(Id) ->
-% F = fun() -> mnesia:read({location,Id}) end,
-% case mnesia:transaction(F) of
-%  {atomic,[]} ->
-%   undefined;
-%  {atomic,[#location{id=I,port=P,status=ST,name=N,user=U,sublocations=SU}]} ->
-%   {I,P,ST,N,U,SU}
-%  end.
-
 
 
 %%====================================================================================================================================
@@ -491,218 +797,6 @@ install() ->
   _ ->
    CheckOp
  end.
-
-
-%% DESCRIPTION:  Prints the contents of a specific or all tables in the database
-%%
-%% ARGUMENTS:    - (Table): The table whose contents are to be printed
-%%               - (all):   Print all tables contents   
-%%
-%% RETURNS:      The list of records in the specified table
-%%
-%% THROWS:       none  
-print_table(all) ->
- print_table(location),
- print_table(sublocation),
- print_table(device);
-print_table(Table) ->
- print_table_header(Table),
- print_table_records(get_table_records(Table)).
- 
-print_table_header(location) ->
- io:format("~nLOCATION TABLE {loc_id,name,user,port}~n==============~n");
-print_table_header(sublocation) ->
- io:format("~nSUBLOCATION TABLE {sub_id,name}~n=================~n");
-print_table_header(device) -> 
- io:format("~nDEVICE TABLE {dev_id,sub_id,type,config}~n============~n").
- 
-print_table_records([]) ->
- io:format("~n");
-print_table_records([H|T]) ->
- io:format("~s~n",[io_lib:format("~p",[H])]),
- print_table_records(T).
- 
-
-%% DESCRIPTION:  Search for a record in a table by id
-%%
-%% ARGUMENTS:    - Tabletype: The table where to search the record in (location, sublocation, device or their shorthand forms)
-%%               - Id: The id of the record to search for
-%%
-%% RETURNS:      - The record, if it is found
-%%               - not_found, if the device is not found
-%%               - {error,unknown_table} if the table is unknown
-%%               - {error,badarg} if wrong argument format
-%%
-%% THROWS:       none  
-record_by_id(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
-
- % Check the TableType to be valid, also considering the shorthand forms
- if
-  Tabletype =:= loc orelse Tabletype =:= location ->
-   Table = location;
-  Tabletype =:= sub orelse Tabletype =:= subloc orelse Tabletype =:= sublocation ->
-   Table = sublocation;
-  Tabletype =:= dev orelse Tabletype =:= device ->
-   Table = device;
-  true ->
-   Table = unknown
- end,
-   
- case Table of
- 
-  % If the Tabletype is invalid, return an error
-  unknown ->
-   {error,unknown_table};
-  
-  % Otherwise, search for the record by Id
-  _ ->
-   case mnesia:transaction(fun() -> mnesia:read({Table,Id}) end) of
-    
-	% If it was found, return it
-    {atomic,[Record]} ->
-	 Record;
-	 
-	% Otherwise, return that it was not found 
-	{atomic,[]} ->
-	 not_exists
-   end
- end;
-
-record_by_id(_,_) ->
- {error,badarg}.
-
-
-%% DESCRIPTION:  Print the information on a sublocation and all devices in it
-%%
-%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation to print information
-%%
-%% RETURNS:      - If found, information on the sublocation and its devices
-%%               - {error,sublocation_not_exists} if the sublocation is not found
-%%               - {error,badarg} if wrong argument format
-%%
-%% THROWS:       none 
-print_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
- F = fun() ->
- 
-      % Check the sublocation to exist
-	  case mnesia:read({sublocation,{Loc_id,Subloc_id}}) of
-	   [Sublocation] ->
-	    
-		% Retrieve the list of devices in the sublocation
-		DevList = mnesia:match_object(#device{sub_id={Loc_id,Subloc_id}, _ = '_'}),
-		case DevList of
-		
-		 % If the sublocation is empty, just print its information
-		 [] ->
-		  io:format("~n~s (empty)~n~n",[io_lib:format("~p",[Sublocation])]);
-		  
-		 % Otherwise, also print all its devices 
-		 _ -> 
-		  io:format("~n~s~n",[io_lib:format("~p",[Sublocation])]),
-		  print_dev_in_sub(DevList)
-		end;
-		
-	   [] ->
-	    mnesia:abort(sublocation_not_exists)
-      end
-     end,
- 
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   ok;
-  _ ->
-   Result
- end;
- 
-print_sublocation(_) ->
- {error,badarg}.
-
-print_dev_in_sub([]) ->
- io:format("~n");
-print_dev_in_sub([Dev|T]) ->
- io:format("|--~s~n",[io_lib:format("~p",[Dev])]),
- print_dev_in_sub(T).
-
-
-%% DESCRIPTION:  Print the information on a location along with all its sublocations and devices
-%%
-%% ARGUMENTS:    - Loc_id: The loc_id of the location to print information
-%%
-%% RETURNS:      - If found, information on the location along with all its sublocations and devices
-%%               - {error,location_not_exists} if the location is not found
-%%               - {error,badarg} if wrong argument format
-%%
-%% THROWS:       none 
-print_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
- F = fun() ->
- 
-      % Check the location to exist
-	  case mnesia:read({location,Loc_id}) of
-	   [Location] ->
-	    
-		% Retrieve the list of sublocations in the location (note that at least the "default" sublocation is always returned)
-		Subloclist = mnesia:match_object(#sublocation{sub_id = {Loc_id,'_'}, _ = '_'}),
-		io:format("~n~s~n",[io_lib:format("~p",[Location])]),
-		print_sub_in_loc(Subloclist);
-		
-	   [] ->
-	    mnesia:abort(location_not_exists)
-      end
-     end,
- 
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   ok;
-  _ ->
-   Result
- end;
- 
-print_location(_) ->
- {error,badarg}.
-
-
-print_sub_in_loc([]) ->
- io:format("~n");
-print_sub_in_loc([Subloc|T]) ->
-
- % Retrieve the list of devices in the sublocation
- DevList = mnesia:match_object(#device{sub_id=Subloc#sublocation.sub_id, _ = '_'}),
- case DevList of
-		
-  % If the sublocation is empty, just print its information
-  [] ->
-   io:format("|--~s (empty)~n",[io_lib:format("~p",[Subloc])]);
-		  
-  % Otherwise, also print all its devices 
-  _ ->
-   io:format("|--~s~n",[io_lib:format("~p",[Subloc])]),
-   print_dev_in_sub_in_loc(DevList)
- end,
- print_sub_in_loc(T).
- 
-print_dev_in_sub_in_loc([]) ->
- ok;
-print_dev_in_sub_in_loc([Dev|T]) ->
- io:format("|  |--~s~n",[io_lib:format("~p",[Dev])]),
- print_dev_in_sub_in_loc(T).
-
-
-%% DESCRIPTION:  Prints the number of records in each of the database's disc_copies tables
-%%
-%% ARGUMENTS:    none
-%%
-%% RETURNS:      The number of records in each of the database's disc_copies tables
-%%
-%% THROWS:       none  
-recordnum() ->
-
- % Retrieve the number of records in each of the database's disc_copies tables and print it:
- LocationKeysNum = get_table_keys_num(location),
- SublocationKeysNum = get_table_keys_num(sublocation),
- DeviceKeysNum = get_table_keys_num(device),
- io:format("~p location(s), ~p sublocation(s), ~p device(s)~n",[LocationKeysNum,SublocationKeysNum,DeviceKeysNum]).
  
  
 %%====================================================================================================================================
@@ -779,3 +873,38 @@ get_table_keys_num(Table) ->
 %% THROWS:       none 
 get_table_records(Table) ->
  mnesia:dirty_select(Table,[{'_',[],['$_']}]). % The second argument is a "catch-all" clause
+  
+  
+%% DESCRIPTION:  Returns all unique users in the database
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      All unique users in the database
+%%
+%% THROWS:       none 
+get_all_users() ->
+ MatchHead = #location{user='$1', _='_'},
+ Guard = [],
+ Result = '$1',
+ UnfilteredUserList = mnesia:dirty_select(location,[{MatchHead, Guard, [Result]}]),
+ lists:usort(UnfilteredUserList).
+ 
+
+%% DESCRIPTION:  Returns the Tabletype associated to its argument, also considering shorthand forms
+%%
+%% ARGUMENTS:    - Tabletybe: A table type, possibly in a shorthand form
+%%
+%% RETURNS:      The Tabletype associated to its argument, also considering shorthand forms
+%%
+%% THROWS:       none 
+resolve_tabletype_shorthand(Tabletype) ->
+ if
+  Tabletype =:= loc orelse Tabletype =:= location ->
+   location;
+  Tabletype =:= sub orelse Tabletype =:= subloc orelse Tabletype =:= sublocation ->
+   sublocation;
+  Tabletype =:= dev orelse Tabletype =:= device ->
+   device;
+  true ->
+   unknown
+ end.
