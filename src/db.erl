@@ -1,5 +1,5 @@
 -module(db).
--export([add_location/4,add_sublocation/2,add_device/3,update_dev_subloc/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,subtry/0,read_location/1,install/0,clear/0,reset/0,reset/1,dump/0,dump/1,print_table/1,record_by_id/2,recordnum/0]).
+-export([add_location/4,add_sublocation/2,add_device/4,update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2,subtry/0,read_location/1,install/0,clear/0,reset/0,reset/1,dump/0,dump/1,print_table/1,find_record/2,recordnum/0]).
 -export([print_tree_sublocation/3,print_tree_location/2,print_tree_user/1]).
 -export([print_tree/1,print_tree/2]).
 %%====================================================================================================================================%%
@@ -19,12 +19,14 @@
 -record(sublocation, 	% A sublocation
         {
 		 sub_id,     	% The sublocation's full ID {loc_id,subloc_id} ({X,0} = default sublocation of location X)
-		 name       	% The sublocation's name
+		 name,       	% The sublocation's name (optional)
+		 devlist=[]     % The list of devices in the sublocation
 		}).
 		
 -record(device,      	% A device
         {
 		 dev_id,      	% The device's ID
+		 name,          % The device's name (optional)
 		 sub_id,        % The full ID {loc_id,subloc_id} of the sublocation the device is deployed in
 		 type,       	% The device's type (light, fan, door, thermostat, heater)
 		 config      	% The device's configuration (type-specific)
@@ -58,7 +60,23 @@
 %%                                                        CRUD OPERATIONS
 %%==================================================================================================================================== 
 
+%% ========================================================== CREATE ===============================================================%%
 
+%% DESCRIPTION:  Adds an empty location to the database (containing only the "(default)" sublocation {Loc_id,0}),
+%%               and starts up its controller
+%%
+%% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and must be >0
+%%               - Name:   The name of the location (optional)
+%%               - User:   The username of the location's owner (optional)
+%%               - Port:   The port by which the location's controller listens for REST requests, which must
+%%                         not be already taken and must be >0
+%%
+%% RETURNS:      - {atomic, ok} if the location was successfully added
+%%               - {error,location_already_exists} if such Loc_id already exists in the "location" table 
+%%               - {error,port_already_taken} if such port is already used by another controller
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none 
 add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port>0 ->
  F = fun() ->
  
@@ -70,9 +88,17 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
 		case mnesia:match_object(#location{port = Port, _ = '_'}) of
 		 [] ->
 		 
+		  % If empty, use a default name
+		  if
+		   Name =:= "" ->
+		    LocName = "loc-" ++ integer_to_list(Loc_id);
+		   true ->
+		    LocName = Name
+		  end,
+		 
 		  % Insert the new location and its default sublocation
-	      mnesia:write(#location{loc_id=Loc_id,name=Name,user=User,port=Port}),
-		  mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)"});
+	      mnesia:write(#location{loc_id=Loc_id,name=LocName,user=User,port=Port}),
+		  mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)", devlist=[]});
 		  
 		 [_LocationRecord] ->
 		  mnesia:abort(port_already_taken)
@@ -96,6 +122,18 @@ add_location(_,_,_,_) ->
  {error,badarg}.
 
 
+%% DESCRIPTION:  Adds an empty sublocation to the database
+%%
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation, which must not already exist and with
+%%                                     both elements >0
+%%               - Name: The name of the sublocation (optional)
+%%
+%% RETURNS:      - {atomic, ok} if the sublocation was successfully added
+%%               - {error,location_not_exists} If the location refered by the Loc_id does not exist
+%%               - {error,sublocation_already_exists} If the sub_id already exists in the sublocation table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none 
 add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 ->
  F = fun() ->
  
@@ -107,8 +145,16 @@ add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_nu
 		case mnesia:read({sublocation,{Loc_id,Subloc_id}}) of
 		 [] ->
 		 
+		  % If empty, use a default name
+		  if
+		   Name =:= "" ->
+		    SublocName = "subloc-{" ++ integer_to_list(Loc_id) ++ "," ++ integer_to_list(Subloc_id) ++ "}";
+		   true ->
+		    SublocName = Name
+		  end,
+		  
 		  % Insert the new sublocation
-	      mnesia:write(#sublocation{sub_id={Loc_id,Subloc_id}, name=Name});
+	      mnesia:write(#sublocation{sub_id={Loc_id,Subloc_id}, name=SublocName, devlist=[]});
 		  
 		 [_SublocationRecord] ->
 		  mnesia:abort(sublocation_already_exists)
@@ -118,25 +164,61 @@ add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_nu
 	    mnesia:abort(location_not_exists)
       end
      end,
- mnesia:transaction(F);
+	 
+ Result = mnesia:transaction(F),
+ case Result of
+  {atomic, ok} ->
+   %% [TODO]: Inform controller of the new sublocation
+   Result;   
+  _ ->
+   Result
+ end;
 
 add_sublocation(_,_) ->
  {error,badarg}.
 
 
-add_device(Dev_id,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+%% DESCRIPTION:  Adds a new device with a default configuration to the database, also starting its associated VM
+%%
+%% ARGUMENTS:    - Dev_id: The ID of the device, which must not already exist and must be >0
+%%               - Name: The device's name (optional)
+%%               - {Loc_id,Subloc_id}: The sub_id of the sublocation where to put the device, which must exist
+%%                                     and be >=0
+%%               - Type: The device's type, which must belong to the set of allowed device types
+%%
+%% RETURNS:      - {atomic, ok} if the device was successfully added
+%%               - {error,devtype_not_exists} if the device type is unknown
+%%               - {error,device_already_exists} if a device with such Dev_id already exists  
+%%               - {error,sublocation_not_exists} If the sublocation where to put the device doesn't exist
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none 
+add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
  
       % Check the target sublocation to exist
 	  case mnesia:read({sublocation,{Loc_id,Subloc_id}}) of
-	   [_SublocationRecord] ->
+	   [Sublocation] ->
 	    
 		% Check if a device with the same Dev_id already exists
 		case mnesia:read({device,Dev_id}) of
 		 [] ->
 		 
-		  % Insert the new device
-	      mnesia:write(#device{dev_id=Dev_id, sub_id={Loc_id,Subloc_id}, type=Type, config=devutils:get_devtype_default_config(Type)});
+		  % If empty, use a default name
+		  if
+		   Name =:= "" ->
+		    DevName = "dev-" ++ integer_to_list(Dev_id);
+		   true ->
+		    DevName = Name
+		  end,
+		  
+		  % Insert the new device in the Device table
+	      mnesia:write(#device{dev_id=Dev_id, name=DevName, sub_id={Loc_id,Subloc_id}, type=Type, config=devutils:get_devtype_default_config(Type)}),
+		  
+		  % Update the "DevList" in the sublocation table  
+		  UpdatedDevList = lists:append(Sublocation#sublocation.devlist,[Dev_id]),
+		  UpdatedSublocation = Sublocation#sublocation{devlist=UpdatedDevList},
+		  mnesia:write(UpdatedSublocation);
 		  
 		 [_DeviceRecord] ->
 		  mnesia:abort(device_already_exists)
@@ -170,136 +252,11 @@ add_device(Dev_id,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_
    end
  end;
 
-add_device(_,_,_) ->
+add_device(_,_,_,_) ->
  {error,badarg}.
 
 
-update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
- F = fun() ->
- 
-      % Check the device to exist
-	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
-	   [Device] ->
-		if 
-		
-		 % If the new and old sublocation coincide, return
-		 Device#device.sub_id =:= {Loc_id,Subloc_id} ->  
-		  ok;
-
-         % Otherwise, check the target sublocation to exist
-		 true ->
-		  case mnesia:read({sublocation,{Loc_id,Subloc_id}}) of
-		   [_SublocationRecord] ->
-		   
-		    % Change the device to the target sublocation 
-		    UpdatedDevice = Device#device{sub_id={Loc_id,Subloc_id}},
-		    mnesia:write(UpdatedDevice);
-		  
-		   [] ->
-		    mnesia:abort(sublocation_not_exists)
-		  end
-	    end;
-		
-	   [] ->
-	    mnesia:abort(device_not_exists)
-      end
-     end,
- mnesia:transaction(F);	 
-	 
-update_dev_subloc(_,_) ->
- {error,badarg}.
-
-
-update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
- F = fun() ->
- 
-      % Check the device to exist
-	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
-	   [Device] ->
-		if 
-		
-		 % If the new and old configuration coincide, return
-		 Device#device.config =:= Config ->  
-		  ok;
-
-         % Otherwise, update the configuration (NOTE: no check on the validity of "Config" is performed)
-		 true ->
-		  UpdatedDevice = Device#device{config=Config},
-		  mnesia:write(UpdatedDevice)
-	    end;
-		
-	   [] ->
-	    mnesia:abort(device_not_exists)
-      end
-     end,
- mnesia:transaction(F);	 
-	 
-update_dev_config(_,_) ->
- {error,badarg}.
-
-
-update_loc_name(Loc_id,Name) when is_number(Loc_id), Loc_id>0 ->
- F = fun() ->
- 
-      % Check the location to exist
-	  case mnesia:wread({location,Loc_id}) of      % wread = write lock
-	   [Location] ->
-		if 
-		
-		 % If the new and old names coincide, return
-		 Location#location.name =:= Name ->  
-		  ok;
-
-         % Otherwise, update the location's name
-		 true ->
-		  UpdatedLocation = Location#location{name=Name},
-		  mnesia:write(UpdatedLocation)
-	    end;
-		
-	   [] ->
-	    mnesia:abort(location_not_exists)
-      end
-     end,
- mnesia:transaction(F);	 
-
-update_loc_name(_,_) ->
- {error,badarg}.
-
-
-update_subloc_name({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> % NOTE: The name of the default sublocation cannot be changed (>0)
- F = fun() ->
- 
-      % Check the sublocation to exist
-	  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of      % wread = write lock
-	   [Sublocation] ->
-		if 
-		
-		 % If the new and old names coincide, return
-		 Sublocation#sublocation.name =:= Name ->  
-		  ok;
-
-         % Otherwise, update the sublocation's name
-		 true ->
-		  UpdatedSublocation = Sublocation#sublocation{name=Name},
-		  mnesia:write(UpdatedSublocation)
-	    end;
-		
-	   [] ->
-	    mnesia:abort(sublocation_not_exists)
-      end
-     end,
- mnesia:transaction(F);	 
-
-update_subloc_name(_,_) ->
- {error,badarg}.
- 
-
-
-
-
-
-
-
+%% =========================================================== READ ================================================================%% 
 
 %% DESCRIPTION:  Prints the contents of all or a specific table in the database
 %%
@@ -313,10 +270,14 @@ update_subloc_name(_,_) ->
 %% THROWS:       none  
 print_table(all) ->
  
- % Call the function on all tables
- print_table(location),
- print_table(sublocation),
- print_table(device);
+ % Print all tables' headers and contents
+ io:format("~n"),
+ print_table_header(location),
+ print_table_records(get_table_records(location)),
+ print_table_header(sublocation),
+ print_table_records(get_table_records(sublocation)),
+ print_table_header(device),
+ print_table_records(get_table_records(device));
  
 print_table(Tabletype) when is_atom(Tabletype) ->
 
@@ -330,7 +291,8 @@ print_table(Tabletype) when is_atom(Tabletype) ->
    {error,unknown_table};
    
   % Otherwise print the table header and contents
-  _->   
+  _->
+   io:format("~n"),
    print_table_header(Table),
    print_table_records(get_table_records(Table))
  end;
@@ -340,11 +302,11 @@ print_table(_) ->
 
 %% Prints the header of a table (print_table helper function) 
 print_table_header(location) ->
- io:format("~nLOCATION TABLE {loc_id,name,user,port}~n==============~n");
+ io:format("LOCATION TABLE {loc_id,name,user,port}~n==============~n");
 print_table_header(sublocation) ->
- io:format("~nSUBLOCATION TABLE {sub_id,name}~n=================~n");
+ io:format("SUBLOCATION TABLE {sub_id,name}~n=================~n");
 print_table_header(device) -> 
- io:format("~nDEVICE TABLE {dev_id,sub_id,type,config}~n============~n").
+ io:format("DEVICE TABLE {dev_id,name,sub_id,type,config}~n============~n").
 
 %% Prints the records in a table (print_table helper function)  
 print_table_records([]) ->
@@ -354,65 +316,6 @@ print_table_records([H|T]) ->
  print_table_records(T).
  
 
-%% DESCRIPTION:  Searchs for a record in a table by id
-%%
-%% ARGUMENTS:    - Tabletype: The table where to search the record in, also considering shorthand forms
-%%               - Id: The id of the record to search for
-%%
-%% RETURNS:      - If the record is found, its contents
-%%               - not_found, if the record is not found
-%%               - {error,unknown_table} if unknown Tabletype
-%%               - {error,badarg} if wrong argument format
-%%
-%% THROWS:       none  
-record_by_id(Tabletype,Id) when is_atom(Tabletype) ->
-
- % Resolve possible table shorthand forms
- Table = resolve_tabletype_shorthand(Tabletype),
- 
- case Table of
- 
-  % If unknown table, return an error
-  unknown ->
-   {error,unknown_table};
-  
-  % Otherwise, search for the record by Id
-  _ ->
-   case mnesia:transaction(fun() -> mnesia:read({Table,Id}) end) of
-    
-	% If the record was found, return it
-    {atomic,[Record]} ->
-	 Record;
-	 
-	% Otherwise, return that it was not found 
-	{atomic,[]} ->
-	 not_exists
-   end
- end;
-
-record_by_id(_,_) ->
- {error,badarg}.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 %% DESCRIPTION:  Prints database contents indented as a tree
 %%
 %% ARGUMENTS:    - (all):                prints all locations, sublocations and devices of all users in the database
@@ -420,7 +323,10 @@ record_by_id(_,_) ->
 %%               - (location,Loc_id):    prints all sublocations and devices in a specific location
 %%               - (sublocation,Sub_id): prints all devices in a specific sublocation
 %%
-%% RETURNS:      A view of the database indented as a tree, depending on the arguments
+%% RETURNS:      - A view of the database indented as a tree, depending on the arguments
+%%               - user_not_found: if with the print(user,Username) syntax the user was not found in the database
+%%               - {error,unsupported}: if with the print(Tabletype,Id) syntax the "device" table was passed
+%%               - {error,unknown_table}: if with the print(Tabletype,Id) syntax the table was not found in the database
 %%
 %% THROWS:       none  
 print_tree(all) ->
@@ -437,7 +343,7 @@ print_tree(all) ->
   
   % Otherwise, inform that there is no user in the database
   true ->
-   io:format("The database is empty")
+   io:format("The database is empty~n")
  end;
 
 print_tree(_) ->
@@ -453,7 +359,7 @@ print_tree(user,Username) ->
  
   % If the user was not found, return
   [] ->
-   not_found;
+   user_not_found;
    
   % Otherwise print information on all the user's locations, sublocations and devices as a tree, taking the indentation into account
   _Loclist -> 
@@ -594,13 +500,45 @@ print_tree_device([Dev|NextDev],Indent) ->
  print_tree_device(NextDev,Indent).
 
 
+%% DESCRIPTION:  Searchs for a record in a table by id
+%%
+%% ARGUMENTS:    - Tabletype: The table where to search the record in, also considering shorthand forms
+%%               - Id: The id of the record to search for
+%%
+%% RETURNS:      - If the record is found, its contents
+%%               - not_found, if the record is not found
+%%               - {error,unknown_table} if unknown Tabletype
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none  
+find_record(Tabletype,Id) when is_atom(Tabletype) ->
 
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+ 
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % Otherwise, search for the record by Id
+  _ ->
+   case mnesia:transaction(fun() -> mnesia:read({Table,Id}) end) of
+    
+	% If the record was found, return it
+    {atomic,[Record]} ->
+	 Record;
+	 
+	% Otherwise, return that it was not found 
+	{atomic,[]} ->
+	 not_found
+   end
+ end;
 
-
-
-
-
-
+find_record(_,_) ->
+ {error,badarg}.
+ 
 
 %% DESCRIPTION:  Prints the number of records in each of the database's disc_copies tables
 %%
@@ -615,7 +553,244 @@ recordnum() ->
  LocationKeysNum = get_table_keys_num(location),
  SublocationKeysNum = get_table_keys_num(sublocation),
  DeviceKeysNum = get_table_keys_num(device),
- io:format("~p location(s), ~p sublocation(s), ~p device(s)~n",[LocationKeysNum,SublocationKeysNum,DeviceKeysNum]).
+ io:format("The Mnesia database contains: ~p location(s), ~p sublocation(s), ~p device(s)~n",[LocationKeysNum,SublocationKeysNum,DeviceKeysNum]).
+
+
+%% ========================================================== UPDATE ===============================================================%% 
+
+%% DESCRIPTION:  Changes a device from a sublocation to another
+%%
+%% ARGUMENTS:    - Dev_id: The ID of the device to change sublocation, which must exist and be >0
+%%               - {Loc_id,Subloc_id}: The sub_id of the sublocation where to put the device in, whose elements must be >0
+%%
+%% RETURNS:      - {atomic, ok} if the device's sublocation was successfully changed
+%%               - {error,device_not_exists} if the device was not found in the device table
+%%               - {error,sublocation_not_exists} if the target sublocation was not found in the sublocation table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none 
+%%
+%% NOTE:         This function doesn't check that the current and new sublocation belong to the same location
+update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+	   
+	    % Retrieve the record of the device's current sublocation
+	    CurrSublocID = Device#device.sub_id,
+	
+		if 
+		
+		 % If the current and new sublocations coincide, return
+		 CurrSublocID =:= {Loc_id,Subloc_id} ->  
+		  ok;
+
+         % Otherwise, check the target sublocation to exist
+		 true ->
+		  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of
+		   [NewSubloc] ->
+		   
+		    % Remove the device from its current sublocation
+			[CurrSubloc] = mnesia:wread({sublocation,CurrSublocID}),		
+			UpdatedCurrSublocDevlist = lists:delete(Dev_id,CurrSubloc#sublocation.devlist),
+			UpdatedCurrSubloc = CurrSubloc#sublocation{devlist=UpdatedCurrSublocDevlist},
+			mnesia:write(UpdatedCurrSubloc),
+			
+			% Insert the device in its new sublocation
+			UpdatedNewSublocDevList = lists:append(NewSubloc#sublocation.devlist,[Dev_id]),
+			UpdatedNewSubloc = NewSubloc#sublocation{devlist = UpdatedNewSublocDevList},
+			mnesia:write(UpdatedNewSubloc),
+			
+			% Change the device to the target sublocation
+			UpdatedDevice = Device#device{sub_id={Loc_id,Subloc_id}},
+		    mnesia:write(UpdatedDevice);
+		  
+		   [] ->
+		    mnesia:abort(sublocation_not_exists)
+		  end
+	    end;
+		
+	   [] ->
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+	 
+ Result = mnesia:transaction(F),
+ case Result of
+  {atomic, ok} ->
+   %% [TODO]: Inform controller of the change of sublocation for the device
+   Result;   
+  _ ->
+   Result
+ end;
+	 
+update_dev_sub(_,_) ->
+ {error,badarg}.
+
+
+%% DESCRIPTION:  Updates a device's configuration
+%%
+%% ARGUMENTS:    - Dev_id: The ID of the device to update the configuration, which must exist and be >0
+%%               - Config: The updated device configuration
+%%
+%% RETURNS:      - {atomic, ok} if the device's configuration was successfully updated
+%%               - {error,device_not_exists} if the device was not found in the device table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none 
+%%
+%% NOTE:         This function doesn't check the new configuration to be appropriate for the device type
+update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+		if 
+		
+		 % If the new and old configuration coincide, return
+		 Device#device.config =:= Config ->  
+		  ok;
+
+         % Otherwise, update the configuration (NOTE: no check on the validity of "Config" is performed)
+		 true ->
+		  UpdatedDevice = Device#device{config=Config},
+		  mnesia:write(UpdatedDevice)
+	    end;
+		
+	   [] ->
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+ mnesia:transaction(F);	 
+	 
+update_dev_config(_,_) ->
+ {error,badarg}.
+
+
+%% DESCRIPTION:  Updates a location's name
+%%
+%% ARGUMENTS:    - Loc_id: The ID of the location which update the name, which must exist and be >0
+%%               - Name: The updated location name
+%%
+%% RETURNS:      - {atomic, ok} if the location's name was successfully updated
+%%               - {error,location_not_exists} if the location was not found in the location table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none
+update_loc_name(Loc_id,Name) when is_number(Loc_id), Loc_id>0 ->
+ F = fun() ->
+ 
+      % Check the location to exist
+	  case mnesia:wread({location,Loc_id}) of      % wread = write lock
+	   [Location] ->
+		if 
+		
+		 % If the new and old names coincide, return
+		 Location#location.name =:= Name ->  
+		  ok;
+
+         % Otherwise, update the location's name
+		 true ->
+		  UpdatedLocation = Location#location{name=Name},
+		  mnesia:write(UpdatedLocation)
+	    end;
+		
+	   [] ->
+	    mnesia:abort(location_not_exists)
+      end
+     end,
+ mnesia:transaction(F);	 
+
+update_loc_name(_,_) ->
+ {error,badarg}.
+
+
+%% DESCRIPTION:  Updates a sublocation's name
+%%
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation which update the name, which must exist and with
+%%                                     both elements >0
+%%               - Name: The updated sublocation name
+%%
+%% RETURNS:      - {atomic, ok} if the sublocation's name was successfully updated
+%%               - {error,sublocation_not_exists} if the sublocation was not found in the sublocation table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none
+update_subloc_name({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> % NOTE: The name of the default sublocation cannot be changed (>0)
+ F = fun() ->
+ 
+      % Check the sublocation to exist
+	  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of      % wread = write lock
+	   [Sublocation] ->
+		if 
+		
+		 % If the new and old names coincide, return
+		 Sublocation#sublocation.name =:= Name ->  
+		  ok;
+
+         % Otherwise, update the sublocation's name
+		 true ->
+		  UpdatedSublocation = Sublocation#sublocation{name=Name},
+		  mnesia:write(UpdatedSublocation)
+	    end;
+		
+	   [] ->
+	    mnesia:abort(sublocation_not_exists)
+      end
+     end,
+ mnesia:transaction(F);	 
+
+update_subloc_name(_,_) ->
+ {error,badarg}.
+ 
+
+%% DESCRIPTION:  Updates a device's name
+%%
+%% ARGUMENTS:    - Dev_id: The dev_id of the device which update the name, which must exist and be >0
+%%               - Name: The updated device name
+%%
+%% RETURNS:      - {atomic, ok} if the device's name was successfully updated
+%%               - {error,device_not_exists} if the device was not found in the device table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none
+update_dev_name(Dev_id,Name) when is_number(Dev_id), Dev_id>0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+		if 
+		
+		 % If the new and old names coincide, return
+		 Device#device.name =:= Name ->  
+		  ok;
+
+         % Otherwise, update the device's name
+		 true ->
+		  UpdatedDevice = Device#device{name=Name},
+		  mnesia:write(UpdatedDevice)
+	    end;
+		
+	   [] ->
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+ mnesia:transaction(F);	 
+
+update_dev_name(_,_) ->
+ {error,badarg}.
+ 
+%% ========================================================== DELETE ===============================================================%% 
+
+
+
+
+
+
 
 
 
@@ -689,7 +864,7 @@ clear() ->
 %%
 %% THROWS:       none 
 dump() ->
- dump("priv/mnesia_backup.db").  % Default backup path
+ dump("db/mnesia_backup.db").  % Default backup path
  
 dump(File) ->
 
@@ -716,7 +891,7 @@ dump(File) ->
 %%
 %% THROWS:       none  
 reset() ->
- reset("priv/mnesia_backup.db").
+ reset("db/mnesia_backup.db").
  
 reset(File) ->
  % Check if the operation can be performed
@@ -759,41 +934,41 @@ install() ->
   
    % Stop Mnesia and reset its schema
    application:stop(mnesia),
-   mnesia:delete_schema([node()]),
-   mnesia:create_schema([node()]),
+   ok = mnesia:delete_schema([node()]),
+   ok = mnesia:create_schema([node()]),
    
    % Start Mnesia again and create the tables
-   application:start(mnesia),
+   ok = application:start(mnesia),
 	 
-   % --- disc_copies tables 
-   mnesia:create_table(location,
-                      [{attributes, record_info(fields, location)},
-                      {index, [#location.user,#location.port]},
-                      {disc_copies, [node()]}]),				 
-   mnesia:create_table(sublocation,
-                      [{attributes, record_info(fields, sublocation)},
-					  {type, ordered_set},
-                      {disc_copies, [node()]}]),		 
-   mnesia:create_table(device,
-                      [{attributes, record_info(fields, device)},
-                      {index, [#device.sub_id]},
-                      {disc_copies, [node()]}]),
+   % --- disc_copies tables --- %   
+   {atomic,ok} = mnesia:create_table(location,
+                                    [{attributes, record_info(fields, location)},
+                                    {index, [#location.user,#location.port]},
+                                    {disc_copies, [node()]}]),				 
+   {atomic,ok} = mnesia:create_table(sublocation,
+                                    [{attributes, record_info(fields, sublocation)},
+					                {type, ordered_set},
+                                    {disc_copies, [node()]}]),		 
+   {atomic,ok} = mnesia:create_table(device,
+                                    [{attributes, record_info(fields, device)},
+                                    {index, [#device.sub_id]},
+                                    {disc_copies, [node()]}]),
 
-   % --- ram_copies tables %					 
-   mnesia:create_table(locmanager,
-                      [{attributes, record_info(fields, locmanager)},
-                      {ram_copies, [node()]}]),
-   mnesia:create_table(ctrmanager,
-                      [{attributes, record_info(fields, ctrmanager)},
-                      {ram_copies, [node()]}]),
-   mnesia:create_table(devmanager,
-                      [{attributes, record_info(fields, devmanager)},
-                      {ram_copies, [node()]}]),
+   % --- disc_copies tables --- %   
+   {atomic,ok} = mnesia:create_table(locmanager,
+                                    [{attributes, record_info(fields, locmanager)},
+                                    {ram_copies, [node()]}]),
+   {atomic,ok} = mnesia:create_table(ctrmanager,
+                                    [{attributes, record_info(fields, ctrmanager)},
+                                    {ram_copies, [node()]}]),
+   {atomic,ok} = mnesia:create_table(devmanager,
+                                    [{attributes, record_info(fields, devmanager)},
+                                    {ram_copies, [node()]}]),
 		
    % Stop Mnesia and return		
-   application:stop(mnesia),
+   ok = application:stop(mnesia),
    io:format("Mnesia database successfully installed~n");
-  
+ 
   _ ->
    CheckOp
  end.
@@ -803,13 +978,13 @@ install() ->
 %%                                                 PRIVATE UTILITY FUNCTIONS
 %%==================================================================================================================================== 
  
-%% DESCRIPTION:  Checks the JANET simulator to be stopped and asks the user confirmation on proceeding on a database operation
+%% DESCRIPTION:  Checks the JANET simulator to be stopped and asks the user confirmation on proceeding on a database utility operation
 %%
 %% ARGUMENTS:    - Operation: a String that will be concatenated in the user confirmation message
 %%
 %% RETURNS:      - is_running -> The JANET simulator is running, thus the operation cannot be performed
 %%               - aborted    -> The user aborted the operation
-%%               - ok         -> The user confirmed the database operation
+%%               - ok         -> The user confirmed the database utility operation
 %%
 %% THROWS:       none
 check_db_operation(Operation) ->
@@ -830,7 +1005,7 @@ check_db_operation(Operation) ->
     Ans =:= "y"; Ans =:= "Y" ->
 	
      % If the operation can proceed, ensure the Mnesia "dir" environment variable to be set
-     application:set_env(mnesia,dir,"priv/mnesia.db"),
+     application:set_env(mnesia,dir,"db/mnesia.db"),
 	 ok;
 	 
 	true ->
@@ -841,39 +1016,76 @@ check_db_operation(Operation) ->
 
 %% DESCRIPTION:  Returns all keys in a table as a list
 %%
-%% ARGUMENTS:    - Table: The table which to retrieve the keys
+%% ARGUMENTS:    - Tabletype: The table which to retrieve the keys, or its shorthand form
 %%
-%% RETURNS:      The list of keys in the table
-%%
-%% THROWS:       none
-get_table_keys(Table) ->
- F = fun() -> {mnesia:all_keys(Table)} end,
- {atomic,{Keys}} = mnesia:transaction(F),
- Keys.
-
-
-%% DESCRIPTION:  Returns all keys in a table as a list
-%%
-%% ARGUMENTS:    - Table: The table which to retrieve the keys
-%%
-%% RETURNS:      The list of keys in the table
+%% RETURNS:      The list of keys in the table identified by Tabletype
 %%
 %% THROWS:       none
-get_table_keys_num(Table) ->
- Keys = get_table_keys(Table),
- length(Keys).
+get_table_keys(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % Otherwise retrieve and return the table keys
+  _ ->
+   {atomic,{Keys}} = mnesia:transaction(fun() -> {mnesia:all_keys(Table)} end),
+   Keys
+ end.
+
+
+%% DESCRIPTION:  Returns the number of keys in a table
+%%
+%% ARGUMENTS:    - Tabletype: The table which to retrieve the keys, or its shorthand form
+%%
+%% RETURNS:      The number of keys in a table identified by Tabletype
+%%
+%% THROWS:       none
+get_table_keys_num(Tabletype) ->
+ 
+ % Retrieve the table keys, also considering shorthand forms
+ Keys = get_table_keys(Tabletype),
+ 
+ case Keys of
+   
+  % If the table was not found, return an error
+  {error,unknown_table} ->
+   {error,unknown_table};
+   
+  % Otherwise return the number of keys in the table
+  _ ->
+  length(Keys)
+ end.
 
 
 %% DESCRIPTION:  Returns all records in a table as a list
 %%
-%% ARGUMENTS:    - Table: The table which to retrieve the records
+%% ARGUMENTS:    - Tabletype: The table which to retrieve the records, or its shorthand form
 %%
-%% RETURNS:      The list of records in the table
+%% RETURNS:      The list of records in the table identified by Tabletype
 %%
 %% THROWS:       none 
-get_table_records(Table) ->
- mnesia:dirty_select(Table,[{'_',[],['$_']}]). % The second argument is a "catch-all" clause
+get_table_records(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
   
+  % Otherwise return all table records
+  _ ->
+   mnesia:dirty_select(Table,[{'_',[],['$_']}])  % The second argument is a "catch-all" clause
+ end.
+ 
   
 %% DESCRIPTION:  Returns all unique users in the database
 %%
@@ -883,10 +1095,16 @@ get_table_records(Table) ->
 %%
 %% THROWS:       none 
 get_all_users() ->
- MatchHead = #location{user='$1', _='_'},
- Guard = [],
- Result = '$1',
+
+ % Initialize select arguments
+ MatchHead = #location{user='$1', _='_'}, % Consider all locations
+ Guard = [],                              % No guard
+ Result = '$1',                           % Return only the location's users
+ 
+ % Retrieve the users of all locations in the database
  UnfilteredUserList = mnesia:dirty_select(location,[{MatchHead, Guard, [Result]}]),
+ 
+ % Remove duplicates and return the list of users
  lists:usort(UnfilteredUserList).
  
 

@@ -37,14 +37,14 @@ stop() ->
 
 % Starts the Mnesia Database used by the application
 start_mnesia() ->
- application:set_env(mnesia,dir,"priv/mnesia.db"),
+ application:set_env(mnesia,dir,"db/mnesia.db"),
  application:start(mnesia),
  mnesia:wait_for_tables([location,sublocation,device],5000).
  
 % Stops the Mnesia Database used by the application
 stop_mnesia() ->
  application:stop(mnesia),
- application:unset_env(mnesia,dir,"priv/mnesia.db").
+ application:unset_env(mnesia,dir,"db/mnesia.db").
 
 % Adds a location to the database (manually, debugging purposes)
 db_addlocation(Id,Port,Name,User) ->
