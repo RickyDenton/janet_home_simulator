@@ -16,15 +16,15 @@ is_valid_devtype(DevType) ->
 get_devtype_default_config(DevType) ->
  if
   DevType =:= light ->
-   {offline,off,0,white};
+   {off,0,white};
   DevType =:= fan ->
-   {offline,off,0};
+   {off,0};
   DevType =:= door ->
-   {offline,close,lock};
+   {close,lock};
   DevType =:= thermostat ->
-   {offline,21,21};
+   {off,21,21};
   DevType =:= heater ->
-   {offline,21,21,0};
+   {off,21,21,0};
   true ->
    throw(unknown_devtype)
  end.

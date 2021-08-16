@@ -1,7 +1,14 @@
 -module(db).
--export([add_location/4,add_sublocation/2,add_device/4,update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2,subtry/0,read_location/1,install/0,clear/0,reset/0,reset/1,dump/0,dump/1,print_table/1,find_record/2,recordnum/0]).
--export([print_tree_sublocation/3,print_tree_location/2,print_tree_user/1]).
--export([print_tree/1,print_tree/2]).
+
+%% ------ EXPORTED CRUD OPERATIONS ------ %%
+-export([add_location/4,add_sublocation/2,add_device/4]).                                                 % Create
+-export([print_table/1,print_tree/1,print_tree/2,find_record/2,recordsnum/0]).                            % Read
+-export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]). % Update
+-export([delete_location/1,delete_sublocation/1,delete_device/1]).                                        % Delete
+
+%% ----- EXPORTED UTILITY FUNCTIONS ----- %%
+-export([backup/0,backup/1,restore/0,restore/1,clear/0,install/0]).
+
 %%====================================================================================================================================%%
 %%                                               MNESIA TABLES RECORDS DEFINITIONS                                                    %%
 %%====================================================================================================================================%%
@@ -547,7 +554,7 @@ find_record(_,_) ->
 %% RETURNS:      The number of records in each of the database's disc_copies tables
 %%
 %% THROWS:       none  
-recordnum() ->
+recordsnum() ->
 
  % Retrieve the number of records in each of the database's disc_copies tables and print it
  LocationKeysNum = get_table_keys_num(location),
@@ -719,7 +726,9 @@ update_loc_name(_,_) ->
 %%               - {error,badarg} if wrong argument format
 %%
 %% THROWS:       none
-update_subloc_name({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> % NOTE: The name of the default sublocation cannot be changed (>0)
+%%
+%% NOTE:         The name of the default sublocation cannot be changed (>0)
+update_subloc_name({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> 
  F = fun() ->
  
       % Check the sublocation to exist
@@ -786,52 +795,248 @@ update_dev_name(_,_) ->
  
 %% ========================================================== DELETE ===============================================================%% 
 
-
-
-
-
-
-
-
-
- 
- 
-%% Utility 
-
-subtry() ->
-  F = fun() ->
-       mnesia:match_object(#sublocation{sub_id = {1,'_'}, _ = '_'})
-	  end,
-  mnesia:transaction(F).
-
-
-
-read_location(Loc_id) ->
+%% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the database, also stopping the associated VMs
+%%
+%% ARGUMENTS:    - Loc_id: The ID of the location to delete
+%%
+%% RETURNS:      - {atomic, ok} if the location was successfully removed from the database
+%%               - {error,location_not_exists} if the location was not found in the location table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none
+delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
-      mnesia:read({location,Loc_id})
-	 end,
- case mnesia:transaction(F) of
-  {atomic,[]} ->
-   undefined;
-  {atomic,[#location{loc_id=Loc_id,name=Name,user=User,port=Port}]} ->
-   {Loc_id,Name,User,Port}
-  end.
+ 
+      % Check the location to exist
+	  case mnesia:wread({location,Loc_id}) of      % wread = write lock
+	   [_Location] ->
+		
+		% Delete all devices in the location from the device table
+		LocationDevList = mnesia:match_object(#device{sub_id = {Loc_id,'_'}, _ = '_'}),
+		delete_device_records(LocationDevList),
+		
+		% Delete all sublocations in the location from the sublocation table
+		LocationSublocList = mnesia:match_object(#sublocation{sub_id = {Loc_id,'_'}, _ = '_'}),
+		delete_subloc_records(LocationSublocList),
+		
+		% Delete the location from the location table
+		mnesia:delete({location,Loc_id});
+		
+	   [] ->
+	    mnesia:abort(location_not_exists)
+      end
+     end,
+ Result = mnesia:transaction(F),
+ case Result of
+  {atomic, ok} ->
+   %% [TODO]: Shut down and remove the entire location from the supervision tree
+   Result;   
+  _ ->
+   Result	 
+ end; 
 
+delete_location(_) ->
+ {error,badarg}.
+
+
+%% Deletes a list of device records from the device table (delete_location(Loc_id) helper function)
+delete_device_records([]) ->
+ ok;
+delete_device_records([Dev|NextDev]) ->
+ mnesia:delete({device,Dev#device.dev_id}),
+ delete_device_records(NextDev).
+ 
+ 
+%% Deletes a list of sublocation records from the sublocation table (delete_location(Loc_id) helper function)
+delete_subloc_records([]) ->
+ ok;
+delete_subloc_records([Subloc|NextSubloc]) ->
+ mnesia:delete({sublocation,Subloc#sublocation.sub_id}),
+ delete_subloc_records(NextSubloc). 
+
+
+%% DESCRIPTION:  Delete a sublocation from the database, moving all its devices to its location's default sublocation {Loc_id,0}
+%%
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation to delete, with both elements >0
+%%
+%% RETURNS:      - {atomic, ok} if the sublocation was successfully removed from the database
+%%               - {error,sublocation_not_exists} if the sublocation was not found in the sublocation table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none
+%%
+%% NOTE:         The default sublocation of a location cannot be removed (Subloc_id > 0)
+delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> 
+ F = fun() ->
+ 
+      % Check the sublocation to exist
+	  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of      % wread = write lock
+	   [Sublocation] ->
+
+		 % Move all the sublocation's devices to the (default) sublocation {Loc_id,0}
+		 SublocDevList = Sublocation#sublocation.devlist,
+		 [DefaultSubloc] = mnesia:wread({sublocation,{Loc_id,0}}),
+		 UpdatedDefaultSublocDevlist = lists:append(DefaultSubloc#sublocation.devlist,SublocDevList),
+		 UpdatedDefaultSubloc = DefaultSubloc#sublocation{devlist=UpdatedDefaultSublocDevlist},
+		 mnesia:write(UpdatedDefaultSubloc),
+		 
+		 % Update the devices' sub_ids in the device table
+		 move_devlist_to_default_subloc(SublocDevList,Loc_id),
+		 
+		 % Remove the sublocation from the sublocation table
+		 mnesia:delete({sublocation,{Loc_id,Subloc_id}});
+		
+	   [] ->
+	    mnesia:abort(sublocation_not_exists)
+      end
+     end,
+ Result = mnesia:transaction(F),
+ case Result of
+  {atomic, ok} ->
+   %% [TODO]: Inform the controller that the sublocation no longer exists and so to change the devices to the default sublocation
+   Result;   
+  _ ->
+   Result	 
+ end;
+ 
+delete_sublocation(_) ->
+ {error,badarg}.
+
+
+%% Moves all devices in a list to the default sublocation {Loc_id,0} (delete_sublocation(Loc_id,Subloc_id) helper function)
+move_devlist_to_default_subloc([],_) ->
+ ok;
+move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
+ [Device] = mnesia:wread({device,Dev_id}),
+ UpdatedDevice = Device#device{sub_id={Loc_id,0}},
+ mnesia:write(UpdatedDevice),
+ move_devlist_to_default_subloc(NextDev_id,Loc_id).
+
+
+%% DESCRIPTION:  Deletes a device from the database, also shutting down its VM in its location
+%%
+%% ARGUMENTS:    - Dev_id: The dev_id of the device to delete, which must exist and be >0
+%%
+%% RETURNS:      - {atomic, ok} if the device's name was successfully deleted from the database
+%%               - {error,device_not_exists} if the device was not found in the device table
+%%               - {error,badarg} if wrong argument format
+%%
+%% THROWS:       none
+delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+
+		 % Remove the device from the devlist of its sublocation
+		 [DeviceSubloc] = mnesia:wread({sublocation,Device#device.sub_id}),
+		 UpdatedDeviceSublocDevlist = lists:delete(Dev_id,DeviceSubloc#sublocation.devlist),
+		 UpdatedDeviceSubloc = DeviceSubloc#sublocation{devlist=UpdatedDeviceSublocDevlist},
+		 mnesia:write(UpdatedDeviceSubloc),
+		 
+		 % Remove the device from the device table
+		 mnesia:delete({device,Dev_id});
+		
+	   [] ->
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+ Result = mnesia:transaction(F),
+ case Result of
+  {atomic, ok} ->
+   %% [TODO]: Stop the device and remove it from the supervision tree
+   %% [TODO]: Inform the controller that the device no longer exists
+   Result;   
+  _ ->
+   Result
+ end; 
+
+delete_device(_) ->
+ {error,badarg}.
 
 %%====================================================================================================================================
 %%                                                    PUBLIC UTILITY FUNCTIONS
 %%==================================================================================================================================== 
+ 
+%% DESCRIPTION:  Backups the entire database contents to a file
+%%
+%% ARGUMENTS:    - (none): The database is backed up to the default file ("db/mnesia_backup.db")
+%%               - (File): The file where to backup the database
+%%
+%% RETURNS:      - ok: Database successfully backed up to the specified file
+%%               - {error,Reason}: Error in writing the backup file
+%%
+%% THROWS:       none 
+backup() ->
+ backup("db/mnesia_backup.db").  % Default backup file
+ 
+backup(File) ->
+
+ % Backup the database to the specified file
+ BackupResult = mnesia:backup(File),
+ case BackupResult of
+  ok ->
+   io:format("Mnesia database backed up to file \"~s\"~n",[File]);
+  _ ->
+   BackupResult
+ end.
 
 
-%% DESCRIPTION:  Clears all database tables, preserving its schema (no installation required)
+%% DESCRIPTION:  Restores the database to the contents of a backup file
+%%
+%% ARGUMENTS:    - (none): The default file is used for restoring the database ("db/mnesia_backup.db")
+%%               - (File): The file where to restore the database from
+%%
+%% RETURNS:      - ok: Database successfully restored to the contents of the specified backup file
+%%               - {error,Reason}: Error in restoring the database from the backup file
+%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
+%%               - aborted: The user aborted the operation
+%%
+%% THROWS:       none
+%%
+%% NOTE:         The current database contents will be DISCARDED by calling this function
+restore() ->
+ restore("db/mnesia_backup.db").
+ 
+restore(File) ->
+ % Check if the operation can be performed
+ CheckOp = check_db_operation("Restoring"),
+
+ case CheckOp of
+ 
+  % If the operation can be performed
+  ok ->
+  
+   % Start Mnesia for restoring the database to the contents of the specified backup file
+   ok = application:start(mnesia),
+   RestoreResult = mnesia:restore(File,[{default_op,recreate_tables}]),
+   ok = application:stop(mnesia),
+   
+   % Inform the user of the result of the operation
+   case RestoreResult of
+    {atomic, _} ->
+	 io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[File]);
+	_ ->
+	 RestoreResult
+   end;
+   
+  _ ->
+   CheckOp   
+ end.
+ 
+
+%% DESCRIPTION:  Clears all database tables, preserving its schema
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - is_running -> The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted    -> The user aborted the operation
-%%               - ok         -> The database was successfully cleared
+%% RETURNS:      - ok: Database tables successfully cleared
+%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
+%%               - aborted: The user aborted the operation
 %%
 %% THROWS:       none
+%%
+%% NOTE:         Debug purposes only (use restore() to reset the database) 
 clear() ->
  % Check if the operation can be performed
  CheckOp = check_db_operation("Clearing"),
@@ -850,78 +1055,18 @@ clear() ->
    CheckOp
  end.
  
-
  
-%% DESCRIPTION:  Dumps the database contents to a backup file
-%%
-%% ARGUMENTS:    - (none) -> a default file path is used
-%%               - File   -> a custom file path is used
-%%
-%% RETURNS:      - ok             -> Database successfully dumped to the specified file
-%%               - is_running     -> The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted         -> The user aborted the operation
-%%               - {error,Reason} -> I/O error
-%%
-%% THROWS:       none 
-dump() ->
- dump("db/mnesia_backup.db").  % Default backup path
- 
-dump(File) ->
-
- % Dump the database contents to a file and return the result of the operation
- DumpDB = mnesia:dump_to_textfile(File),
- case DumpDB of
-  ok ->
-   io:format("Mnesia database successfully dumped to file \"~s\"~n",[File]);
-  _ ->
-   DumpDB
- end.
-
-
-
-%% DESCRIPTION:  Resets the database to the contents of a backup file
-%%
-%% ARGUMENTS:    - (none) -> a default file path is used
-%%               - (File) -> a custom file path is used
-%%
-%% RETURNS:      - ok             -> Database successfully reset to the contents of the specified file
-%%               - is_running     -> The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted         -> The user aborted the operation
-%%               - {error,Reason} -> I/O error
-%%
-%% THROWS:       none  
-reset() ->
- reset("db/mnesia_backup.db").
- 
-reset(File) ->
- % Check if the operation can be performed
- CheckOp = check_db_operation("Resetting"),
-
- case CheckOp of
- 
-  % If the operation can be performed, reset the database to the contents of the provided file 
-  ok ->
-   ResetDB = mnesia:load_textfile(File),
-   case ResetDB of
-    {atomic, ok} ->
-	 io:format("Mnesia database successfully reset to the contents of the \"~s\" file~n",[File]);
-	_ ->
-	 ResetDB
-   end;
-  _ ->
-   CheckOp 
- end.
- 
-
-%% DESCRIPTION:  Installs the Mnesia local database
+%% DESCRIPTION:  Installs the Mnesia database (schema + tables) from scratch
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok             -> Database successfully installed
-%%               - is_running     -> The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted         -> The user aborted the operation
+%% RETURNS:      - ok: Database successfully installed
+%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
+%%               - aborted: The user aborted the operation
 %%
-%% THROWS:       none  
+%% THROWS:       none
+%%
+%% NOTE:         Debug purposes only (use restore() to reset the database) 
 install() ->
 
  % Check if the operation can be performed
@@ -978,15 +1123,16 @@ install() ->
 %%                                                 PRIVATE UTILITY FUNCTIONS
 %%==================================================================================================================================== 
  
-%% DESCRIPTION:  Checks the JANET simulator to be stopped and asks the user confirmation on proceeding on a database utility operation
+ 
+%% DESCRIPTION:  Checks the JANET simulator to be stopped and asks user confirmation before attempting a database utility operation
 %%
-%% ARGUMENTS:    - Operation: a String that will be concatenated in the user confirmation message
+%% ARGUMENTS:    - Operation: a String used in asking user confirmation
 %%
-%% RETURNS:      - is_running -> The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted    -> The user aborted the operation
-%%               - ok         -> The user confirmed the database utility operation
+%% RETURNS:      - ok: The user confirmed the database utility operation
+%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
+%%               - aborted: The user aborted the operation
 %%
-%% THROWS:       none
+%% THROWS:       none  
 check_db_operation(Operation) ->
 
  % Check the JANET simulator not to be running
@@ -994,7 +1140,7 @@ check_db_operation(Operation) ->
  
   true ->
    io:format("Please stop the JANET Simulator first ~n"),
-   is_running;
+   janet_running;
    
   false ->
    
