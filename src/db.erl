@@ -232,8 +232,14 @@ print_table(all) ->
  print_table_header(sublocation),
  print_table_records(get_table_records(sublocation)),
  print_table_header(device),
- print_table_records(get_table_records(device));
- 
+ print_table_records(get_table_records(device)),
+ print_table_header(suploc),
+ print_table_records(get_table_records(suploc)),
+ print_table_header(ctrmanager),
+ print_table_records(get_table_records(ctrmanager)),
+ print_table_header(devmanager),
+ print_table_records(get_table_records(devmanager));
+
 print_table(Tabletype) when is_atom(Tabletype) ->
 
  % Resolve possible table shorthand forms
@@ -261,7 +267,13 @@ print_table_header(location) ->
 print_table_header(sublocation) ->
  io:format("SUBLOCATION TABLE {sub_id,name}~n=================~n");
 print_table_header(device) -> 
- io:format("DEVICE TABLE {dev_id,name,sub_id,type,config}~n============~n").
+ io:format("DEVICE TABLE {dev_id,name,sub_id,type,config}~n============~n");
+print_table_header(suploc) -> 
+ io:format("SUPLOC TABLE {loc_id,sup_pid}~n============~n");
+print_table_header(ctrmanager) -> 
+ io:format("CTRMANAGER TABLE {loc_id,sup_pid,status}~n================~n");
+print_table_header(devmanager) -> 
+ io:format("DEVMANAGER TABLE {dev_id,sup_pid,status}~n================~n").
 
 %% Prints the records in a table (print_table() helper function)  
 print_table_records([]) ->
@@ -402,8 +414,12 @@ print_tree_location([Loc|Nextloc],Indent) ->
  % Retrieve the list of sublocations in the location (note that at least the "(default)" sublocation is always present)
  Subloclist = mnesia:dirty_match_object(#sublocation{sub_id = {Loc#location.loc_id,'_'}, _ = '_'}),
  
+ % Retrieve the location controller's status from the ctrmanager table
+ [CtrMgrRecord] = mnesia:dirty_read({ctrmanager,Loc#location.loc_id}),
+ CtrMgrStatus = CtrMgrRecord#ctrmanager.status,
+ 
  % Print information on the location
- io:format("~s~s~n",[Indent,io_lib:format("~p",[Loc])]),
+ io:format("~s~s - ~s~n",[Indent,io_lib:format("~p",[Loc]),CtrMgrStatus]),
  
  % Print information on all location's sublocations and devices as a tree, taking the indentation into account
  case {Indent, Nextloc} of
@@ -451,7 +467,13 @@ print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) ->
 print_tree_device([],_) ->
  ok;
 print_tree_device([Dev|NextDev],Indent) ->
- io:format("~s~s~n",[Indent,io_lib:format("~p",[Dev])]),
+
+ % Retrieve the device's status from the devmanager table
+ [DevMgrRecord] = mnesia:dirty_read({devmanager,Dev#device.dev_id}),
+ DevMgrStatus = DevMgrRecord#devmanager.status,
+ 
+ % Print information on the device
+ io:format("~s~s - ~s~n",[Indent,io_lib:format("~p",[Dev]),DevMgrStatus]),
  print_tree_device(NextDev,Indent).
 
 
@@ -529,7 +551,7 @@ get_table_keys(Tabletype) ->
 %%
 %% THROWS:       none  
 get_records_num(all) ->
- {get_records_num(location),get_records_num(sublocation),get_records_num(device)};
+ {get_records_num(location),get_records_num(sublocation),get_records_num(device),get_records_num(suploc),get_records_num(ctrmanager),get_records_num(devmanager)};
 get_records_num(Tabletype) ->
  
  % Retrieve the table keys, also considering shorthand forms
@@ -1084,8 +1106,8 @@ install() ->
                                     {disc_copies, [node()]}]),
 
    % --- disc_copies tables --- %   
-   {atomic,ok} = mnesia:create_table(locmanager,
-                                    [{attributes, record_info(fields, locmanager)},
+   {atomic,ok} = mnesia:create_table(suploc,
+                                    [{attributes, record_info(fields, suploc)},
                                     {ram_copies, [node()]}]),
    {atomic,ok} = mnesia:create_table(ctrmanager,
                                     [{attributes, record_info(fields, ctrmanager)},
@@ -1198,12 +1220,22 @@ get_all_users() ->
 %% THROWS:       none 
 resolve_tabletype_shorthand(Tabletype) ->
  if
+  % --- disc_copies tables --- %
   Tabletype =:= loc orelse Tabletype =:= location ->
    location;
   Tabletype =:= sub orelse Tabletype =:= subloc orelse Tabletype =:= sublocation ->
    sublocation;
   Tabletype =:= dev orelse Tabletype =:= device ->
    device;
+  
+  % --- ram_copies tables --- %
+  Tabletype =:= suploc orelse Tabletype =:= sup ->
+   suploc;
+  Tabletype =:= ctrmanager orelse Tabletype =:= ctrmgr orelse Tabletype =:= ctr orelse Tabletype =:= controllermgr orelse Tabletype =:= controllermanager ->
+   ctrmanager;
+  Tabletype =:= devmanager orelse Tabletype =:= devmgr orelse Tabletype =:= devicemgr orelse Tabletype =:= devicemanager ->
+   devmanager;
+   
   true ->
    unknown
  end.

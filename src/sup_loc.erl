@@ -16,7 +16,7 @@
 init([Loc_id]) ->
 
  % Register the location supervisor in the suploc table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#locmanager{loc_id=Loc_id,sup_pid=self()}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#suploc{loc_id=Loc_id,sup_pid=self()}) end),
 
  % {ok,SupFlags,ChildSpec} supervisor behaviour return parameters
  {ok,

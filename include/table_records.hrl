@@ -30,10 +30,10 @@
 
 %% --- ram_copies tables --- %%
 
--record(locmanager,     % The PID of a location top-level supervisor
+-record(suploc,         % The PID of a location sup_loc supervisor
         {
 		 loc_id,        % The location's ID
-         sup_pid        % The PID of the location's top-level supervisor
+         sup_pid        % The PID of the location's sup_loc supervisor
         }).		 
 		
 -record(ctrmanager,     % A location controller's manager

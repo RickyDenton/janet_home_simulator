@@ -16,7 +16,7 @@
 locs_init() ->
 
  % Retrieve the number of records in the database disc_copies tables 
- {N_Loc,N_Subloc,N_Dev} = db:get_records_num(all),
+ {N_Loc,N_Subloc,N_Dev,_,_,_} = db:get_records_num(all),
  if
  
   % If there is at least a location in the database
