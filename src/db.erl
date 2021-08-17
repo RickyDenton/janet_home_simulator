@@ -1,66 +1,14 @@
 -module(db).
+-include("table_records.hrl"). % Mnesia table records definition
 
 %% ------ EXPORTED CRUD OPERATIONS ------ %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                 % Create
--export([print_table/1,print_tree/1,print_tree/2,find_record/2,recordsnum/0]).                            % Read
+-export([print_table/1,print_tree/1,print_tree/2,find_record/2,get_table_keys/1,get_records_num/1]).      % Read
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]). % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                        % Delete
 
 %% ----- EXPORTED UTILITY FUNCTIONS ----- %%
 -export([backup/0,backup/1,restore/0,restore/1,clear/0,install/0]).
-
-%%====================================================================================================================================%%
-%%                                               MNESIA TABLES RECORDS DEFINITIONS                                                    %%
-%%====================================================================================================================================%%
-
-%% --- disc_copies tables --- %%
-
--record(location,     	% A location
-        {
-		 loc_id,       	% The location/controller's ID (must be unique)
-		 name,        	% The location's name (optional)
-		 user,        	% The location's user
-		 port        	% The location controller's port for REST operations (must be unique)
-		}).
-
--record(sublocation, 	% A sublocation
-        {
-		 sub_id,     	% The sublocation's full ID {loc_id,subloc_id} ({X,0} = default sublocation of location X)
-		 name,       	% The sublocation's name (optional)
-		 devlist=[]     % The list of devices in the sublocation
-		}).
-		
--record(device,      	% A device
-        {
-		 dev_id,      	% The device's ID
-		 name,          % The device's name (optional)
-		 sub_id,        % The full ID {loc_id,subloc_id} of the sublocation the device is deployed in
-		 type,       	% The device's type (light, fan, door, thermostat, heater)
-		 config      	% The device's configuration (type-specific)
-		}).
-
-%% --- ram_copies tables --- %%
-
--record(locmanager,     % The PID of a location top-level supervisor
-        {
-		 loc_id,        % The location's ID
-         sup_pid        % The PID of the location's top-level supervisor
-        }).		 
-		
--record(ctrmanager,     % A location controller's manager
-        {
-		 loc_id,        % The location's ID
-		 sup_pid,       % The PID of the location controller's manager
-		 status         % The controller's status (on,off)
-		}).
-
--record(devmanager,     % A device's manager
-        {
-		 dev_id,        % The device's ID
-		 sup_pid,       % The PID of the device's manager
-		 status         % The device's status (on,off)
-		}).       
-
 
 
 %%====================================================================================================================================
@@ -307,7 +255,7 @@ print_table(Tabletype) when is_atom(Tabletype) ->
 print_table(_) ->
  {error,badarg}.
 
-%% Prints the header of a table (print_table helper function) 
+%% Prints the header of a table (print_table() helper function) 
 print_table_header(location) ->
  io:format("LOCATION TABLE {loc_id,name,user,port}~n==============~n");
 print_table_header(sublocation) ->
@@ -315,7 +263,7 @@ print_table_header(sublocation) ->
 print_table_header(device) -> 
  io:format("DEVICE TABLE {dev_id,name,sub_id,type,config}~n============~n").
 
-%% Prints the records in a table (print_table helper function)  
+%% Prints the records in a table (print_table() helper function)  
 print_table_records([]) ->
  io:format("~n");
 print_table_records([H|T]) ->
@@ -545,23 +493,59 @@ find_record(Tabletype,Id) when is_atom(Tabletype) ->
 
 find_record(_,_) ->
  {error,badarg}.
- 
 
-%% DESCRIPTION:  Prints the number of records in each of the database's disc_copies tables
+
+%% DESCRIPTION:  Returns all keys in a table as a list
 %%
-%% ARGUMENTS:    none
+%% ARGUMENTS:    - Tabletype: The table which to retrieve the keys, or its shorthand form
 %%
-%% RETURNS:      The number of records in each of the database's disc_copies tables
+%% RETURNS:      The list of keys in the table identified by Tabletype
+%%
+%% THROWS:       none
+get_table_keys(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % Otherwise retrieve and return the table keys
+  _ ->
+   {atomic,{Keys}} = mnesia:transaction(fun() -> {mnesia:all_keys(Table)} end),
+   Keys
+ end.
+
+
+%% DESCRIPTION:  Returns the number of records in a specific or all database tables
+%%
+%% ARGUMENTS:    - (all): Returns the number of records of all database tables
+%%               - (Tabletype): The table which to retrieve the number of records, or its shorthand form
+%%
+%% RETURNS:      The number of records a specific or all database tables
 %%
 %% THROWS:       none  
-recordsnum() ->
-
- % Retrieve the number of records in each of the database's disc_copies tables and print it
- LocationKeysNum = get_table_keys_num(location),
- SublocationKeysNum = get_table_keys_num(sublocation),
- DeviceKeysNum = get_table_keys_num(device),
- io:format("The Mnesia database contains: ~p location(s), ~p sublocation(s), ~p device(s)~n",[LocationKeysNum,SublocationKeysNum,DeviceKeysNum]).
-
+get_records_num(all) ->
+ {get_records_num(location),get_records_num(sublocation),get_records_num(device)};
+get_records_num(Tabletype) ->
+ 
+ % Retrieve the table keys, also considering shorthand forms
+ Keys = get_table_keys(Tabletype),
+ 
+ case Keys of
+   
+  % If the table was not found, return an error
+  {error,unknown_table} ->
+   {error,unknown_table};
+   
+  % Otherwise return the number of keys in the table
+  _ ->
+  length(Keys)
+ end.
+ 
 
 %% ========================================================== UPDATE ===============================================================%% 
 
@@ -1158,55 +1142,6 @@ check_db_operation(Operation) ->
 	 aborted
    end
  end. 
-
-
-%% DESCRIPTION:  Returns all keys in a table as a list
-%%
-%% ARGUMENTS:    - Tabletype: The table which to retrieve the keys, or its shorthand form
-%%
-%% RETURNS:      The list of keys in the table identified by Tabletype
-%%
-%% THROWS:       none
-get_table_keys(Tabletype) ->
-
- % Resolve possible table shorthand forms
- Table = resolve_tabletype_shorthand(Tabletype),
-
- case Table of
- 
-  % If unknown table, return an error
-  unknown ->
-   {error,unknown_table};
-  
-  % Otherwise retrieve and return the table keys
-  _ ->
-   {atomic,{Keys}} = mnesia:transaction(fun() -> {mnesia:all_keys(Table)} end),
-   Keys
- end.
-
-
-%% DESCRIPTION:  Returns the number of keys in a table
-%%
-%% ARGUMENTS:    - Tabletype: The table which to retrieve the keys, or its shorthand form
-%%
-%% RETURNS:      The number of keys in a table identified by Tabletype
-%%
-%% THROWS:       none
-get_table_keys_num(Tabletype) ->
- 
- % Retrieve the table keys, also considering shorthand forms
- Keys = get_table_keys(Tabletype),
- 
- case Keys of
-   
-  % If the table was not found, return an error
-  {error,unknown_table} ->
-   {error,unknown_table};
-   
-  % Otherwise return the number of keys in the table
-  _ ->
-  length(Keys)
- end.
 
 
 %% DESCRIPTION:  Returns all records in a table as a list

@@ -1,28 +1,62 @@
-%% TODO!
-
 -module(loc_init).
--export([start_link/2,init/1,terminate/2,handle_call/3,handle_cast/2]).
--behaviour(gen_server).
+-export([spawn_link/2,loc_init/2]). 
+-include("table_records.hrl").       % Mnesia table records definition
 
 
-init({LocID,SupPID}) ->
- {ok,[LocID,SupPID]}.  % Initial State
+%% ======================================================= MODULE FUNCTIONS ======================================================= %%
 
-% STUB
-% NOTE: This is currently not called on shutdown since the process is not trapping exit signals
-terminate(normal,{ControllerID,_}) ->
- io:format("[loc_ctrl_~s]: Terminated~n",[atom_to_list(ControllerID)]).
+%% DESCRIPTION:  Initializes the location controller and device managers at startup
+%%
+%% ARGUMENTS:    - Loc_id:  The Location id
+%%               - Sup_pid: The PID of its sup_loc supervisor 
+%%
+%% RETURNS:      - ok: location controller and device managers successfully initialized
+%%
+%% THROWS:       none 
+loc_init(Loc_id,Sup_pid) ->
+ init_ctr_mgr(Loc_id,Sup_pid),
+ init_dev_mgrs(Loc_id,Sup_pid).
+ 
+%% Initializes the location controller's manager (loc_init() helper function) 
+init_ctr_mgr(Loc_id,Sup_pid) ->
+ 
+ % Retrieve the location record and use it to create the location controller's manager under the father sup_loc supervisor
+ {atomic,[LocationRecord]} = mnesia:transaction(fun() -> mnesia:read({location,Loc_id}) end),
+ {ok,_Ctr_mgr_pid} = supervisor:start_child(Sup_pid,
+                                            {
+                                             "ctr-" ++ integer_to_list(Loc_id),		    % ChildID
+                                             {ctr_manager,start_link,[LocationRecord]}, % Child Start Function
+	                                         temporary,                                 % Child Restart Policy
+	                                         4500,                                      % Sub-tree Max Shutdown Time
+	                                         worker,                  	                % Child Type
+	                                         [ctr_manager]                              % Child Modules (For Release Handling Purposes)
+                                            }).
 
-% STUB
-handle_call(Num,_,{Sum,N}) when is_number(Num) ->
- New_Sum = Sum + Num,
- New_N = N+1,
- {reply,New_Sum/New_N,{New_Sum,New_N}}.
+%% Initializes the location devices' managers (loc_init(Loc_id,Sup_pid) helper function)  
+init_dev_mgrs(Loc_id,Sup_pid) ->
+ 
+ % Retrieve the list of device records and use them to create the associated device managers under the father sup_loc supervisor
+ {atomic,LocDevList} = mnesia:transaction(fun() -> mnesia:match_object(#device{sub_id = {Loc_id,'_'}, _ = '_'}) end), 
+ init_dev_mgrs_list(LocDevList,Sup_pid).
 
-% STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
-  
-  
-start_link(LocID,SupPID) ->
- gen_server:start_link(?MODULE,[LocID,SupPID]).
+%% Initializes the manager of each device in a list (loc_init(Loc_id,Sup_pid)->init_dev_mgrs(Loc_id,Sup_pid) helper function) 
+init_dev_mgrs_list([],_) ->
+ ok;
+init_dev_mgrs_list([Dev|NextDev],Sup_pid) ->
+ {ok,_Dev_mgr_pid} = supervisor:start_child(Sup_pid,
+                                            {
+                                             "dev-" ++ integer_to_list(Dev#device.dev_id), % ChildID
+                                             {dev_manager,start_link,[Dev]},               % Child Start Function
+	                                         temporary,                                    % Child Restart Policy
+	                                         4500,                                         % Sub-tree Max Shutdown Time
+	                                         worker,                  	                   % Child Type
+	                                         [dev_manager]                                 % Child Modules (For Release Handling Purposes)
+                                            }),
+ init_dev_mgrs_list(NextDev,Sup_pid).
+
+
+%% ======================================================== START FUNCTION ======================================================== %%
+
+%% Called by the "sup_loc" supervisor following its initialization
+spawn_link(Loc_id,Sup_pid) ->
+ {ok,spawn_link(?MODULE,loc_init,[Loc_id,Sup_pid])}.

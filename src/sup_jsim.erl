@@ -32,7 +32,7 @@ init(_) ->
    % -- locs_init (initializes the locations at startup)
    {
     locs_init,		                   % ChildID
-    {locs_init,start_link,[]},         % Child Start Function
+    {locs_init,spawn_link,[]},         % Child Start Function
 	transient,                         % Child Restart Policy       (transient because it must succeed)
 	5000,                              % Sub-tree Max Shutdown Time
 	worker,                  	       % Child Type

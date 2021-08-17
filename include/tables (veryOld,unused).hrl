@@ -1,2 +1,0 @@
--record(location, {id,port,status,name=[],user=[],sublocations=[]}).
--record(device, {id,type,locationID,sublocationIDX,config,name=[]}).
