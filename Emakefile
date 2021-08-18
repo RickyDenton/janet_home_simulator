@@ -1,1 +1,1 @@
-{"src/*",[debug_info,{i,"include/"},{outdir,"ebin/"}]}.
+{["src/janet-simulator/*","src/controller/*","src/device-generic/*","src/device-specific/*"],[debug_info,{i,"include/"},{outdir,"ebin/"}]}.

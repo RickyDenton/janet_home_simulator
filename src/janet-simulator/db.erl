@@ -415,8 +415,17 @@ print_tree_location([Loc|Nextloc],Indent) ->
  Subloclist = mnesia:dirty_match_object(#sublocation{sub_id = {Loc#location.loc_id,'_'}, _ = '_'}),
  
  % Retrieve the location controller's status from the ctrmanager table
- [CtrMgrRecord] = mnesia:dirty_read({ctrmanager,Loc#location.loc_id}),
- CtrMgrStatus = CtrMgrRecord#ctrmanager.status,
+ ReadMgrRecord = mnesia:dirty_read({ctrmanager,Loc#location.loc_id}),
+ case ReadMgrRecord of
+ 
+  % If the record exists in the ctrmanager table
+  [CtrMgrRecord] ->
+   CtrMgrStatus = CtrMgrRecord#ctrmanager.status;
+   
+  % Otherwise, if the record doesn't exist
+  [] ->
+   CtrMgrStatus = "NOT_STARTED"
+ end,
  
  % Print information on the location
  io:format("~s~s - ~s~n",[Indent,io_lib:format("~p",[Loc]),CtrMgrStatus]),
@@ -469,8 +478,17 @@ print_tree_device([],_) ->
 print_tree_device([Dev|NextDev],Indent) ->
 
  % Retrieve the device's status from the devmanager table
- [DevMgrRecord] = mnesia:dirty_read({devmanager,Dev#device.dev_id}),
- DevMgrStatus = DevMgrRecord#devmanager.status,
+ ReadMgrRecord = mnesia:dirty_read({devmanager,Dev#device.dev_id}),
+ case ReadMgrRecord of
+ 
+  % If the record exists in the devmanager table
+  [DevMgrRecord] ->
+   DevMgrStatus = DevMgrRecord#devmanager.status;
+   
+  % Otherwise, if the record doesn't exist
+  [] ->
+   DevMgrStatus = "NOT_STARTED"
+ end,
  
  % Print information on the device
  io:format("~s~s - ~s~n",[Indent,io_lib:format("~p",[Dev]),DevMgrStatus]),
@@ -1053,7 +1071,7 @@ clear() ->
   ok ->
    jsim:start_mnesia(),
    [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device)],
-   jsim:stop_mnesia(),
+   application:stop(mnesia),
    io:format("Mnesia tables successfully cleared~n");
    
   % Otherwise return CheckOp
@@ -1157,7 +1175,7 @@ check_db_operation(Operation) ->
     Ans =:= "y"; Ans =:= "Y" ->
 	
      % If the operation can proceed, ensure the Mnesia "dir" environment variable to be set
-     application:set_env(mnesia,dir,"db/mnesia.db"),
+     %application:set_env(mnesia,dir,"db/mnesia.db"),
 	 ok;
 	 
 	true ->
