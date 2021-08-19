@@ -1,68 +1,85 @@
+%% This is the callback module of the JANET Device (janet_device) application %%
+
 -module(jdev).
 -behaviour(application).
--export([run/4,halt/0]).                   % Application Start and Stop
--export([start/2,stop/1]). 				   % Application Behaviour Callback Functions
+-export([run/5,shutdown/0]).  % Application Start and Stop
+-export([start/2,stop/1]). 	  % Application Behaviour Callback Functions
  
-%% ========== JANET Device API ========== %%
+%%====================================================================================================================================
+%%                                                   APPLICATION START AND STOP                                                        
+%%====================================================================================================================================
 
-%% --- Application start and stop --- %% 
-
-% Start the Application
-run(Dev_id,Loc_id,Type,Config) ->
+%% DESCRIPTION:  Prepares the configuration parameters and starts the JANET Device application
+%%
+%% ARGUMENTS:    - Dev_id: The device's ID
+%%               - Loc_id: The ID of the location the device is deployed in
+%%               - MgrPid: The PID of the manager associated to this device in the Janet Simulator node 
+%%               - Type:   The device's type
+%%               - Config: The device's starting configuration
+%%
+%% RETURNS:      - ok                      -> JANET Device succesfully started               
+%%               - {error,already_running} -> The janet_device application is already running on the node
+%%               - {error,invalid_devtype} -> The device type is invalid
+%%               - {error,Reason}          -> Internal error in starting the application
+%%               - {error,badarg}          -> Invalid arguments
+%%
+%% NOTE:         A device doesn't require to know the sublocation it is deployed in
+%%
+run(Dev_id,Loc_id,MgrPid,Type,Config) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_pid(MgrPid) ->
  
- case is_running() of
+ % Check if the JANET Device is already running
+ case utils:is_running(janet_device) of
   true ->
-   {error, already_running};
-  false ->
-   
-   % Initialize the JANET device environment variables
-   application:set_env(janet_device,dev_id,Dev_id),
-   application:set_env(janet_device,loc_id,Loc_id),
-   application:set_env(janet_device,type,Type),
-   application:set_env(janet_device,config,Config),
-   
   
-   % logger:set_primary_config(#{level => warning}),    % Uncomment before release (hides == APPLICATION INFO === messages when applications are stopped)
-   % Start the JANET device
-   application:start(janet_device)
- end.
- 
-% Stop the Application
-halt() ->
- case is_running() of
-  true ->
-   application:stop(janet_device),
-   timer:sleep(5),   % For output ordering purposes (not necessary if the primary logger level is configured to "warning")
-   io:format("JANET Device stopped~n");
+   % If it is, return an error
+   {error,already_running};
+   
   false ->
-   {error, not_running}
- end.
+   
+   % Otherwise, check the device's type to be valid (NOTE: The configuration Config is not checked here)
+   case utils:is_valid_devtype(Type) of
+    false ->
+	
+	 % If it is invalid, return an error
+	 {error,invalid_devtype};
+	 
+    true ->
+	
+	 % Otherwise initialize the JANET Device configuration parameters as for the arguments
+     application:set_env(janet_device,dev_id,Dev_id),
+     application:set_env(janet_device,loc_id,Loc_id),
+     application:set_env(janet_device,mgrpid,MgrPid),
+     application:set_env(janet_device,type,Type),
+     application:set_env(janet_device,config,Config),
+	 
+	 % Start the JANET Device
+     %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
+     application:start(janet_device)
+   end
+ end;
+ 
+run(_,_,_,_,_) ->
+ {error,badarg}. 
  
  
-%% --- Mnesia Utility Functions --- %%  
+%% DESCRIPTION:  Stops the JANET Device node
+%%
+%% ARGUMENTS:    none 
+%%
+%% RETURNS:      - ok -> JANET Device node succesfully stopped
+%% 
+shutdown() ->
+ init:stop("shutdown").
 
- 
-%% --- Other Utility Functions --- %% 
- 
-% Check if an application is running (default: janet_device)
-is_running() ->
- is_running(janet_device).
-is_running(AppName) ->
- case [App || {App, _, _} <- application:which_applications(), App =:= AppName] of
-  [AppName] ->
-   true;
-  [] ->
-   false
- end.
- 
 
-%% ========== Application Behaviour Callback Functions ========== %% 
+%%====================================================================================================================================
+%%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
+%%====================================================================================================================================
 
-% Start the Janet Device
+%% Starts the JANET Device
 start(normal, _Args) ->
  sup_jdev:start_link().
  
-% Stop the Janet Device
+%% Called once the JANET Device has been stopped
 stop(_State) ->
  ok.
- 

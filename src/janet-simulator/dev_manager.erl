@@ -34,7 +34,7 @@ handle_continue(init,{booting,none,DeviceRecord}) ->
  Config = DeviceRecord#device.config,
  
  % Set the cookie for connecting to the target node (NOTE: the use of atoms is required by the erlang:set_cookie BIF) 
- erlang:set_cookie(devutils:str_to_atom("dev-" ++ Dev_id_str ++ "@localhost"),devutils:str_to_atom(Loc_id_str)),
+ erlang:set_cookie(utils:str_to_atom("dev-" ++ Dev_id_str ++ "@localhost"),utils:str_to_atom(Loc_id_str)),
  
  % Prepare the controller's node Name, Host and VM arguments
  NodeHost = "localhost",
@@ -45,7 +45,7 @@ handle_continue(init,{booting,none,DeviceRecord}) ->
  {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),
 
  % Launch the device application on the slave node
- ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,Type,Config]),
+ ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,self(),Type,Config]),
  
  % Set the device's status in the ctrmanager table to "CONNECTING"
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,sup_pid=self(),status="CONNECTING"}) end),

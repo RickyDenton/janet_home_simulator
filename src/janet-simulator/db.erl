@@ -1,18 +1,20 @@
+%% This module offers functions for interfacing with the Mnesia database on the Janet Simulator node %%
+
 -module(db).
 -include("table_records.hrl"). % Mnesia table records definition
 
-%% ------ EXPORTED CRUD OPERATIONS ------ %%
+%% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                 % Create
 -export([print_table/1,print_tree/1,print_tree/2,find_record/2,get_table_keys/1,get_records_num/1]).      % Read
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]). % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                        % Delete
 
-%% ----- EXPORTED UTILITY FUNCTIONS ----- %%
--export([backup/0,backup/1,restore/0,restore/1,clear/0,install/0]).
+%% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
+-export([start_mnesia/0,stop_mnesia/0,backup/0,backup/1,restore/0,restore/1,clear/0,install/0]). 
 
 
 %%====================================================================================================================================
-%%                                                        CRUD OPERATIONS
+%%                                                     PUBLIC CRUD OPERATIONS                                                        
 %%==================================================================================================================================== 
 
 %% ========================================================== CREATE ===============================================================%%
@@ -24,7 +26,7 @@
 %%               - Name:   The name of the location (optional)
 %%               - User:   The username of the location's owner (optional)
 %%               - Port:   The port by which the location's controller listens for REST requests, which must
-%%                         not be already taken and must be >0
+%%                         not be already taken and must be >=30000
 %%
 %% RETURNS:      - {atomic, ok} if the location was successfully added
 %%               - {error,location_already_exists} if such Loc_id already exists in the "location" table 
@@ -32,7 +34,7 @@
 %%               - {error,badarg} if wrong argument format
 %%
 %% THROWS:       none 
-add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port>0 ->
+add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port>=30000 ->
  F = fun() ->
  
       % Check if the location already exists
@@ -142,7 +144,7 @@ add_sublocation(_,_) ->
 %%               - Type: The device's type, which must belong to the set of allowed device types
 %%
 %% RETURNS:      - {atomic, ok} if the device was successfully added
-%%               - {error,devtype_not_exists} if the device type is unknown
+%%               - {error,invalid_devtype} if the device type is unknown
 %%               - {error,device_already_exists} if a device with such Dev_id already exists  
 %%               - {error,sublocation_not_exists} If the sublocation where to put the device doesn't exist
 %%               - {error,badarg} if wrong argument format
@@ -168,7 +170,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
 		  end,
 		  
 		  % Insert the new device in the Device table
-	      mnesia:write(#device{dev_id=Dev_id, name=DevName, sub_id={Loc_id,Subloc_id}, type=Type, config=devutils:get_devtype_default_config(Type)}),
+	      mnesia:write(#device{dev_id=Dev_id, name=DevName, sub_id={Loc_id,Subloc_id}, type=Type, config=utils:get_devtype_default_config(Type)}),
 		  
 		  % Update the "DevList" in the sublocation table  
 		  UpdatedDevList = lists:append(Sublocation#sublocation.devlist,[Dev_id]),
@@ -185,11 +187,11 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
      end,
 	 
  % Check the device type to be valid (outside the transaction)
- case devutils:is_valid_devtype(Type) of
+ case utils:is_valid_devtype(Type) of
  
   % If it is not, directly return an error 
   false ->
-   {error,devtype_not_exists};
+   {error,invalid_devtype};
   
   % If it is, attempt the transaction
   true -> 
@@ -275,12 +277,27 @@ print_table_header(ctrmanager) ->
 print_table_header(devmanager) -> 
  io:format("DEVMANAGER TABLE {dev_id,sup_pid,status}~n================~n").
 
-%% Prints the records in a table (print_table() helper function)  
-print_table_records([]) ->
+%% Prints all records in a table, or "(empty)" if there are none (print_table(Table) helper function)
+print_table_records(TableRecords) ->
+
+ % Check if the TableRecords are empty
+ case TableRecords of
+ 
+  % If they are, just print "(empty)"
+  [] ->
+   io:format("(empty)~n~n");
+   
+  % Otherwise recursively print all records in the table
+  _ ->
+   print_table_records_list(TableRecords)
+ end.
+
+%% Prints all records in a list (print_table(Table)->print_table_records(TableRecords) helper function)  
+print_table_records_list([]) ->
  io:format("~n");
-print_table_records([H|T]) ->
- io:format("~s~n",[io_lib:format("~p",[H])]),
- print_table_records(T).
+print_table_records_list([Record|NextRecord]) ->
+ io:format("~s~n",[io_lib:format("~p",[Record])]),
+ print_table_records_list(NextRecord).
  
 
 %% DESCRIPTION:  Prints database contents indented as a tree
@@ -569,7 +586,8 @@ get_table_keys(Tabletype) ->
 %%
 %% THROWS:       none  
 get_records_num(all) ->
- {get_records_num(location),get_records_num(sublocation),get_records_num(device),get_records_num(suploc),get_records_num(ctrmanager),get_records_num(devmanager)};
+ {get_records_num(location),get_records_num(sublocation),get_records_num(device),
+  get_records_num(suploc),get_records_num(ctrmanager),get_records_num(devmanager)};
 get_records_num(Tabletype) ->
  
  % Retrieve the table keys, also considering shorthand forms
@@ -979,9 +997,103 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
 delete_device(_) ->
  {error,badarg}.
 
+
 %%====================================================================================================================================
 %%                                                    PUBLIC UTILITY FUNCTIONS
 %%==================================================================================================================================== 
+
+%% DESCRIPTION:  Starts the Mnesia application and waits for its disc_copies tables to be loaded from disc
+%%
+%% ARGUMENTS:    none 
+%%
+%% RETURNS:      - ok                  -> Mnesia started and disc_copies tables successfully loaded
+%%               - {timeout,[table()]} -> Timeout in loading the Mnesia Tables
+%%               - {error,Reason}      -> Internal Mnesia error
+%%
+%% NOTE:         'ok' is returned even if Mnesia was already running
+%%
+start_mnesia() ->
+ 
+ % Check if Mnesia is already running
+ case utils:is_running(mnesia) of
+  
+  false ->
+   
+   % If not, attempt to start it
+   MnesiaStarted = application:start(mnesia),
+   case MnesiaStarted of
+	
+    % If successfully started, do nothing
+	ok ->
+     ok;
+	
+    % Otherwise, report the error
+    {error,Reason} ->
+     io:format("Error in starting Mnesia (reason = ~w) (is the Mnesia scheme installed?...)~n",[Reason])
+   end;	
+	
+  true ->
+
+   % If already started, set the variable
+   MnesiaStarted = ok
+ end,
+ 
+ case MnesiaStarted of
+  ok ->
+   % If Mnesia is running, wait for its disc_copies tables to be loaded from disc
+   TablesLoaded = mnesia:wait_for_tables([location,sublocation,device],4000),
+   case TablesLoaded of
+   
+    % If the tables were successfully loaded, do nothing
+	ok ->
+	 ok;
+	 
+	% If timeout in loading the tables, report the error
+    {timeout,TableList} ->
+	 io:format("Timeout in loading the Mnesia tables ~w (is the Mnesia scheme installed?...)~n",[TableList]);
+	
+    % If other error in loading the tables, report the error
+    {error,LoadReason} ->
+	 io:format("Error in loading the Mnesia tables (reason = ~w) (is the Mnesia scheme installed?...)~n",[LoadReason])	
+   end,
+   
+   % Return the TablesLoaded variable
+   TablesLoaded;
+    
+  _ ->
+   % Otherwise, if Mnesia is not running, report its starting error
+   MnesiaStarted
+ end.
+
+
+%% DESCRIPTION:  Stops the Mnesia application
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok                  -> Mnesia successfully stopped
+%%               - {error,Reason}      -> Internal Mnesia error
+%%
+%% NOTE:         'ok' is returned even if Mnesia was already stopped
+%%
+stop_mnesia() ->
+
+ % Attempt to stop Mnesia
+ case application:stop(mnesia) of
+ 
+  % If stopped, do nothing
+  ok ->
+   ok;
+   
+  % If already stopped, do nothing
+  {error,{not_started,mnesia}} ->
+   ok;
+
+  % If another error occured, report it
+  {error,Reason} ->
+   io:format("[Janet-Simulator]: Error in stopping the Mnesia application (reason = ~w)~n",[Reason]),
+   {error,Reason}
+ end.
+ 
  
 %% DESCRIPTION:  Backups the entire database contents to a file
 %%
@@ -997,11 +1109,18 @@ backup() ->
  
 backup(File) ->
 
- % Backup the database to the specified file
+ % Ensure Mnesia to be running
+ ok = start_mnesia(),
+
+ % Attempt to backup the database contents to the specified file
  BackupResult = mnesia:backup(File),
  case BackupResult of
+ 
+  % If the backup was successful, notify it
   ok ->
    io:format("Mnesia database backed up to file \"~s\"~n",[File]);
+   
+  % Otherwise return the error 
   _ ->
    BackupResult
  end.
@@ -1024,33 +1143,37 @@ restore() ->
  restore("db/mnesia_backup.db").
  
 restore(File) ->
- % Check if the operation can be performed
- CheckOp = check_db_operation("Restoring"),
 
+ % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
+ CheckOp = check_db_operation("Restoring"),
  case CheckOp of
- 
-  % If the operation can be performed
+   
+  % If the user confirmed the operation
   ok ->
   
-   % Start Mnesia for restoring the database to the contents of the specified backup file
-   ok = application:start(mnesia),
-   RestoreResult = mnesia:restore(File,[{default_op,recreate_tables}]),
-   ok = application:stop(mnesia),
+   % Ensure Mnesia to be running
+   ok = start_mnesia(),
    
-   % Inform the user of the result of the operation
-   case RestoreResult of
-    {atomic, _} ->
+   % Attempt to restore the database to the contents of the specified file
+   RestoreDBResult = mnesia:restore(File,[{default_op,recreate_tables}]),
+   case RestoreDBResult of
+    
+	% If the restoring was successful, notify it
+	{atomic, _} ->
 	 io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[File]);
+	
+	% Otherwise return the error
 	_ ->
-	 RestoreResult
+	 RestoreDBResult
    end;
-   
-  _ ->
-   CheckOp   
- end.
- 
 
-%% DESCRIPTION:  Clears all database tables, preserving its schema
+  % Otherwise return CheckOp
+  _ ->
+   CheckOp
+ end.
+
+
+%% DESCRIPTION:  Clears all database tables (preserving the schema)
 %%
 %% ARGUMENTS:    none
 %%
@@ -1062,18 +1185,26 @@ restore(File) ->
 %%
 %% NOTE:         Debug purposes only (use restore() to reset the database) 
 clear() ->
- % Check if the operation can be performed
+
+ % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
  CheckOp = check_db_operation("Clearing"),
 
  case CheckOp of
  
-  % If the operation can be performed, start Mnesia and clear all disc_copies tables
+  % If the user confirmed the operation
   ok ->
-   jsim:start_mnesia(),
-   [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device)],
-   application:stop(mnesia),
-   io:format("Mnesia tables successfully cleared~n");
+  
+   % Ensure Mnesia to be running
+   ok = start_mnesia(),
    
+   % Clear all Mnesia tables and report the operation
+   [{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok}] =
+	[mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device),
+	 mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
+     
+   % Return the result of the operation
+   io:format("Mnesia tables successfully cleared~n");
+	 
   % Otherwise return CheckOp
   _ ->
    CheckOp
@@ -1093,23 +1224,25 @@ clear() ->
 %% NOTE:         Debug purposes only (use restore() to reset the database) 
 install() ->
 
- % Check if the operation can be performed
+ % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
  CheckOp = check_db_operation("Installing"),
 
  case CheckOp of
- 
-  % If the operation can be performed, install the mnesia database
+  
+  % If the user confirmed the operation
   ok ->
   
-   % Stop Mnesia and reset its schema
-   application:stop(mnesia),
+   % Ensure the Mnesia database not to be running
+   ok = stop_mnesia(),
+	 
+   % Recreate the Mnesia Schema
    ok = mnesia:delete_schema([node()]),
    ok = mnesia:create_schema([node()]),
    
-   % Start Mnesia again and create the tables
+   % Start Mnesia and create its tables 
    ok = application:start(mnesia),
 	 
-   % --- disc_copies tables --- %   
+   % ----------------------------- disc_copies tables ----------------------------- %   
    {atomic,ok} = mnesia:create_table(location,
                                     [{attributes, record_info(fields, location)},
                                     {index, [#location.user,#location.port]},
@@ -1122,8 +1255,8 @@ install() ->
                                     [{attributes, record_info(fields, device)},
                                     {index, [#device.sub_id]},
                                     {disc_copies, [node()]}]),
-
-   % --- disc_copies tables --- %   
+   
+   % ----------------------------- ram_copies tables ----------------------------- %   
    {atomic,ok} = mnesia:create_table(suploc,
                                     [{attributes, record_info(fields, suploc)},
                                     {ram_copies, [node()]}]),
@@ -1133,20 +1266,19 @@ install() ->
    {atomic,ok} = mnesia:create_table(devmanager,
                                     [{attributes, record_info(fields, devmanager)},
                                     {ram_copies, [node()]}]),
-		
-   % Stop Mnesia and return		
-   ok = application:stop(mnesia),
+	
+   % Report the result of the operation		
    io:format("Mnesia database successfully installed~n");
  
+  % Otherwise return CheckOp
   _ ->
    CheckOp
  end.
  
- 
+
 %%====================================================================================================================================
-%%                                                 PRIVATE UTILITY FUNCTIONS
+%%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
- 
  
 %% DESCRIPTION:  Checks the JANET simulator to be stopped and asks user confirmation before attempting a database utility operation
 %%
@@ -1160,9 +1292,11 @@ install() ->
 check_db_operation(Operation) ->
 
  % Check the JANET simulator not to be running
- case jsim:is_running(janet_simulator) of
+ case utils:is_running(janet_simulator) of
  
   true ->
+  
+   % Inform the user that the JANET Simulator must be stopped before attempting utility operations on the database
    io:format("Please stop the JANET Simulator first ~n"),
    janet_running;
    
@@ -1172,12 +1306,12 @@ check_db_operation(Operation) ->
    io:format("~s",[Operation]),
    {ok,[Ans]} = io:fread(" the Mnesia database may cause inconsistencies with the remote database. Are you sure you want to proceed? (y/N): ","~s"),
    if
+   
+    % If the user confirmed the operation
     Ans =:= "y"; Ans =:= "Y" ->
-	
-     % If the operation can proceed, ensure the Mnesia "dir" environment variable to be set
-     %application:set_env(mnesia,dir,"db/mnesia.db"),
 	 ok;
 	 
+	% If the user aborted the operation
 	true ->
 	 aborted
    end

@@ -39,7 +39,7 @@ handle_continue(init,{booting,none,LocationRecord}) ->
  
  
  % Set the cookie for connecting to the target node (NOTE: the use of atoms is required by the erlang:set_cookie BIF) 
- erlang:set_cookie(devutils:str_to_atom("ctr-" ++ Loc_id_str ++ "@localhost"),devutils:str_to_atom(Loc_id_str)),
+ erlang:set_cookie(utils:str_to_atom("ctr-" ++ Loc_id_str ++ "@localhost"),utils:str_to_atom(Loc_id_str)),
  
  % Prepare the controller's node Name, Host and VM arguments
  NodeHost = "localhost",

@@ -1,69 +1,71 @@
+%% This is the callback module of the JANET Controller (janet_controller) application %%
+
 -module(jctr).
 -behaviour(application).
--export([run/5,halt/0]).                   % Application Start and Stop
--export([start/2,stop/1]). 				   % Application Behaviour Callback Functions
+-export([run/5,shutdown/0]).  % Application Start and Stop
+-export([start/2,stop/1]). 	  % Application Behaviour Callback Functions
  
-%% ========== JANET Controller API ========== %%
+%%====================================================================================================================================
+%%                                                   APPLICATION START AND STOP                                                        
+%%====================================================================================================================================
 
-%% --- Application start and stop --- %% 
-
-% Start the Application TODO: Create hidden node!
-run(Loc_id,DevAlloc,MgrPid,Port,RemoteHost) ->
+%% DESCRIPTION:  Prepares the configuration parameters and starts the JANET Controller application
+%%
+%% ARGUMENTS:    - Loc_id:     The ID of the location the controller is deployed in
+%%               - DevAlloc:   The list of sublocations in the location and the devices therein
+%%               - MgrPid:     The PID of the manager associated to this controller in the Janet Simulator node 
+%%               - RestPort:   The port that will be used by the JANET Controller for binding its REST server on the host OS (>=30000)
+%%               - RemoteHost: The IP address of the host where JANET controller will forward state updates
+%%
+%% RETURNS:      - ok                      -> JANET Controller succesfully started
+%%               - {error,already_running} -> The janet_controller application is already running on the node
+%%               - {error,Reason}          -> Internal error in starting the application
+%%               - {error,badarg}          -> Invalid arguments
+%%
+run(Loc_id,DevAlloc,MgrPid,RestPort,RemoteHost) when is_number(Loc_id), Loc_id>0, is_pid(MgrPid), is_number(RestPort), RestPort>=30000 ->
  
- case is_running() of
+ % Check if the JANET Controller is already running
+ case utils:is_running(janet_controller) of
   true ->
-   {error, already_running};
+  
+   % If it is, return an error
+   {error,already_running};
+  
   false ->
    
-   % Initialize the JANET controller environment variables
+   % Otherwise, initialize the JANET Controller configuration parameters as for the arguments
    application:set_env(janet_controller,loc_id,Loc_id),
    application:set_env(janet_controller,devalloc,DevAlloc),
    application:set_env(janet_controller,mgrpid,MgrPid),
-   application:set_env(janet_controller,rest_port,Port),
+   application:set_env(janet_controller,rest_port,RestPort),
    application:set_env(janet_controller,remotehost,RemoteHost),
    
-  
-   % logger:set_primary_config(#{level => warning}),    % Uncomment before release (hides == APPLICATION INFO === messages when applications are stopped)
-   % Start the JANET controller
+   % Start the JANET Controller
+   %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
    application:start(janet_controller)
- end.
+ end;
  
-% Stop the Application
-halt() ->
- case is_running() of
-  true ->
-   application:stop(janet_controller),
-   timer:sleep(5),   % For output ordering purposes (not necessary if the primary logger level is configured to "warning")
-   io:format("JANET Controller stopped~n");
-  false ->
-   {error, not_running}
- end.
- 
- 
-%% --- Mnesia Utility Functions --- %%  
-
- 
-%% --- Other Utility Functions --- %% 
- 
-% Check if an application is running (default: janet_controller)
-is_running() ->
- is_running(janet_controller).
-is_running(AppName) ->
- case [App || {App, _, _} <- application:which_applications(), App =:= AppName] of
-  [AppName] ->
-   true;
-  [] ->
-   false
- end.
+run(_,_,_,_,_) ->
+ {error,badarg}.
  
 
-%% ========== Application Behaviour Callback Functions ========== %% 
+%% DESCRIPTION:  Stops the JANET Controller node
+%%
+%% ARGUMENTS:    none 
+%%
+%% RETURNS:      - ok -> JANET Controller node succesfully stopped
+%% 
+shutdown() ->
+ init:stop("shutdown").
+ 
+%%====================================================================================================================================
+%%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
+%%====================================================================================================================================
 
-% Start the Janet Controller
-start(normal, _Args) ->
+%% Starts the JANET Controller
+start(normal,_Args) ->
  sup_jctr:start_link().
  
-% Stop the Janet Controller
+%% Called once the JANET Controller has been stopped
 stop(_State) ->
  ok.
- 
