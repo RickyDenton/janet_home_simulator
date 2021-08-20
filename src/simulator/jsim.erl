@@ -94,12 +94,12 @@ stop() ->
      [{atomic,ok},{atomic,ok},{atomic,ok}] = 
 	  [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
 	 timer:sleep(5),                            %% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
-     io:format("[janet-simulator]: Stopped~n");
+     io:format("Janet Simulator stopped~n");
 	 
 	{error,Reason} ->
 	 
 	 % Otherwise, notify the error
-     io:format("[janet-simulator]: Error in stopping the simulator (reason = ~w)~n",[Reason])
+     io:format("Error in stopping the Janet Simulator (reason = ~w)~n",[Reason])
    end,
    StopSimStatus
  end.

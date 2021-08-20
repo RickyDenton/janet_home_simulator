@@ -1,6 +1,7 @@
 %% This module offers a set of utility function for the Janet Simulator application %%
 
 -module(utils).
+
 -export([is_running/1,is_valid_devtype/1,get_devtype_default_config/1,str_to_atom/1]).
 
 %%====================================================================================================================================

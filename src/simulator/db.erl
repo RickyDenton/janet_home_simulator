@@ -1,12 +1,13 @@
 %% This module offers functions for interfacing with the Mnesia database on the Janet Simulator node %%
 
 -module(db).
+
 -include("table_records.hrl"). % Mnesia table records definition
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
 -export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,find_record/2,                 % Read                 
-         get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1]).  
+         get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,get_loc_devs/1]).  
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
 
@@ -636,6 +637,41 @@ get_records_num() ->
  get_records_num(all).
  
  
+%% DESCRIPTION:  Returns the list of 'dev_id's of devices in a location
+%%
+%% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and be >0
+%%
+%% RETURNS:      - {atomic,[LocDevIdList]}     -> The list of 'dev_id's of devices in the location
+%%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
+%%               - {error,badarg}              -> Invalid arguments
+%% 
+get_loc_devs(Loc_id) when is_number(Loc_id), Loc_id>0 ->
+ F = fun() ->
+ 
+      % Check the location to exist
+	  case mnesia:read({location,Loc_id}) of 
+	   [_LocationRecord] ->
+	    
+		% If it does, retrieve the list of the dev_ids of devices in the location
+        MatchHead = #device{dev_id='$1', sub_id = {Loc_id,'_'}, _='_'},  % Consider the dev_ids with loc_id == Loc_id
+        Guard = [],                                                      % No guard
+        Result = '$1',                                                   % Return only the dev_ids
+ 
+        mnesia:select(device,[{MatchHead, Guard, [Result]}]);
+		
+	   [] ->
+	   
+		% Otherwise, if the location doesn't exist, return an error
+		{error,location_not_exists}
+	  end
+	 end,
+	  
+ mnesia:transaction(F);
+
+get_loc_devs(_) ->
+ {error,badarg}.
+
+
 %% ========================================================== UPDATE ===============================================================%% 
 
 %% DESCRIPTION:  Updates a device's sublocation

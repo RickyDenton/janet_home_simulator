@@ -14,9 +14,9 @@ init(_) ->
   {
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
    {
-    rest_for_one, % RestartStrategy (rest_for_one for reinitializing the sup_locs tree via the locs_init module should it fail)
-    2,            % MaxRestarts
-	30            % TimePeriod for MaxRestarts
+    rest_for_one,  % RestartStrategy (rest_for_one for reinitializing the sup_locs tree via the locs_init module should it fail)
+    2,             % MaxRestarts
+	30             % TimePeriod for MaxRestarts
    },                 
 
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
@@ -31,7 +31,7 @@ init(_) ->
 	 [sim_restserver]                   % Child Modules (For Release Handling Purposes)
     },
   
-    %% ------------------ The locations' top supervisor (sup_locs) ------------------ %%
+    %% ---------------- The locations' tree top supervisor (sup_locs) ---------------- %%
     {
      sup_locs,                          % ChildID
      {sup_locs,start_link,[]},          % Child Start Function
@@ -41,7 +41,7 @@ init(_) ->
 	 [sup_locs]                         % Child Modules (For Release Handling Purposes)
     },
    
-    %% ----------------- The locations' boot initializer (locs_init) ----------------- %%
+    %% -------------- The locations' tree boot initializer (locs_init) -------------- %%
 	{
      locs_init,		                    % ChildID
      {locs_init,spawn_link,[]},         % Child Start Function

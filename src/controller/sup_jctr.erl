@@ -2,9 +2,9 @@
 
 -module(sup_jctr).
 -behaviour(supervisor).
+
 -export([init/1]).        % Supervisor Behaviour Callback Function
 -export([start_link/0]).  % Start Function
-
 
 %%====================================================================================================================================
 %%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        

@@ -1,18 +1,21 @@
+%% This module represents the locations' tree boot initializer in the Janet Simulator application %%
+
 -module(locs_init).
--export([spawn_link/0,locs_init/0]). 
 
+-export([locs_init/0]).   % Process Body
+-export([spawn_link/0]).  % Start Function (spawn_link/0 instead of start_link/0 because this is no OTP Behaviour callback module)
 
-%% ======================================================= MODULE FUNCTIONS ======================================================= %%
+%%====================================================================================================================================
+%%                                                         PROCESS BODY                                                        
+%%==================================================================================================================================== 
 
-%% DESCRIPTION:  Initializes the location supervisors (sup_loc) of every location at startup
+%% DESCRIPTION:  Initializes the locations' tree at boot from the contents of the Mnesia 'location' table
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok: location supervisors successfully initialized
-%%               - {error,no_locations}: no locations are present in the database, and so no
-%%                                       location supervisor can be started
+%% RETURNS:      - ok                   -> Locations' tree successfully initialized
+%%               - {error,no_locations} -> The Mnesia location table is empty, no location was started
 %%
-%% THROWS:       none 
 locs_init() ->
 
  % Retrieve the number of records in the database disc_copies tables 
@@ -22,21 +25,23 @@ locs_init() ->
   % If there is at least a location in the database
   N_Loc > 0 ->
    
-   % Print a summary of the database's contents
-   io:format("[locs_init]: The database contains ~w location(s), ~w sublocation(s) and ~w device(s), initializing the location supervisors...~n",[N_Loc,N_Subloc,N_Dev]),
+   % Report that the initialization process is starting by printing the number of records in the database disc_copies tables
+   io:format("[locs_init]: The database contains ~w location(s), ~w sublocation(s) and ~w device(s), initializing the locations' tree...~n",[N_Loc,N_Subloc,N_Dev]),
    
-   % Retrieve all location IDs in the database and spawn the associated "sup_loc" supervisors
+   % Retrieve the IDs of all locations in the database and use them for spawning their associated
+   % location supervisors (sup_loc) under the locations' tree top supervisor (sup_locs)
    LocationIDs = db:get_table_keys(location),
    spawn_sup_loc(LocationIDs);
    
+  % Otherwise, if the location table is empty
   true ->
    
-   % Print a warning that no location is present in the database, and so no location supervisor can be started
-   io:format("[locs_init]: WARNING: the database contains no location, no location supervisor will be started~n"),
+   % Report that no location tree can be started
+   io:format("[locs_init]: <WARNING> No location is present in the database, no location tree will be started~n"),
    {error,no_locations}
  end.
   
-%% Spawns the location supervisors (sup_loc) associated to a list of loc_ids (locs_init() helper function)
+%% Spawns the location supervisors (sup_loc) associated to each 'loc_id' in a list (locs_init() helper function)
 spawn_sup_loc([]) ->
  ok;  
 spawn_sup_loc([Loc_id|NextLoc_Id]) ->
@@ -44,8 +49,10 @@ spawn_sup_loc([Loc_id|NextLoc_Id]) ->
  spawn_sup_loc(NextLoc_Id).
 
 
-%% ======================================================== START FUNCTION ======================================================== %%
+%%====================================================================================================================================
+%%                                                         START FUNCTION                                                        
+%%====================================================================================================================================
 
-%% Called by the "sup_jsim" supervisor following its initialization
+%% Called by the Janet Simulator top-level supervisor (sup_jsim) at boot time
 spawn_link() ->
- {ok,spawn_link(?MODULE,locs_init,[])}.
+ {ok,spawn_link(?MODULE,locs_init,[])}.  % The first 'ok' parameter is for attuning to standard interface of an OTP supervision tree

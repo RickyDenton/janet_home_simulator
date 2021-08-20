@@ -2,6 +2,7 @@
 
 -module(jctr).
 -behaviour(application).
+
 -export([run/5,shutdown/0]).  % Application Start and Stop
 -export([start/2,stop/1]). 	  % Application Behaviour Callback Functions
  
@@ -40,7 +41,7 @@ run(Loc_id,DevAlloc,MgrPid,RestPort,RemoteHost) when is_number(Loc_id), Loc_id>0
    application:set_env(janet_controller,rest_port,RestPort),
    application:set_env(janet_controller,remotehost,RemoteHost),
    
-   % Start the JANET Controller as a PERMANENT application (i.e. the entire node is shut down if it terminates)
+   % Start the JANET Controller as a PERMANENT application (i.e. the entire node is shut down if the application terminates)
    %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
    application:start(janet_controller,permanent)
  end;

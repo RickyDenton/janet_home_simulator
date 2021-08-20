@@ -1,31 +1,48 @@
+%% This module represents the locations' tree top supervisor in the Janet Simulator application %%
+
 -module(sup_locs).
--export([init/1,start_link/0]).
 -behaviour(supervisor).
 
-%% --- Supervisor Callback Functions --- %%
+-export([init/1]).        % Supervisor Behaviour Callback Function
+-export([start_link/0]).  % Start Function
 
-%% Sets its children' general specifications (called by sup_jsim at initialization)
+%%====================================================================================================================================
+%%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        
+%%====================================================================================================================================
 init(_) ->
 
-%% [TODO_NOW]: Reset the contents of the 'suploc', 'ctrmanager' and 'devmanager' tables to ensure consistency in case the supervisor is restarted
-
-{ok,
- {{simple_one_for_one,5,60},     % {RestartStrategy, MaxRestarts, Time Period}
-  [
-   % -- Children General Specification -- %
+ % Clear the mnesia ram_copies tables (this ensures consistency in case the whole locations' tree is restarted)
+ [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
+ 
+ % Return the supervisor flags and the list of children specifications
+ {ok,
+  {
+   %% ==================================================== SUPERVISOR FLAGS ==================================================== %% 
    {
-    sup_loc,                           % ChildID
-    {sup_loc,start_link,[]},           % Child Start Function
-	temporary,                         % Child Restart Policy
-	10000,                             % Sub-tree Max Shutdown Time
-	supervisor,                        % Child Type
-	[sup_loc]                          % Child Modules (For Release Handling Purposes)
-   }
-  ]
- }
-}.
+    simple_one_for_one,  % RestartStrategy (simple_one_for_one for optimization purposes since all its children are of the same type)
+	2,                   % MaxRestarts
+	30                   % TimePeriod for MaxRestarts
+   },
+   
+   %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
+   [
+    %% ---------------------- A location's supervisor (sup_loc) ---------------------- %%
+    {
+     sup_loc,                    % ChildID
+     {sup_loc,start_link,[]},    % Child Start Function
+ 	 temporary,                  % Child Restart Policy 
+	 9500,                       % Child Sub-tree Max Shutdown Time
+	 supervisor,                 % Child Type
+	 [sup_loc]                   % Child Modules (For Release Handling Purposes)
+    }
+   ]
+  }
+ }.
 
-%% --- Exported API --- %%
+%%====================================================================================================================================
+%%                                                         START FUNCTION                                                        
+%%====================================================================================================================================
 
+%% Called by the Janet Simulator top-level supervisor (sup_jsim) at boot time
 start_link() ->
- supervisor:start_link({local,?MODULE},?MODULE,[]).
+ supervisor:start_link({local,?MODULE},?MODULE,[]).  % The spawned process is also registered locally under the 'sup_locs' name

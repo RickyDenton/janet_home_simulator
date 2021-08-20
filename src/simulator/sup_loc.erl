@@ -1,9 +1,16 @@
+%% This module represents a location's supervisor in the Janet Simulator application %%
+
 -module(sup_loc).
 -behaviour(supervisor).
--export([init/1,start_link/1]).
--include("table_records.hrl").   % Mnesia table records definition
 
-%% ================================================ SUPERVISOR CALLBACK FUNCTIONS ================================================ %%
+-export([init/1]).              % Supervisor Behaviour Callback Function
+-export([start_link/1]).        % Start Function
+
+-include("table_records.hrl").  % Mnesia Table Records Definitions
+
+%%====================================================================================================================================
+%%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        
+%%====================================================================================================================================
 
 %% DESCRIPTION:  Initializes the location supervisor, registering its PID into the suploc table
 %%
@@ -15,28 +22,50 @@
 %% THROWS:       none 
 init([Loc_id]) ->
 
- % Register the location supervisor in the suploc table
+ % Register the PID of the location supervisor in the 'suploc' table using the location ID
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#suploc{loc_id=Loc_id,sup_pid=self()}) end),
 
- % {ok,SupFlags,ChildSpec} supervisor behaviour return parameters
+ % Return the supervisor flags and the list of children specifications
  {ok,
-  {{one_for_one,1,5},                                   % {RestartStrategy, MaxRestarts, Time Period}
+  {
+   %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
+   {
+    one_for_one,  % RestartStrategy
+	2,            % MaxRestarts
+	30            % TimePeriod for MaxRestarts
+   },
+   
+   %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
    [
-    % -- loc_init Location Initializer -- %
+    %% --------------- The location controller's manager (ctr_manager) --------------- %%
     {
-     loc_init,                                     		% ChildID
-     {loc_init,spawn_link,[Loc_id,self()]},             % Child Start Function
- 	 temporary,                        				    % Child Restart Policy 
-	 200,                                               % Sub-tree Max Shutdown Time
-	 worker,                                            % Child Type
-	 [loc_init]                                         % Child Modules (For Release Handling Purposes)
+     "ctr-" ++ integer_to_list(Loc_id),             % ChildID
+     {ctr_manager,start_link,[Loc_id]},             % Child Start Function
+ 	 permanent,                                     % Child Restart Policy
+	 9000,                                          % Child Sub-tree Max Shutdown Time
+	 worker,                                        % Child Type
+	 [loc_devs_init]                                % Child Modules (For Release Handling Purposes)
+    },
+   
+    %% -------------- The location devices' initializer (loc_devs_init) -------------- %%
+    {
+     loc_devs_init,                                 % ChildID
+     {loc_devs_init,spawn_link,[Loc_id,self()]},    % Child Start Function
+ 	 transient,                          		    % Child Restart Policy (transient for it must complete with exit reason 'normal')  
+	 200,                                           % Child Sub-tree Max Shutdown Time
+	 worker,                                        % Child Type
+	 [loc_devs_init]                                % Child Modules (For Release Handling Purposes)
     }
    ]
   }
  }.
   
-%% ======================================================== START FUNCTION ======================================================== %%
+%%====================================================================================================================================
+%%                                                         START FUNCTION                                                        
+%%====================================================================================================================================
 
-%% Called by "locs_init" at initialization and dynamically when starting new locations (TODO: add function name when ready)
+%% Called by the locations' tree top supervisor (sup_locs) whenever a new location tree is created, which may happen:
+%%  - At boot time by the locations' tree boot initializer (locs_init)
+%%  - Every time a new location is added to the database ([TODO]: Insert function name here)
 start_link(Loc_id) ->
  supervisor:start_link(?MODULE,[Loc_id]).
