@@ -4,10 +4,11 @@
 -include("table_records.hrl"). % Mnesia table records definition
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
--export([add_location/4,add_sublocation/2,add_device/4]).                                                 % Create
--export([print_table/1,print_tree/1,print_tree/2,find_record/2,get_table_keys/1,get_records_num/1]).      % Read
--export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]). % Update
--export([delete_location/1,delete_sublocation/1,delete_device/1]).                                        % Delete
+-export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
+-export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,find_record/2,                 % Read                 
+         get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1]).  
+-export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
+-export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
 
 %% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
 -export([start_mnesia/0,stop_mnesia/0,backup/0,backup/1,restore/0,restore/1,clear/0,install/0]). 
@@ -17,23 +18,22 @@
 %%                                                     PUBLIC CRUD OPERATIONS                                                        
 %%==================================================================================================================================== 
 
+%% NOTE: All the public CRUD functions crash if Mnesia is NOT started on the node (which is automatically performed by the 'init' process at startup)
+
 %% ========================================================== CREATE ===============================================================%%
 
-%% DESCRIPTION:  Adds an empty location to the database (containing only the "(default)" sublocation {Loc_id,0}),
-%%               and starts up its controller
+%% DESCRIPTION:  Adds an empty location to the database with its (default) sublocation {Loc_id,0}, and starts up its controller
 %%
-%% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and must be >0
+%% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and be >0
 %%               - Name:   The name of the location (optional)
 %%               - User:   The username of the location's owner (optional)
-%%               - Port:   The port by which the location's controller listens for REST requests, which must
-%%                         not be already taken and must be >=30000
+%%               - Port:   The port by which the location's controller listens for REST requests, which must not be already taken and be >=30000
 %%
-%% RETURNS:      - {atomic, ok} if the location was successfully added
-%%               - {error,location_already_exists} if such Loc_id already exists in the "location" table 
-%%               - {error,port_already_taken} if such port is already used by another controller
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic, ok}                    -> The location was successfully added
+%%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
+%%               - {error,port_already_taken}      -> The port is already used by another controller
+%%               - {error,badarg}                  -> Invalid arguments
 %%
-%% THROWS:       none 
 add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port>=30000 ->
  F = fun() ->
  
@@ -45,7 +45,7 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
 		case mnesia:match_object(#location{port = Port, _ = '_'}) of
 		 [] ->
 		 
-		  % If empty, use a default name
+		  % If no location name was provided, use a default one
 		  if
 		   Name =:= "" ->
 		    LocName = "loc-" ++ integer_to_list(Loc_id);
@@ -53,8 +53,16 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
 		    LocName = Name
 		  end,
 		 
+		  % If no user name was provided, use a default one
+		  if
+		   User =:= "" ->
+		    LocUser = "(anonymous)";
+		   true ->
+		    LocUser = User
+		  end, 
+		 
 		  % Insert the new location and its default sublocation
-	      mnesia:write(#location{loc_id=Loc_id,name=LocName,user=User,port=Port}),
+	      mnesia:write(#location{loc_id=Loc_id,name=LocName,user=LocUser,port=Port}),
 		  mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)", devlist=[]});
 		  
 		 [_LocationRecord] ->
@@ -81,16 +89,14 @@ add_location(_,_,_,_) ->
 
 %% DESCRIPTION:  Adds an empty sublocation to the database
 %%
-%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation, which must not already exist and with
-%%                                     both elements >0
-%%               - Name: The name of the sublocation (optional)
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation, which must not already exist and be >0
+%%               - Name:               The name of the sublocation (optional)
 %%
-%% RETURNS:      - {atomic, ok} if the sublocation was successfully added
-%%               - {error,location_not_exists} If the location refered by the Loc_id does not exist
-%%               - {error,sublocation_already_exists} If the sub_id already exists in the sublocation table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic, ok}                       -> The sublocation was successfully added
+%%               - {error,location_not_exists}        -> The location 'Loc_id' does not exist
+%%               - {error,sublocation_already_exists} -> A sublocation with such 'sub_id' already exists
+%%               - {error,badarg}                     -> Invalid arguments
 %%
-%% THROWS:       none 
 add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 ->
  F = fun() ->
  
@@ -135,21 +141,19 @@ add_sublocation(_,_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Adds a new device with a default configuration to the database, also starting its associated VM
+%% DESCRIPTION:  Adds a new device with a default configuration to the database, also starting its associated device node
 %%
-%% ARGUMENTS:    - Dev_id: The ID of the device, which must not already exist and must be >0
-%%               - Name: The device's name (optional)
-%%               - {Loc_id,Subloc_id}: The sub_id of the sublocation where to put the device, which must exist
-%%                                     and be >=0
-%%               - Type: The device's type, which must belong to the set of allowed device types
+%% ARGUMENTS:    - Dev_id:             The ID of the device, which must not already exist and be >0
+%%               - Name:               The device's name (optional)
+%%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
+%%               - Type:               The device's type, which must belong to the set of valid device types
 %%
-%% RETURNS:      - {atomic, ok} if the device was successfully added
-%%               - {error,invalid_devtype} if the device type is unknown
-%%               - {error,device_already_exists} if a device with such Dev_id already exists  
-%%               - {error,sublocation_not_exists} If the sublocation where to put the device doesn't exist
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic, ok}                   -> The device was successfully added
+%%               - {error,invalid_devtype}        -> The device type is invalid
+%%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
+%%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
+%%               - {error,badarg}                 -> Invalid arguments
 %%
-%% THROWS:       none 
 add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
  
@@ -217,14 +221,13 @@ add_device(_,_,_,_) ->
 
 %% DESCRIPTION:  Prints the contents of all or a specific table in the database
 %%
-%% ARGUMENTS:    - (Tabletype): The table whose contents are to be printed, also considering shorthand forms
-%%               - (all):   Print all tables contents   
+%% ARGUMENTS:    - (Tabletype): The table to print, also considering shorthand forms
+%%               - (),(all):    Print all tables in the database   
 %%
-%% RETURNS:      - If it exists, the list of records in the specified table
-%%               - {error,unknown_table} if unknown Tabletype
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - ok                    -> The table(s) contents were printed
+%%               - {error,unknown_table} -> Unknown table
+%%               - {error,badarg}        -> Invalid arguments
 %%
-%% THROWS:       none  
 print_table(all) ->
  
  % Print all tables' headers and contents
@@ -263,6 +266,9 @@ print_table(Tabletype) when is_atom(Tabletype) ->
 print_table(_) ->
  {error,badarg}.
 
+print_table() ->
+ print_table(all).
+ 
 %% Prints the header of a table (print_table() helper function) 
 print_table_header(location) ->
  io:format("LOCATION TABLE {loc_id,name,user,port}~n==============~n");
@@ -300,19 +306,18 @@ print_table_records_list([Record|NextRecord]) ->
  print_table_records_list(NextRecord).
  
 
-%% DESCRIPTION:  Prints database contents indented as a tree
+%% DESCRIPTION:  Prints the database contents associated to one or more users, a location or a sublocation indented as a tree
 %%
-%% ARGUMENTS:    - (all):                prints all locations, sublocations and devices of all users in the database
-%%               - (user,Username):      prints all locations, sublocations and devices of a specific user in the database
-%%               - (location,Loc_id):    prints all sublocations and devices in a specific location
-%%               - (sublocation,Sub_id): prints all devices in a specific sublocation
+%% ARGUMENTS:    - (),(all):             Prints the tree of locations, sublocations and devices of all users
+%%               - (user,Username):      Prints the tree of locations, sublocations and devices of a specific user
+%%               - (location,Loc_id):    Prints the tree of sublocations and devices in a specific location
+%%               - (sublocation,Sub_id): Prints the tree of devices in a specific sublocation
 %%
-%% RETURNS:      - A view of the database indented as a tree, depending on the arguments
-%%               - user_not_found: if with the print(user,Username) syntax the user was not found in the database
-%%               - {error,unsupported}: if with the print(Tabletype,Id) syntax the "device" table was passed
-%%               - {error,unknown_table}: if with the print(Tabletype,Id) syntax the table was not found in the database
+%% RETURNS:      - ok                    -> Required contents were printed
+%%               - user_not_exists:      -> The specified user doesn't exist (print_tree(user,Username))
+%%               - {error,unknown_table} -> Unknown table (print_tree(Tabletype,id))
+%%               - {error,unsupported}:  -> Operation not supported (print_tree(device,Id))
 %%
-%% THROWS:       none  
 print_tree(all) ->
  
  % Retrieve all unique users in the database
@@ -333,6 +338,8 @@ print_tree(all) ->
 print_tree(_) ->
  {error, badarg}.
 
+print_tree() ->
+ print_tree(all).
 
 print_tree(user,Username) ->
  
@@ -343,7 +350,7 @@ print_tree(user,Username) ->
  
   % If the user was not found, return
   [] ->
-   user_not_found;
+   user_not_exists;
    
   % Otherwise print information on all the user's locations, sublocations and devices as a tree, taking the indentation into account
   _Loclist -> 
@@ -512,18 +519,17 @@ print_tree_device([Dev|NextDev],Indent) ->
  print_tree_device(NextDev,Indent).
 
 
-%% DESCRIPTION:  Searchs for a record in a table by id
+%% DESCRIPTION:  Returns a specific records in a table, if it exists
 %%
 %% ARGUMENTS:    - Tabletype: The table where to search the record in, also considering shorthand forms
-%%               - Id: The id of the record to search for
+%%               - Id:        The id of the record to be returned (>=0)
 %%
-%% RETURNS:      - If the record is found, its contents
-%%               - not_found, if the record is not found
-%%               - {error,unknown_table} if unknown Tabletype
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {Record}              -> The required record of id "Id" in table "Tabletype"
+%%               - not_found             -> The record with id "Id" was not found in table "Tabletype"
+%%               - {error,unknown_table} -> Unknown table
+%%               - {error,badarg}        -> Invalid arguments
 %%
-%% THROWS:       none  
-find_record(Tabletype,Id) when is_atom(Tabletype) ->
+find_record(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
 
  % Resolve possible table shorthand forms
  Table = resolve_tabletype_shorthand(Tabletype),
@@ -552,14 +558,24 @@ find_record(_,_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Returns all keys in a table as a list
+%% DESCRIPTION:  Returns all keys in a specific or all database tables
 %%
-%% ARGUMENTS:    - Tabletype: The table which to retrieve the keys, or its shorthand form
+%% ARGUMENTS:    - (),(all):  Retrieve the keys of all database tables
+%%               - Tabletype: The table which to retrieve the keys, also considering shorthand forms
 %%
-%% RETURNS:      The list of keys in the table identified by Tabletype
+%% RETURNS:      - [TableKeys]           -> The list of keys in table Tabletype (possibly empty) (get_table_keys(Tabletype) syntax)
+%%                 {[TablesKeys]}        -> The list of keys in all database tables (possibly empty (get_table_keys(|all) syntax)
+%%               - {error,unknown_table} -> Unknown table (get_table_keys(Tabletype) syntax)
+%%               - {error,badarg}        -> Invalid arguments
 %%
-%% THROWS:       none
-get_table_keys(Tabletype) ->
+get_table_keys(all) ->
+ {atomic,{LocationKeys,SublocationKeys,DeviceKeys,SuplocKeys,CtrManagerKeys,DevManagerKeys}} =
+  mnesia:transaction(fun() -> {mnesia:all_keys(location),mnesia:all_keys(sublocation),
+                               mnesia:all_keys(device),mnesia:all_keys(suploc),
+							   mnesia:all_keys(ctrmanager),mnesia:all_keys(devmanager)} end),
+ {LocationKeys,SublocationKeys,DeviceKeys,SuplocKeys,CtrManagerKeys,DevManagerKeys};
+ 
+get_table_keys(Tabletype) when is_atom(Tabletype) ->
 
  % Resolve possible table shorthand forms
  Table = resolve_tabletype_shorthand(Tabletype),
@@ -572,23 +588,32 @@ get_table_keys(Tabletype) ->
   
   % Otherwise retrieve and return the table keys
   _ ->
-   {atomic,{Keys}} = mnesia:transaction(fun() -> {mnesia:all_keys(Table)} end),
+   {atomic,Keys} = mnesia:transaction(fun() -> mnesia:all_keys(Table) end),
    Keys
- end.
+ end;
 
+get_table_keys(_) ->
+ {error,badarg}.
 
+get_table_keys() ->
+ get_table_keys(all).
+ 
+ 
 %% DESCRIPTION:  Returns the number of records in a specific or all database tables
 %%
-%% ARGUMENTS:    - (all): Returns the number of records of all database tables
-%%               - (Tabletype): The table which to retrieve the number of records, or its shorthand form
+%% ARGUMENTS:    - (),(all):    Returns the number of records in all database tables
+%%               - (Tabletype): The table which to retrieve the number of records, also considering shorthand forms
 %%
-%% RETURNS:      The number of records a specific or all database tables
+%% RETURNS:      - Num_Records_Table      -> The number of records in the specified table (Tabletype syntax)
+%%               - {[Num_Records_Tables]} -> The number of records in all tables in order (() or (all) syntax)
+%%               - {error,unknown_table}  -> Unknown table (Tabletype syntax)
+%%               - {error,badarg}         -> Invalid arguments
 %%
-%% THROWS:       none  
 get_records_num(all) ->
- {get_records_num(location),get_records_num(sublocation),get_records_num(device),
-  get_records_num(suploc),get_records_num(ctrmanager),get_records_num(devmanager)};
-get_records_num(Tabletype) ->
+ {LocationKeys,SublocationKeys,DeviceKeys,SuplocKeys,CtrManagerKeys,DevManagerKeys} = get_table_keys(all),
+ {length(LocationKeys),length(SublocationKeys),length(DeviceKeys),length(SuplocKeys),length(CtrManagerKeys),length(DevManagerKeys)};
+  
+get_records_num(Tabletype) when is_atom(Tabletype) ->
  
  % Retrieve the table keys, also considering shorthand forms
  Keys = get_table_keys(Tabletype),
@@ -602,24 +627,29 @@ get_records_num(Tabletype) ->
   % Otherwise return the number of keys in the table
   _ ->
   length(Keys)
- end.
+ end;
  
-
+get_records_num(_) ->
+ {error,badarg}.
+ 
+get_records_num() ->
+ get_records_num(all).
+ 
+ 
 %% ========================================================== UPDATE ===============================================================%% 
 
-%% DESCRIPTION:  Changes a device from a sublocation to another
+%% DESCRIPTION:  Updates a device's sublocation
 %%
-%% ARGUMENTS:    - Dev_id: The ID of the device to change sublocation, which must exist and be >0
-%%               - {Loc_id,Subloc_id}: The sub_id of the sublocation where to put the device in, whose elements must be >0
+%% ARGUMENTS:    - Dev_id:             The ID of the device to change sublocation, which must exist and be >0
+%%               - {Loc_id,Subloc_id}: The 'sub_id' of the sublocation where to put the device, which must exist and be {>0,>=0}
 %%
-%% RETURNS:      - {atomic, ok} if the device's sublocation was successfully changed
-%%               - {error,device_not_exists} if the device was not found in the device table
-%%               - {error,sublocation_not_exists} if the target sublocation was not found in the sublocation table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}                    -> Device sublocation successfully updated
+%%               - {error,device_not_exists}      -> The device 'Dev_id' does not exist
+%%               - {error,sublocation_not_exists} -> The sublocation 'sub_id' does not exist
+%%               - {error,badarg}                 -> Invalid arguments
 %%
-%% THROWS:       none 
+%% NOTE:         This function doesn't check whether the new and the old device sublocations belong to the same location
 %%
-%% NOTE:         This function doesn't check that the current and new sublocation belong to the same location
 update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
  
@@ -684,13 +714,12 @@ update_dev_sub(_,_) ->
 %% ARGUMENTS:    - Dev_id: The ID of the device to update the configuration, which must exist and be >0
 %%               - Config: The updated device configuration
 %%
-%% RETURNS:      - {atomic, ok} if the device's configuration was successfully updated
-%%               - {error,device_not_exists} if the device was not found in the device table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}               -> Device configuration successfully updated
+%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {error,badarg}            -> Invalid arguments
 %%
-%% THROWS:       none 
+%% NOTE:         This function does not check the new configuration to be valid according to the device's type
 %%
-%% NOTE:         This function doesn't check the new configuration to be appropriate for the device type
 update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
  F = fun() ->
  
@@ -721,14 +750,13 @@ update_dev_config(_,_) ->
 
 %% DESCRIPTION:  Updates a location's name
 %%
-%% ARGUMENTS:    - Loc_id: The ID of the location which update the name, which must exist and be >0
-%%               - Name: The updated location name
+%% ARGUMENTS:    - Loc_id: The ID of the location to update the name, which must exist and be >0
+%%               - Name:   The updated location name
 %%
-%% RETURNS:      - {atomic, ok} if the location's name was successfully updated
-%%               - {error,location_not_exists} if the location was not found in the location table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}                 -> Location name successfully updated
+%%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
+%%               - {error,badarg}              -> Invalid arguments
 %%
-%% THROWS:       none
 update_loc_name(Loc_id,Name) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
  
@@ -759,17 +787,16 @@ update_loc_name(_,_) ->
 
 %% DESCRIPTION:  Updates a sublocation's name
 %%
-%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation which update the name, which must exist and with
-%%                                     both elements >0
-%%               - Name: The updated sublocation name
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation to update
+%%                                     the name, which must exist and be {>0,>0}
+%%               - Name:               The updated sublocation name
 %%
-%% RETURNS:      - {atomic, ok} if the sublocation's name was successfully updated
-%%               - {error,sublocation_not_exists} if the sublocation was not found in the sublocation table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}                    -> Sublocation name successfully updated
+%%               - {error,sublocation_not_exists} -> The sublocation 'Sub_id' does not exist
+%%               - {error,badarg}                 -> Invalid arguments
 %%
-%% THROWS:       none
+%% NOTE:         Currently the name of the "(default)" sublocation of a location cannot be changed (Subloc_id >0)
 %%
-%% NOTE:         The name of the default sublocation cannot be changed (>0)
 update_subloc_name({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> 
  F = fun() ->
  
@@ -800,14 +827,13 @@ update_subloc_name(_,_) ->
 
 %% DESCRIPTION:  Updates a device's name
 %%
-%% ARGUMENTS:    - Dev_id: The dev_id of the device which update the name, which must exist and be >0
-%%               - Name: The updated device name
+%% ARGUMENTS:    - Dev_id: The dev_id of the device to update the name, which must exist and be >0
+%%               - Name:   The updated device name
 %%
-%% RETURNS:      - {atomic, ok} if the device's name was successfully updated
-%%               - {error,device_not_exists} if the device was not found in the device table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}               -> Device name successfully updated
+%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {error,badarg}            -> Invalid arguments
 %%
-%% THROWS:       none
 update_dev_name(Dev_id,Name) when is_number(Dev_id), Dev_id>0 ->
  F = fun() ->
  
@@ -837,15 +863,17 @@ update_dev_name(_,_) ->
  
 %% ========================================================== DELETE ===============================================================%% 
 
-%% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the database, also stopping the associated VMs
+%% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the
+%%               database, also stopping the associated controller' and devices' nodes
 %%
-%% ARGUMENTS:    - Loc_id: The ID of the location to delete
+%% ARGUMENTS:    - Loc_id: The ID of the location to delete from the database
 %%
-%% RETURNS:      - {atomic, ok} if the location was successfully removed from the database
-%%               - {error,location_not_exists} if the location was not found in the location table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}                 -> Location, sublocations and devices successfully deleted
+%%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
+%%               - {error,badarg}              -> Invalid arguments
 %%
-%% THROWS:       none
+%% NOTE:         Use with caution, for deleted locations,sublocations and device CANNOT be recovered
+%%
 delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
  
@@ -880,14 +908,12 @@ delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
 delete_location(_) ->
  {error,badarg}.
 
-
 %% Deletes a list of device records from the device table (delete_location(Loc_id) helper function)
 delete_device_records([]) ->
  ok;
 delete_device_records([Dev|NextDev]) ->
  mnesia:delete({device,Dev#device.dev_id}),
  delete_device_records(NextDev).
- 
  
 %% Deletes a list of sublocation records from the sublocation table (delete_location(Loc_id) helper function)
 delete_subloc_records([]) ->
@@ -897,17 +923,16 @@ delete_subloc_records([Subloc|NextSubloc]) ->
  delete_subloc_records(NextSubloc). 
 
 
-%% DESCRIPTION:  Delete a sublocation from the database, moving all its devices to its location's default sublocation {Loc_id,0}
+%% DESCRIPTION:  Deletes a sublocation from the database, moving all its devices to its location's default sublocation {Loc_id,0}
 %%
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation to delete, with both elements >0
 %%
-%% RETURNS:      - {atomic, ok} if the sublocation was successfully removed from the database
-%%               - {error,sublocation_not_exists} if the sublocation was not found in the sublocation table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}                    -> Sublocation successfully deleted
+%%               - {error,sublocation_not_exists} -> The sublocation 'Sub_id' does not exist
+%%               - {error,badarg}                 -> Invalid arguments
 %%
-%% THROWS:       none
+%% NOTE:         Default sublocations cannot be removed (Subloc_id > 0)
 %%
-%% NOTE:         The default sublocation of a location cannot be removed (Subloc_id > 0)
 delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> 
  F = fun() ->
  
@@ -944,7 +969,6 @@ delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_numb
 delete_sublocation(_) ->
  {error,badarg}.
 
-
 %% Moves all devices in a list to the default sublocation {Loc_id,0} (delete_sublocation(Loc_id,Subloc_id) helper function)
 move_devlist_to_default_subloc([],_) ->
  ok;
@@ -955,15 +979,14 @@ move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
  move_devlist_to_default_subloc(NextDev_id,Loc_id).
 
 
-%% DESCRIPTION:  Deletes a device from the database, also shutting down its VM in its location
+%% DESCRIPTION:  Deletes a device from the database, also shutting down its associated node
 %%
 %% ARGUMENTS:    - Dev_id: The dev_id of the device to delete, which must exist and be >0
 %%
-%% RETURNS:      - {atomic, ok} if the device's name was successfully deleted from the database
-%%               - {error,device_not_exists} if the device was not found in the device table
-%%               - {error,badarg} if wrong argument format
+%% RETURNS:      - {atomic,ok}               -> Device successfully deleted from the database
+%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {error,badarg}            -> Invalid arguments
 %%
-%% THROWS:       none
 delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
  F = fun() ->
  
@@ -1002,15 +1025,17 @@ delete_device(_) ->
 %%                                                    PUBLIC UTILITY FUNCTIONS
 %%==================================================================================================================================== 
 
-%% DESCRIPTION:  Starts the Mnesia application and waits for its disc_copies tables to be loaded from disc
+%% DESCRIPTION:  Starts the Mnesia application and waits for its disc_copies tables (location,sublocation,device) to be loaded from disc
 %%
 %% ARGUMENTS:    none 
 %%
 %% RETURNS:      - ok                  -> Mnesia started and disc_copies tables successfully loaded
-%%               - {timeout,[table()]} -> Timeout in loading the Mnesia Tables
+%%               - {timeout,[table()]} -> Timeout in loading the Mnesia Tables (probably the schema is not installed)
 %%               - {error,Reason}      -> Internal Mnesia error
 %%
-%% NOTE:         'ok' is returned even if Mnesia was already running
+%% NOTES:        1) If Mnesia is already running, the function returns 'ok'
+%%               2) This function is for debugging purposes olny, and should not be called explicitly during the JANET Simulator operations
+%%               3) This function is called on the JANET Simulator node at boot by the 'init' process so to automatically start Mnesia
 %%
 start_mnesia() ->
  
@@ -1070,10 +1095,11 @@ start_mnesia() ->
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok                  -> Mnesia successfully stopped
-%%               - {error,Reason}      -> Internal Mnesia error
+%% RETURNS:      - ok             -> Mnesia successfully stopped
+%%               - {error,Reason} -> Internal Mnesia error
 %%
-%% NOTE:         'ok' is returned even if Mnesia was already stopped
+%% NOTES:        1) If Mnesia is already stopped, the function returns 'ok'
+%%               2) This function is for debugging purposes olny, and should not be called explicitly during the JANET Simulator operations
 %%
 stop_mnesia() ->
 
@@ -1095,17 +1121,19 @@ stop_mnesia() ->
  end.
  
  
-%% DESCRIPTION:  Backups the entire database contents to a file
+%% DESCRIPTION:  Backups the entire Mnesia database to a file
 %%
-%% ARGUMENTS:    - (none): The database is backed up to the default file ("db/mnesia_backup.db")
-%%               - (File): The file where to backup the database
+%% ARGUMENTS:    - (none): The default backup file is used ("priv/db/mnesia_backup.db")
+%%               - (File): A custom backup file is used
 %%
-%% RETURNS:      - ok: Database successfully backed up to the specified file
-%%               - {error,Reason}: Error in writing the backup file
-%%
-%% THROWS:       none 
+%% RETURNS:      - ok             -> Mnesia database successfully backed up to the specified file
+%%               - {error,Reason} -> Error in creating the backup file (its directory must exist
+%%                                   and its 'write' permission must be granted)
+%% 
+%% NOTE:         Mnesia backups can later be restored using the restore()/restore(File) function
+%% 
 backup() ->
- backup("db/mnesia_backup.db").  % Default backup file
+ backup("priv/db/mnesia_backup.db").  % Default backup file
  
 backup(File) ->
 
@@ -1120,27 +1148,29 @@ backup(File) ->
   ok ->
    io:format("Mnesia database backed up to file \"~s\"~n",[File]);
    
-  % Otherwise return the error 
+  % Otherwise, report the error
   _ ->
+   io:format("Error in creating the backup file \"~s\" (check its directory to exist and its permissions)~n",[File]),
    BackupResult
  end.
 
 
 %% DESCRIPTION:  Restores the database to the contents of a backup file
 %%
-%% ARGUMENTS:    - (none): The default file is used for restoring the database ("db/mnesia_backup.db")
-%%               - (File): The file where to restore the database from
+%% ARGUMENTS:    - (none): The default backup file is used for restoring the database ("priv/db/mnesia_backup.db")
+%%               - (File): A custom backup file is used
 %%
-%% RETURNS:      - ok: Database successfully restored to the contents of the specified backup file
-%%               - {error,Reason}: Error in restoring the database from the backup file
-%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted: The user aborted the operation
+%% RETURNS:      - ok             -> Database successfully restored to the contents of the specified backup file
+%%               - {error,Reason} -> Error in restoring the database from the backup file
+%%                                   (check the file to exist and its read permission to be granted)
+%%               - janet_running  -> The operation cannot be performed while the JANET Simulator is running
+%%               - aborted        -> The user aborted the operation
 %%
-%% THROWS:       none
+%% NOTES:        1) The current database contents will be DISCARDED by calling this function
+%%               2) Database backup files can be created via the db:backup()/db:backup(File) function
 %%
-%% NOTE:         The current database contents will be DISCARDED by calling this function
 restore() ->
- restore("db/mnesia_backup.db").
+ restore("priv/db/mnesia_backup.db").
  
 restore(File) ->
 
@@ -1173,17 +1203,17 @@ restore(File) ->
  end.
 
 
-%% DESCRIPTION:  Clears all database tables (preserving the schema)
+%% DESCRIPTION:  Clears (empties) all database tables (but preserves the database's schema)
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok: Database tables successfully cleared
-%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted: The user aborted the operation
+%% RETURNS:      - ok            -> Database tables successfully cleared
+%%               - janet_running -> The operation cannot be performed while the JANET Simulator is running
+%%               - aborted       -> The user aborted the operation
 %%
-%% THROWS:       none
+%% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
+%%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
 %%
-%% NOTE:         Debug purposes only (use restore() to reset the database) 
 clear() ->
 
  % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
@@ -1211,17 +1241,17 @@ clear() ->
  end.
  
  
-%% DESCRIPTION:  Installs the Mnesia database (schema + tables) from scratch
+%% DESCRIPTION:  Installs from scratch (schema + tables) the Mnesia database used by the Janet Simulator
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok: Database successfully installed
-%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted: The user aborted the operation
+%% RETURNS:      - ok            -> Mnesia database successfully installed
+%%               - janet_running -> The operation cannot be performed while the JANET Simulator is running
+%%               - aborted       -> The user aborted the operation
 %%
-%% THROWS:       none
+%% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
+%%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
 %%
-%% NOTE:         Debug purposes only (use restore() to reset the database) 
 install() ->
 
  % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
@@ -1274,21 +1304,21 @@ install() ->
   _ ->
    CheckOp
  end.
- 
 
+ 
 %%====================================================================================================================================
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
  
-%% DESCRIPTION:  Checks the JANET simulator to be stopped and asks user confirmation before attempting a database utility operation
+%% DESCRIPTION:  Ensures the JANET simulator to be stopped and asks user confirmation before attempting a database utility operation
+%%               (restore(|File), clear(), install() helper function)
 %%
-%% ARGUMENTS:    - Operation: a String used in asking user confirmation
+%% ARGUMENTS:    - Operation: a string used in the user confirmation request
 %%
-%% RETURNS:      - ok: The user confirmed the database utility operation
-%%               - janet_running: The JANET simulator is running, thus the operation cannot be performed
-%%               - aborted: The user aborted the operation
-%%
-%% THROWS:       none  
+%% RETURNS:      - ok            -> The database utility operation can proceed
+%%               - janet_running -> The operation cannot be performed while the JANET Simulator is running
+%%               - aborted       -> The user aborted the operation
+%%  
 check_db_operation(Operation) ->
 
  % Check the JANET simulator not to be running
@@ -1318,14 +1348,15 @@ check_db_operation(Operation) ->
  end. 
 
 
-%% DESCRIPTION:  Returns all records in a table as a list
+%% DESCRIPTION:  Returns all records in a table as a list (print_table(|all), print_table(Tabletype) helper function)
 %%
-%% ARGUMENTS:    - Tabletype: The table which to retrieve the records, or its shorthand form
+%% ARGUMENTS:    - Tabletype: The table to retrieve the records, or its shorthand form
 %%
-%% RETURNS:      The list of records in the table identified by Tabletype
+%% RETURNS:      - [TableRecords]        -> The list of records in table Tabletype (possibly empty)
+%%               - {error,unknown_table} -> Unknown table
+%%               - {error,badarg}        -> Invalid arguments
 %%
-%% THROWS:       none 
-get_table_records(Tabletype) ->
+get_table_records(Tabletype) when is_atom(Tabletype) ->
 
  % Resolve possible table shorthand forms
  Table = resolve_tabletype_shorthand(Tabletype),
@@ -1339,16 +1370,18 @@ get_table_records(Tabletype) ->
   % Otherwise return all table records
   _ ->
    mnesia:dirty_select(Table,[{'_',[],['$_']}])  % The second argument is a "catch-all" clause
- end.
+ end;
+ 
+get_table_records(_) ->
+ {error,badarg}.
  
   
-%% DESCRIPTION:  Returns all unique users in the database
+%% DESCRIPTION:  Returns the list of unique users in the database
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      All unique users in the database
+%% RETURNS:      The list of unique users in the database (possibly empty)
 %%
-%% THROWS:       none 
 get_all_users() ->
 
  % Initialize select arguments
@@ -1363,13 +1396,13 @@ get_all_users() ->
  lists:usort(UnfilteredUserList).
  
 
-%% DESCRIPTION:  Returns the Tabletype associated to its argument, also considering shorthand forms
+%% DESCRIPTION:  Returns the table name atom associated to its argument, also considering shorthand forms
 %%
-%% ARGUMENTS:    - Tabletybe: A table type, possibly in a shorthand form
+%% ARGUMENTS:    - Tabletype: A table name, possibly in a shorthand form
 %%
-%% RETURNS:      The Tabletype associated to its argument, also considering shorthand forms
+%% RETURNS:      - Table   -> The table name atom associated to the Tabletype
+%%               - Unknown -> If no table name could be associated to Tabletype
 %%
-%% THROWS:       none 
 resolve_tabletype_shorthand(Tabletype) ->
  if
   % --- disc_copies tables --- %
@@ -1387,7 +1420,8 @@ resolve_tabletype_shorthand(Tabletype) ->
    ctrmanager;
   Tabletype =:= devmanager orelse Tabletype =:= devmgr orelse Tabletype =:= devicemgr orelse Tabletype =:= devicemanager ->
    devmanager;
-   
+  
+  % Unknown Tabletype  
   true ->
    unknown
  end.

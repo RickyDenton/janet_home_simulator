@@ -6,6 +6,9 @@
 
 %% Sets its children' general specifications (called by sup_jsim at initialization)
 init(_) ->
+
+%% [TODO_NOW]: Reset the contents of the 'suploc', 'ctrmanager' and 'devmanager' tables to ensure consistency in case the supervisor is restarted
+
 {ok,
  {{simple_one_for_one,5,60},     % {RestartStrategy, MaxRestarts, Time Period}
   [

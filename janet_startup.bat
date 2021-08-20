@@ -1,1 +1,1 @@
-cmd /K "werl -sname janet-simulator@localhost -hidden -setcookie janet-simulator -mnesia dir \"db/mnesia.db\" -pa ebin/"
+cmd /K "werl -sname janet-simulator@localhost -hidden -setcookie janet-simulator -mnesia dir \"priv/db/mnesia.db\" -pa ebin/ -run db start_mnesia"

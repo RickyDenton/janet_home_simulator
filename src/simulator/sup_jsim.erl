@@ -1,64 +1,54 @@
-%% This module represents the top-level supervisor of the Janet Controller application %%
+%% This module represents the top-level supervisor of the Janet Simulator application %%
 
--module(sup_jctr).
+-module(sup_jsim).
 -behaviour(supervisor).
+
 -export([init/1]).        % Supervisor Behaviour Callback Function
 -export([start_link/0]).  % Start Function
-
 
 %%====================================================================================================================================
 %%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        
 %%====================================================================================================================================
 init(_) ->
-
- % Initialize the ETS "devalloc" table from the contents of the "devalloc" environment variable
- {ok,DevAlloc} = application:get_env(devalloc),
- ets:new(devalloc,[set,public,named_table]),
- ets:insert(devalloc,DevAlloc),
-
- % Initialize the ETS "devserver" table
- ets:new(devserver,[set,public,named_table]),
- 
- % Return the supervisor flags and the list of children specifications
  {ok,
   {
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
    {
-    one_for_one,  % RestartStrategy
-	1,            % MaxRestarts
+    rest_for_one, % RestartStrategy (rest_for_one for reinitializing the sup_locs tree via the locs_init module should it fail)
+    2,            % MaxRestarts
 	30            % TimePeriod for MaxRestarts
-   },
-   
+   },                 
+
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
-   [
-    %% ------------- The Janet Controller's REST server (ctr_restserver) ------------- %%
+   [   
+    %% ------------- The Janet Simulator's REST server (sim_restserver) ------------- %%
     {
-     ctr_restserver,		            % ChildID
-     {ctr_restserver,start_link,[]},    % Child Start Function
+     sim_restserver,		            % ChildID
+     {sim_restserver,start_link,[]},    % Child Start Function
  	 permanent,                         % Child Restart Policy 
-	 3000,                              % Child Sub-tree Max Shutdown Time
+	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
-	 [ctr_restserver]                   % Child Modules (For Release Handling Purposes)
+	 [sim_restserver]                   % Child Modules (For Release Handling Purposes)
     },
   
-    %% ------------------ The device servers' supervisor (sup_devs) ------------------ %%
+    %% ------------------ The locations' top supervisor (sup_locs) ------------------ %%
     {
-     sup_devs,                          % ChildID
-     {sup_devs,start_link,[]},          % Child Start Function
+     sup_locs,                          % ChildID
+     {sup_locs,start_link,[]},          % Child Start Function
  	 permanent,                         % Child Restart Policy 
-	 2000,                              % Child Sub-tree Max Shutdown Time
+	 10000,                             % Child Sub-tree Max Shutdown Time
 	 supervisor,                        % Child Type
-	 [sup_devs]                         % Child Modules (For Release Handling Purposes)
+	 [sup_locs]                         % Child Modules (For Release Handling Purposes)
     },
    
-    %% -------------- The devices' registration server (ctr_regserver) -------------- %%
+    %% ----------------- The locations' boot initializer (locs_init) ----------------- %%
 	{
-     ctr_regserver,		                % ChildID
-     {ctr_regserver,start_link,[]},     % Child Start Function
- 	 permanent,                         % Child Restart Policy
-	 1000,                              % Child Sub-tree Max Shutdown Time
+     locs_init,		                    % ChildID
+     {locs_init,spawn_link,[]},         % Child Start Function
+ 	 transient,                         % Child Restart Policy (transient for it must complete with exit reason 'normal') 
+	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
-	 [ctr_regserver]                    % Child Modules (For Release Handling Purposes)
+	 [locs_init]                        % Child Modules (For Release Handling Purposes)
     }
    ] 
   }

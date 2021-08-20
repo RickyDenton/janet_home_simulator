@@ -1,15 +1,16 @@
-%% JANET Simulator application specification %%
+%% This is the resource file of the JANET Simulator application %%
 
-{application, janet_simulator,				% Name
+{application,
+ janet_simulator,				            % Application Name
  [
-  {description,"JANET Erlang Simulator"},	% Description
-  {vsn,"0.0.1"},							% Version
-  {modules,[db_utils,loc_ctrl,jsim,         % Application Modules
-            sim_restserver,sup_jsim,
-			sup_location,sup_locations,
-			utils]},
-  {registered,[sup_locs]},                  % Registered Names
+  {description,"JANET Erlang Simulator"},	% Application Description
+  {vsn,"0.0.1"},							% Application Version
+  {modules,[jsim,sup_jsim,sim_restserver,   % Application-specific Modules
+            db,utils,sup_locs,sup_loc,
+			locs_init,loc_init,ctr_manager,
+			dev_manager]},
+  {registered,[sup_locs]},                  % Application Registered Names
   {applications,[mnesia,stdlib,kernel]},    % Application Dependencies
-  {mod,{jsim,[]}}                           % Application Callback Module
+  {mod,{jsim,[]}}                           % Application Callback Module and Arguments([] = 'normal')
  ]
 }.

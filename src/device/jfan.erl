@@ -1,15 +1,15 @@
--module(thermostat).
+-module(jfan).
 -export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2,handle_event/3,handle_sync_event/4]).
 -behaviour(gen_fsm).
 
 init(_) ->
- io:format("[fsm_thermostat]: Initialized~n"),
+ io:format("[fsm_fan]: Initialized~n"),
  {ok,[]}.  % Initial State
 
 % STUB
 % NOTE: This is currently not called on shutdown since the process is not trapping exit signals
 terminate(normal,_) ->
- io:format("[fsm_thermostat]: Terminated").
+ io:format("[fsm_fan]: Terminated").
 
 % STUB
 handle_call(Num,_,{Sum,N}) when is_number(Num) ->
@@ -20,6 +20,9 @@ handle_call(Num,_,{Sum,N}) when is_number(Num) ->
 % STUB
 handle_cast(reset,State) -> % Resets the server State
  {noreply,State}.
+
+
+
 
 
 % STUB 
@@ -36,8 +39,6 @@ handle_sync_event(Event, _From, StateName, Data) ->
 unexpected(Msg, State) ->
  io:format("~p received unknown event ~p while in state ~p~n",
  [self(), Msg, State]).
-
-
 
 
 
