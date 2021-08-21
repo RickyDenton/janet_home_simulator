@@ -32,7 +32,7 @@ handle_continue(init,{booting,none,Loc_id}) ->
  %% -------------- Controller Node Configuration Parameters Definition -------------- %%
  
  % Retrieve the location record
- LocationRecord = db:find_record(location,Loc_id),
+ {ok,LocationRecord} = db:get_record(location,Loc_id),
  
  % Check the record validity
  %% [NOTE]: This is probably is not required, since if the record is corrupted the function crashes anyway (and it just checks for it to be in the form {location,...}

@@ -6,7 +6,7 @@
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
--export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,find_record/2,                 % Read                 
+-export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read                 
          get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,get_loc_devs/1]).  
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
@@ -449,7 +449,7 @@ print_tree_location([Loc|Nextloc],Indent) ->
    
   % Otherwise, if the record doesn't exist
   [] ->
-   CtrMgrStatus = "NOT_STARTED"
+   CtrMgrStatus = "STOPPED"
  end,
  
  % Print information on the location
@@ -512,7 +512,7 @@ print_tree_device([Dev|NextDev],Indent) ->
    
   % Otherwise, if the record doesn't exist
   [] ->
-   DevMgrStatus = "NOT_STARTED"
+   DevMgrStatus = "STOPPED"
  end,
  
  % Print information on the device
@@ -525,12 +525,12 @@ print_tree_device([Dev|NextDev],Indent) ->
 %% ARGUMENTS:    - Tabletype: The table where to search the record in, also considering shorthand forms
 %%               - Id:        The id of the record to be returned (>=0)
 %%
-%% RETURNS:      - {Record}              -> The required record of id "Id" in table "Tabletype"
-%%               - not_found             -> The record with id "Id" was not found in table "Tabletype"
+%% RETURNS:      - {ok,Record}           -> The required record of id "Id" in table "Tabletype"
+%%               - {error,not_found}     -> The record with id "Id" was not found in table "Tabletype"
 %%               - {error,unknown_table} -> Unknown table
 %%               - {error,badarg}        -> Invalid arguments
 %%
-find_record(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
+get_record(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
 
  % Resolve possible table shorthand forms
  Table = resolve_tabletype_shorthand(Tabletype),
@@ -547,15 +547,15 @@ find_record(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
     
 	% If the record was found, return it
     {atomic,[Record]} ->
-	 Record;
+	 {ok,Record};
 	 
 	% Otherwise, return that it was not found 
 	{atomic,[]} ->
-	 not_found
+	 {error,not_found}
    end
  end;
 
-find_record(_,_) ->
+get_record(_,_) ->
  {error,badarg}.
 
 

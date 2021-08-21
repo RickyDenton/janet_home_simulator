@@ -32,10 +32,10 @@ init_devs_mgrs([],_) ->
 init_devs_mgrs([Dev_id|NextDev_id],Sup_pid) -> 
  
  % Check the device manager associated to Dev_id not to be already registered in the 'devmanager' table
- case db:find_record(devmanager,Dev_id) of
+ case db:get_record(devmanager,Dev_id) of
    
   % If it is not, spawn it under the location 'sup_loc' supervisor
-  not_found ->
+  {error,not_found} ->
    {ok,_DevMgrPid} = supervisor:start_child(Sup_pid,
                                             {
                                              "dev-" ++ integer_to_list(Dev_id),  % ChildID
@@ -48,7 +48,7 @@ init_devs_mgrs([Dev_id|NextDev_id],Sup_pid) ->
 											
   % Otherwise, if it is already registered, it means that it was spawned by a
   % previous instance of this process that crashed, and so skip its initialization
-  _DevMgrRecord ->
+  {ok,_DevMgrRecord} ->
    ok
    
  end,

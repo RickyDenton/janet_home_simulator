@@ -32,7 +32,7 @@ handle_continue(init,{booting,none,Dev_id}) ->
  %% ---------------- Device Node Configuration Parameters Definition ---------------- %%
  
  % Retrieve the device record
- DeviceRecord = db:find_record(device,Dev_id),
+ {ok,DeviceRecord} = db:get_record(device,Dev_id),
  
  % Check the record validity
  %% [NOTE]: This is probably is not required, since if the record is corrupted the function crashes anyway (and it just checks for it to be in the form {device,...}

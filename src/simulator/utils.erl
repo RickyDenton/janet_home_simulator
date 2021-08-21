@@ -2,7 +2,7 @@
 
 -module(utils).
 
--export([is_running/1,is_valid_devtype/1,get_devtype_default_config/1,str_to_atom/1]).
+-export([is_running/1,is_valid_devtype/1,get_devtype_default_config/1,resolve_nodetype_shorthand/1,str_to_atom/1]).
 
 %%====================================================================================================================================
 %%                                                    PUBLIC UTILITY FUNCTIONS
@@ -53,6 +53,30 @@ resolve_appname_shorthand(AppShorthand) ->
    AppShorthand
  end.
 
+
+%% DESCRIPTION:  Returns the node type associated to its argument, possibly considering shorthand forms
+%%
+%% ARGUMENTS:    - NodeTypeShorthand: A node name, possibly in a shorthand form
+%%
+%% RETURNS:      - NodeType -> The node type atom associated to NodeTypeShorthand
+%%               - unknown  -> If no node type could be associated with NodeTypeShorthand
+%%
+resolve_nodetype_shorthand(NodeTypeShorthand) ->
+ if
+ 
+  % Controller node
+  NodeTypeShorthand =:= controller orelse NodeTypeShorthand =:= ctr orelse NodeTypeShorthand =:= contr ->
+   controller;
+   
+  % Device node
+  NodeTypeShorthand =:= device orelse NodeTypeShorthand =:= dev ->
+   device;
+  
+  % Unknown nodetype  
+  true ->
+   unknown
+ end.
+ 
 
 %% DESCRIPTION:  Checks if a device type is valid
 %%
