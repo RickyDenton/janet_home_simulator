@@ -11,13 +11,13 @@
 %%====================================================================================================================================
 init(_) ->
 
- % Initialize the ETS "devalloc" table from the contents of the "devalloc" environment variable
+ % Initialize the ETS 'devalloc' table from the contents of the 'devalloc' environment variable
  {ok,DevAlloc} = application:get_env(devalloc),
  ets:new(devalloc,[set,public,named_table]),
  ets:insert(devalloc,DevAlloc),
 
- % Initialize the ETS "devserver" table
- ets:new(devserver,[set,public,named_table]),
+ % Initialize the ETS 'devhandler' table
+ ets:new(devhandler,[set,public,named_table]),
  
  % Return the supervisor flags and the list of children specifications
  {ok,
@@ -36,19 +36,19 @@ init(_) ->
      ctr_restserver,		            % ChildID
      {ctr_restserver,start_link,[]},    % Child Start Function
  	 permanent,                         % Child Restart Policy 
-	 3000,                              % Child Sub-tree Max Shutdown Time
+	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [ctr_restserver]                   % Child Modules (For Release Handling Purposes)
     },
   
-    %% ------------------ The device servers' supervisor (sup_devs) ------------------ %%
+   %% -------- The supervisor of registered device handlers (sup_devhandlers) -------- %%
     {
-     sup_devs,                          % ChildID
-     {sup_devs,start_link,[]},          % Child Start Function
+     sup_devhandlers,                   % ChildID
+     {sup_devhandlers,start_link,[]},   % Child Start Function
  	 permanent,                         % Child Restart Policy 
-	 2000,                              % Child Sub-tree Max Shutdown Time
+	 5000,                              % Child Sub-tree Max Shutdown Time
 	 supervisor,                        % Child Type
-	 [sup_devs]                         % Child Modules (For Release Handling Purposes)
+	 [sup_devhandlers]                  % Child Modules (For Release Handling Purposes)
     },
    
     %% -------------- The devices' registration server (ctr_regserver) -------------- %%

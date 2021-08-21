@@ -11,7 +11,7 @@
 %%====================================================================================================================================
 init(_) ->
 
- % Clear the mnesia ram_copies tables (this ensures consistency in case the whole locations' tree is restarted)
+ % Clear the Mnesia ram_copies tables for enforcing consistency in case this supervisor is restarted
  [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
  
  % Return the supervisor flags and the list of children specifications

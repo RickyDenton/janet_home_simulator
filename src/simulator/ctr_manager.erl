@@ -31,9 +31,12 @@ handle_continue(init,{booting,none,Loc_id}) ->
  
  %% -------------- Controller Node Configuration Parameters Definition -------------- %%
  
- % Retrieve the location record and check its validity
+ % Retrieve the location record
  LocationRecord = db:find_record(location,Loc_id),
- true = is_record(LocationRecord,location),
+ 
+ % Check the record validity
+ %% [NOTE]: This is probably is not required, since if the record is corrupted the function crashes anyway (and it just checks for it to be in the form {location,...}
+ % true = is_record(LocationRecord,location),
  
  % Convert the Loc_id to string
  Loc_id_str = integer_to_list(Loc_id),

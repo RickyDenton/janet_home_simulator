@@ -31,9 +31,12 @@ handle_continue(init,{booting,none,Dev_id}) ->
  
  %% ---------------- Device Node Configuration Parameters Definition ---------------- %%
  
- % Retrieve the device record and check its validity
+ % Retrieve the device record
  DeviceRecord = db:find_record(device,Dev_id),
- true = is_record(DeviceRecord,device),
+ 
+ % Check the record validity
+ %% [NOTE]: This is probably is not required, since if the record is corrupted the function crashes anyway (and it just checks for it to be in the form {device,...}
+ % true = is_record(DeviceRecord,device),
  
  % Convert the Dev_id to string
  Dev_id_str = integer_to_list(Dev_id),

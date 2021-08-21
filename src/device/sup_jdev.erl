@@ -20,7 +20,7 @@ init(_) ->
               dev_fsm,		                  % ChildID
               {FSM_Module,start_link,[]},     % Child Start Function
  	          permanent,                      % Child Restart Policy 
-	          1000,                           % Child Sub-tree Max Shutdown Time
+	          2000,                           % Child Sub-tree Max Shutdown Time
 	          worker,                         % Child Type
 	          [FSM_Module]                    % Child Modules (For Release Handling Purposes)
              },
@@ -30,7 +30,7 @@ init(_) ->
   {
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
    {
-    % In the devices if something goes wrong the entire node must be shut down and recreated, since the environment variables may be outdated
+    %% [TODO]: Currently In the devices if something goes wrong the entire node must be shut down and recreated, since the environment variables may be outdated (think if this should be the case)
 	one_for_all,  % RestartStrategy
 	0,            % MaxRestarts
 	1             % TimePeriod for MaxRestarts
@@ -46,7 +46,7 @@ init(_) ->
      dev_server,		             % ChildID
      {dev_server,start_link,[]},     % Child Start Function
  	 permanent,                      % Child Restart Policy
-	 2000,                           % Child Sub-tree Max Shutdown Time
+	 4500,                           % Child Sub-tree Max Shutdown Time
 	 worker,                  	     % Child Type
 	 [dev_server]                    % Child Modules (For Release Handling Purposes)
     }

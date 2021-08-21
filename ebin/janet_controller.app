@@ -5,8 +5,9 @@
  [
   {description,"JANET Erlang Controller"},	         % Application Description
   {vsn,"0.0.1"},							         % Application Version
-  {modules,[jctr,sup_jctr,sup_devs,ctr_regserver,    % Application-specific Modules
-            ctr_devserver,ctr_restserver]},                 
+  {modules,[jctr,sup_jctr,sup_devhandlers,           % Application-specific Modules
+            ctr_regserver,ctr_devhandler,
+			ctr_restserver]},                 
   {registered,[sup_devs,ctr_regserver]},             % Application Registered Names
   {applications,[stdlib,kernel]},                    % Application Dependencies
   {mod,{jctr,[]}}                                    % Application Callback Module and Arguments([] = 'normal')
