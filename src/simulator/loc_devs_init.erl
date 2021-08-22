@@ -24,12 +24,13 @@ loc_devs_init(Loc_id,Sup_pid) ->
  {atomic,LocDevIdList} = db:get_loc_devs(Loc_id),
 
  % Initialize the location devices' managers
- init_devs_mgrs(LocDevIdList,Sup_pid). 
+ init_devs_mgrs(LocDevIdList,Loc_id,Sup_pid). 
+ 
  
 %% Initializes the device managers associated with a list of 'dev_id's (loc_devs_init(Loc_id,Sup_pid) helper function)
-init_devs_mgrs([],_) ->
+init_devs_mgrs([],_,_) ->
  ok;
-init_devs_mgrs([Dev_id|NextDev_id],Sup_pid) -> 
+init_devs_mgrs([Dev_id|NextDev_id],Loc_id,Sup_pid) -> 
  
  % Check the device manager associated to Dev_id not to be already registered in the 'devmanager' table
  case db:get_record(devmanager,Dev_id) of
@@ -38,12 +39,12 @@ init_devs_mgrs([Dev_id|NextDev_id],Sup_pid) ->
   {error,not_found} ->
    {ok,_DevMgrPid} = supervisor:start_child(Sup_pid,
                                             {
-                                             "dev-" ++ integer_to_list(Dev_id),  % ChildID
-                                             {dev_manager,start_link,[Dev_id]},  % Child Start Function
-	                                         permanent,                          % Child Restart Policy
-	                                         8000,                               % Child Sub-tree Max Shutdown Time
-	                                         worker,                  	         % Child Type
-	                                         [dev_manager]                       % Child Modules (For Release Handling Purposes)
+                                             "dev-" ++ integer_to_list(Dev_id),         % ChildID
+                                             {dev_manager,start_link,[Dev_id,Loc_id]},  % Child Start Function
+	                                         permanent,                                 % Child Restart Policy
+	                                         8000,                                      % Child Sub-tree Max Shutdown Time
+	                                         worker,                  	                % Child Type
+	                                         [dev_manager]                              % Child Modules (For Release Handling Purposes)
                                             });
 											
   % Otherwise, if it is already registered, it means that it was spawned by a
@@ -54,7 +55,7 @@ init_devs_mgrs([Dev_id|NextDev_id],Sup_pid) ->
  end,
  
  % Initialize the next device manager
- init_devs_mgrs(NextDev_id,Sup_pid).
+ init_devs_mgrs(NextDev_id,Loc_id,Sup_pid).
 
 
 %%====================================================================================================================================

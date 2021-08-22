@@ -49,7 +49,7 @@ init([Loc_id]) ->
    
     %% -------------- The location devices' initializer (loc_devs_init) -------------- %%
     {
-     loc_devs_init,                                 % ChildID
+     "loc_devs_init",                               % ChildID
      {loc_devs_init,spawn_link,[Loc_id,self()]},    % Child Start Function
  	 transient,                          		    % Child Restart Policy (transient for it must complete with exit reason 'normal')  
 	 200,                                           % Child Sub-tree Max Shutdown Time

@@ -46,6 +46,7 @@
 -record(devmanager,     % A device's manager
         {
 		 dev_id,        % The device's ID
+		 loc_id,        % The device's location ID
 		 sup_pid,       % The PID of the device's manager
 		 status         % The device's status (on,off)
 		}).    

@@ -282,7 +282,7 @@ print_table_header(suploc) ->
 print_table_header(ctrmanager) -> 
  io:format("CTRMANAGER TABLE {loc_id,sup_pid,status}~n================~n");
 print_table_header(devmanager) -> 
- io:format("DEVMANAGER TABLE {dev_id,sup_pid,status}~n================~n").
+ io:format("DEVMANAGER TABLE {dev_id,loc_id,sup_pid,status}~n================~n").
 
 %% Prints all records in a table, or "(empty)" if there are none (print_table(Table) helper function)
 print_table_records(TableRecords) ->
@@ -449,7 +449,7 @@ print_tree_location([Loc|Nextloc],Indent) ->
    
   % Otherwise, if the record doesn't exist
   [] ->
-   CtrMgrStatus = "STOPPED"
+   CtrMgrStatus = "NOT_STARTED"
  end,
  
  % Print information on the location
@@ -512,7 +512,7 @@ print_tree_device([Dev|NextDev],Indent) ->
    
   % Otherwise, if the record doesn't exist
   [] ->
-   DevMgrStatus = "STOPPED"
+   DevMgrStatus = "NOT_STARTED"
  end,
  
  % Print information on the device

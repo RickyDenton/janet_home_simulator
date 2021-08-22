@@ -74,7 +74,7 @@ resolve_nodetype_shorthand(NodeTypeShorthand) ->
   
   % Unknown nodetype  
   true ->
-   unknown
+   throw({error,unknown_nodetype})
  end.
  
 

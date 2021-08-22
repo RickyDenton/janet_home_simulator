@@ -82,7 +82,7 @@ handle_continue(init,{booting,none,Loc_id}) ->
 terminate(shutdown,{_,_,Loc_id}) ->
  
  % Deregister the manager from the 'ctrmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({ctrmanager,Loc_id}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=Loc_id,sup_pid='-',status="STOPPED"}) end),
  
  % Return (note that the controller's node will be automatically terminated since,
  % being it linked with the manager, will receive an exit signal with reason 'shutdown')
