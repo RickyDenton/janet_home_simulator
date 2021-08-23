@@ -8,7 +8,7 @@
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
 -export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read
          get_table_keys/0, get_table_keys/1,get_records_num/0,get_records_num/1,
-		 get_loc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
+		 get_loc_devs/1,get_subloc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
 
@@ -673,25 +673,55 @@ get_loc_devs(_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Returns the status and the location ID of a manager process (ctr_manager or dev_manager)
+%% DESCRIPTION:  Returns the list of 'dev_id's of devices in a sublocation
 %%
-%% ARGUMENTS:    - NodeTypeShorthand: An atom indicating the node type to be restarted, also
-%%                                    considering shorthand forms, with the following being allowed:
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation which to retrieve the
+%%                                     list of devices, which must exist and be {>0,>=0}
 %%
-%%                                    - controller,ctr,contr -> controller node
-%%                                    - device, dev          -> device node 
+%% RETURNS:      - {atomic,[SubLocDevIdList]}     -> The list of 'dev_id's of devices in the sublocation
+%%               - {error,sublocation_not_exists} -> The sublocation {Loc_id,Subloc_id} does not exist
+%%               - {error,badarg}                 -> Invalid arguments
+%% 
+get_subloc_devs({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+ F = fun() ->
+ 
+ 	  % Check the sublocation to exist
+	  case mnesia:read({sublocation,{Loc_id,Subloc_id}}) of
+	  
+	   [] ->
+	 
+	    % If it doesn't exist, return an error
+		mnesia:abort(sublocation_not_exists);
+		  
+	   [SublocationRecord] ->
+		  
+		% If it exists, return the list of 'dev_id's of devices in the sublocation
+		SublocationRecord#sublocation.devlist
+	  end
+	 end,
+		
+ mnesia:transaction(F);
+
+get_subloc_devs(_) ->
+ {error,badarg}.
+ 
+ 
+%% DESCRIPTION:  Returns the status and the location ID of a node's manager (ctr_manager or dev_manager)
 %%
+%% ARGUMENTS:    - NodeTypeShorthand: An atom indicating the type of node to be restarted, also taking
+%%                                    into account shorthand forms, with the following being allowed:
+%%                                     - controller,ctr,contr -> controller node
+%%                                     - device, dev          -> device node
 %%               - Node_id: The node's ID ('loc_id' for controller and 'dev_id' for device nodes)
 %%
-%% RETURNS:      - {ManagerStatus,Loc_id} -> The status and associated ID of the managert process associated with Node_id
+%% RETURNS:      - {ManagerStatus,Loc_id} -> The status and associated location ID of the manager of node "Node_id"
 %%
 %% THROWS: 		 - {error,location_not_exists}           -> The location associated with the specified controller node does not exist 
-%%               - {error,device_not_exists}             -> The device associated with the specified device node does not exist
+%%               - {error,device_not_exists}             -> The specified device does not exist
 %%               - {error,{internal,ctrmanager_missing}} -> The location associated with the specified controller node exists, but its
 %%                                                          associated record in the 'ctrmanager' table was not found (consistency error)
 %%               - {error,{internal,devmanager_missing}} -> The device associated with the specified device node exists, but its
 %%                                                          associated record in the 'devmanager' table was not found (consistency error)
-%%
 get_manager_info(controller,Loc_id) ->
 
  % Attempt to retrieve the record associated with the controller's manager in the 'ctrmanager' table
@@ -702,23 +732,23 @@ get_manager_info(controller,Loc_id) ->
    % If the record was not found, it means either that:
    %
    % 1) A non-existing 'loc_id' was passed
-   % 2) There is a consistency error between the database and the 'ctrmanager' table
+   % 2) There is a consistency error between the 'location' and the 'ctrmanager' tables
    %
-   % Determine which of the two by searching for the location record in the database
+   % Determine which of the two by searching for the location record in the 'location' table
    case db:get_record(location,Loc_id) of
    
     % If the location was not found, a non-existing 'loc_id' was passed
     {error,not_found} ->
 	 throw({error,location_not_exists});
 	
-	% If the location was found, there is a consistency error between the database and the 'ctrmanager' table
+	% If the location was found, there is a consistency error between the 'location' and the 'ctrmanager' tables
     {ok,_LocationRecord} ->
 	 throw({error,{internal,ctrmanager_missing}})
    end;
 	
   {ok,CtrMgrRecord} ->
 	  
-   % If the controller manager's record was successfully retrieved, return its status and the 'loc_id'
+   % If the controller manager's record was successfully retrieved, return its status and the Loc_id
    {CtrMgrRecord#ctrmanager.status,Loc_id}
  end;
 
@@ -732,32 +762,32 @@ get_manager_info(device,Dev_id) ->
    % If the record was not found, it means either that:
    %
    % 1) A non-existing 'dev_id' was passed
-   % 2) There is a consistency error between the database and the 'devmanager' table
+   % 2) There is a consistency error between the 'device' and the 'devmanager' tables
    %
-   % Determine which of the two by searching for the device record in the database
+   % Determine which of the two by searching for the device record in the 'device' table
    case db:get_record(device,Dev_id) of
    
     % If the device was not found, it means that a non-existing 'dev_id' was passed
     {error,not_found} ->
 	 throw({error,device_not_exists});
 	
-	% If the device was found, there is a consistency error between the database and the 'devmanager' table
+	% If the device was found, there is a consistency error between the 'device' and the 'devmanager' table
     {ok,_DeviceRecord} ->
 	 throw({error,{internal,devmanager_missing}})
    end;
 	
   {ok,DevMgrRecord} ->
 	  
-   % If the device manager's record was successfully retrieved, return its status and the 'loc_id'
+   % If the device manager's record was successfully retrieved, return its status and 'loc_id'
    {DevMgrRecord#devmanager.status,DevMgrRecord#devmanager.loc_id}
  end;
  
 get_manager_info(NodeTypeShortHand,Node_id) ->
 
- % Determine the node type, also considering shorthand forms
+ % Determine the node type, also taking shorthand forms into account
  NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
  
- % Call the function's clause associated with the NodeType
+ % Call the function clause associated with the NodeType
  get_manager_info(NodeType,Node_id).
 
 
@@ -781,25 +811,26 @@ get_suploc_pid(Loc_id) ->
    % If the record was not found, it means either that:
    %
    % 1) A non-existing 'loc_id' was passed
-   % 2) There is a consistency error between the database and the 'suploc' table
+   % 2) There is a consistency error between the 'location' and the 'suploc' tables
    %
-   % Determine which of the two by searching for the location record in the database
+   % Determine which of the two by searching for the location record in the 'location' table
    case db:get_record(location,Loc_id) of
    
     % If the location was not found, a non-existing 'loc_id' was passed
-	% NOTE: This cannot occur when attempting to change a node's status in the
-	%       "change_node_status" function (the location was checked before)
-    {error,not_found} ->
+	%
+    % NOTE: This cannot occur when attempting to change nodes' statuses in the "change_node_status()" or
+	%       "change_subloc_status()" functions, for the existence of the associated location was already checked for
+	{error,not_found} ->
 	 throw({error,location_not_exists});
 	
-	% If the location was found, there is a consistency error between the database and the 'suploc' table
+	% If the location was found, there is a consistency error between the 'location' and the 'suploc' tables
     {ok,_LocationRecord} ->
 	 throw({error,{internal,suploc_missing}})
    end;
 
   {ok,SuplocRecord} -> 
   
-   % If the supervisor record was successfully retrieved, return its PID
+   % If the 'sup_loc' supervisor record was successfully retrieved, return its PID
    SuplocRecord#suploc.sup_pid
  end.
  

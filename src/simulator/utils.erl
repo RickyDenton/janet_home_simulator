@@ -2,7 +2,7 @@
 
 -module(utils).
 
--export([is_running/1,is_valid_devtype/1,get_devtype_default_config/1,resolve_nodetype_shorthand/1,str_to_atom/1]).
+-export([is_running/1,is_valid_devtype/1,get_devtype_default_config/1,resolve_nodetype_shorthand/1,prefix_node_id/2,str_to_atom/1]).
 
 %%====================================================================================================================================
 %%                                                    PUBLIC UTILITY FUNCTIONS
@@ -58,7 +58,7 @@ resolve_appname_shorthand(AppShorthand) ->
 %%
 %% ARGUMENTS:    - NodeTypeShorthand: A node type (controller or device), possibly in a shorthand form
 %%
-%% RETURNS:      - NodeType         -> The node type atom associated to NodeTypeShorthand ('controller' or 'device')
+%% RETURNS:      - NodeType -> The node type atom associated to NodeTypeShorthand ('controller' or 'device')
 %%
 %% THROWS:       - {error,unknown_nodetype} -> If no node type could be associated with NodeTypeShorthand 
 %%
@@ -138,6 +138,33 @@ get_devtype_default_config(DevType) when is_atom(DevType) ->
   
 get_devtype_default_config(_) ->
  {error,badarg}.   
+
+
+%% DESCRIPTION:  Returns the ID of a controller or device node prefixed with its type (which other than
+%%               for logging purposes corresponds to its manager's childID under of its 'sup_loc' supervisor)
+%%
+%% ARGUMENTS:    - NodeTypeShorthand: An atom indicating the type of node to be stopped, also taking
+%%                                    into account shorthand forms, with the following being allowed:
+%%                                     - controller,ctr,contr -> controller node
+%%                                     - device, dev          -> device node
+%%               - Node_id:           The ID of the node to be prefixed ('loc_id' for controller nodes
+%%                                    and 'dev_id' for device nodes)
+%%
+%% RETURNS:      - PrefixedId -> The prefixed Node_id depending on the NodeType (e.g. "ctr-1","dev-5", etc.)
+%%
+prefix_node_id(controller,Loc_id) ->
+ "ctr-" ++ integer_to_list(Loc_id);
+
+prefix_node_id(device,Dev_id) ->
+ "dev-" ++ integer_to_list(Dev_id);
+
+prefix_node_id(NodeTypeShorthand,Node_id) ->
+
+ % Determine the node type, also taking shorthand forms into account
+ NodeType = resolve_nodetype_shorthand(NodeTypeShorthand),
+ 
+ % Call the function clause associated with the NodeType
+ prefix_node_id(NodeType,Node_id).
 
 
 %% DESCRIPTION:  Converts a string to atom using the Erlang BIFs
