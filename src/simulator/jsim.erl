@@ -194,14 +194,14 @@ restart_node(_,_) ->
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
 
-%% Performs preliminary checks before attempting to change a node's status (halt_node(NodeTypeShortHand,Node_id), restart_node(NodeTypeShortHand,Node_id) helper function)
+%% Changes a node status by halting or restarting its manager process (halt_node(NodeTypeShortHand,Node_id), restart_node(NodeTypeShortHand,Node_id) helper function)
 change_node_status(NodeTypeShortHand,Node_id,Mode) -> 
  
  % Ensure the JANET Simulator to be running
  case utils:is_running(janet_simulator) of
   false ->
   
-   % If it is not, return an error
+   % If it is not, throw an error
    throw({error,janet_not_running});
   
   true ->
@@ -209,143 +209,112 @@ change_node_status(NodeTypeShortHand,Node_id,Mode) ->
    % If it is, determine the node type, also considering shorthand forms
    NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
    
-   % Retrieve the node's manager status and its location ID
-   {MgrStatus,Loc_id} = get_manager_data(NodeType,Node_id),
+   % Retrieve the node's manager process status and its location ID
+   {MgrStatus,Loc_id} = db:get_manager_info(NodeType,Node_id),
    
-   % Ensure that this is not an attempt to halt an already stopped or restart an already running node 
-   ok = check_node_status_change(MgrStatus,Mode),
+   % Verify the node state change not to consist in halting an already stopped or restarting an already running node
+   ok = verify_node_status_change(MgrStatus,Mode),
    
-   % Retrieve the PID of the manager's 'sup_loc' supervisor
-   SupPid = get_suploc_pid(Loc_id),
-   
-   % Attempt to terminate or restart the 'sup_loc' manager child
-   ok = change_manager_status(SupPid,NodeType,Node_id,Mode)
- end.
-   
-
-change_manager_status(Sup_pid,NodeType,Node_id,'halt') ->
- 
- ChildID = get_suploc_child_id(NodeType,Node_id),
-
- case supervisor:terminate_child(Sup_pid,ChildID) of
- 
-  ok ->
-   ok;
+   % Retrieve the PID of the node manager's 'sup_loc' supervisor
+   Sup_pid = db:get_suploc_pid(Loc_id),
   
-  % The supervisor doesn't recognize its child
-  % (consistency error between the 'suploc' and Mgrtable tables)  
-  {error,not_found} ->
-   throw({error,{internal,child_not_recognized}})
- end;
-	
-change_manager_status(Sup_pid,NodeType,Node_id,'restart') ->
- 
- ChildID = get_suploc_child_id(NodeType,Node_id),
- 
- case supervisor:restart_child(Sup_pid,ChildID) of
- 
-  % Ok
-  {ok,_MgrPid} ->
-   ok;
- 
-  % Error
-  {error,Error} ->
-   throw({error,{internal,Error}})
+   % Attempt to halt or restart the node's manager child of the 'sup_loc' supervisor
+   ok = change_manager_status(Sup_pid,NodeType,Node_id,Mode)
  end.
-	
-
-get_suploc_child_id(NodeType,Node_id) ->
- 
- case NodeType of
-  controller -> 
-   ChildIDType = "ctr-";
-  device ->
-   ChildIDType = "dev-"
- end,
- 
- ChildIDType ++ integer_to_list(Node_id).
    
 
-get_suploc_pid(Loc_id) ->
- case db:get_record(suploc,Loc_id) of
-   
-  % If the record was not found, it means that there is a consistency
-  % error between the 'suploc' and the 'ctrmanager'/'devmanager' tables
-  {error,not_found} ->
-   throw({error,{internal,suploc_terminated}});
-	
-  % Otherwise, return the PID of the 'sup_loc' supervisor	
-  {ok,SuplocRecord} -> 
-   SuplocRecord#suploc.sup_pid
- end.
-	
-
-
-check_node_status_change(MgrStatus,Mode) ->
+%% Verifies a node state change intent not to consist in halting an already stopped or restarting an already running node
+%% (change_node_status(NodeTypeShortHand,Node_id,Mode) helper function)		
+verify_node_status_change(MgrStatus,Mode) ->
  if
+ 
+  % If attempting to halt an already stopped node, throw an error
   MgrStatus =:= "STOPPED" andalso Mode =:= 'halt' ->
    throw({error,not_running});
 	
+  % If attempting to restart an already running node, throw an error
   MgrStatus =/= "STOPPED" andalso Mode =:= 'restart' ->
    throw({error,already_running});
 	 
+  % Otherwise the node status change intent is valid
   true ->
    ok
  end.
 
 
-get_manager_data(controller,Loc_id) ->
+%% Attempts to halt or restart a node's manager child of a 'sup_loc' supervisor (change_node_status(NodeTypeShortHand,Node_id,Mode) helper function)
+change_manager_status(Sup_pid,NodeType,Node_id,'halt') ->
+ 
+ % Retrieve the node's manager childID string 
+ ChildID = get_suploc_child_id(NodeType,Node_id),
 
- % Retrieve the record associated to the controller's manager in the 'ctrmanager' table
- case db:get_record(ctrmanager,Loc_id) of
-	  
-  {error,not_found} ->
+ % Attempt to terminate the node's manager via its 'sup_loc' supervisor
+ case supervisor:terminate_child(Sup_pid,ChildID) of
+ 
+  % If the termination was successful
+  ok ->
+   ok;
   
-   % If the record was not found, it means that a non-existing location was passed,
-   % or there is a consistency error between the database and the 'ctrmanager' table
-   case db:get_record(location,Loc_id) of
-   
-    % If the location associated to the controller doesn't exist
-    {error,not_found} ->
-	 throw({error,location_not_exists});
-	
-	% Otherwise, if it does exist, there is a consistency error
-    {ok,_LocationRecord} ->
-	 throw({error,{internal,ctrmanager_terminated}})
-   end;
-	
-  {ok,CtrMgrRecord} ->
-	  
-   % Otherwise, return the controller's manager status and the Loc_id
-   {CtrMgrRecord#ctrmanager.status,Loc_id}
+  % If the supervisor doesn't recognize its child, there is a consistency error
+  % between the supervisor's children list and the 'ctrmanager'/'devmanager' table
+  {error,not_found} ->
+   throw({error,{internal,unknown_suploc_child}})
  end;
-
-
-get_manager_data(device,Dev_id) ->
-
- % Retrieve the record associated to the device's manager in the 'devmanager' table
- case db:get_record(devmanager,Dev_id) of
-	  
-  {error,not_found} ->
+	
+change_manager_status(Sup_pid,NodeType,Node_id,'restart') ->
+ 
+ % Retrieve the node's manager childID string 
+ ChildID = get_suploc_child_id(NodeType,Node_id),
+ 
+ % Attempt to restart the node's manager via its 'sup_loc' supervisor
+ case supervisor:restart_child(Sup_pid,ChildID) of
+ 
+  % If the restart was successful
+  {ok,_MgrPid} ->
+   ok;
+ 
+  % If the supervisor is already attempting to restart said children
+  {error,restarting} ->
+   throw({error,{node_already_restarting}});
   
-   % If the record was not found, it means that a non-existing device was passed,
-   % or there is a consistency error between the database and the 'devmanager' table
-   case db:get_record(device,Dev_id) of
-   
-    % If the device doesn't exist
-    {error,not_found} ->
-	 throw({error,device_not_exists});
-	
-	% Otherwise, if it does exist, there is a consistency error
-    {ok,_DeviceRecord} ->
-	 throw({error,{internal,devmanager_terminated}})
-   end;
-	
-  {ok,DevMgrRecord} ->
-	  
-   % Otherwise, return the device's manager status and the Loc_id
-   {DevMgrRecord#devmanager.status,DevMgrRecord#devmanager.loc_id}
+  % If the supervisor doesn't recognize its child, there is a consistency error
+  % between the supervisor's children list and the 'ctrmanager'/'devmanager' table
+  {error,not_found} ->
+   throw({error,{internal,unknown_suploc_child}});
+  
+  % Other restart error
+  {error,Error} ->
+   throw({error,{internal,Error}})
  end.
+	
+
+%% Returns the ChildID string of a 'sup_loc' manager child
+get_suploc_child_id(NodeType,Node_id) ->
+
+ % Determine the ChildID prefix depending on the node's manager type
+ case NodeType of
+ 
+  % Controller manager prefix
+  controller -> 
+   ChildIDType = "ctr-";
+   
+  % Device manager prefix
+  device ->
+   ChildIDType = "dev-"
+ end,
+ 
+ % Return the manager's ChildID string by concatenating
+ % the prefix with its its ID (loc_id or dev_id)
+ ChildIDType ++ integer_to_list(Node_id).
+   
+
+
+	
+	
+
+
+
+
 
 
 

@@ -56,19 +56,20 @@ resolve_appname_shorthand(AppShorthand) ->
 
 %% DESCRIPTION:  Returns the node type associated to its argument, possibly considering shorthand forms
 %%
-%% ARGUMENTS:    - NodeTypeShorthand: A node name, possibly in a shorthand form
+%% ARGUMENTS:    - NodeTypeShorthand: A node type (controller or device), possibly in a shorthand form
 %%
-%% RETURNS:      - NodeType -> The node type atom associated to NodeTypeShorthand
-%%               - unknown  -> If no node type could be associated with NodeTypeShorthand
+%% RETURNS:      - NodeType         -> The node type atom associated to NodeTypeShorthand ('controller' or 'device')
+%%
+%% THROWS:       - {error,unknown_nodetype} -> If no node type could be associated with NodeTypeShorthand 
 %%
 resolve_nodetype_shorthand(NodeTypeShorthand) ->
  if
  
-  % Controller node
+  % Controller node shorthands
   NodeTypeShorthand =:= controller orelse NodeTypeShorthand =:= ctr orelse NodeTypeShorthand =:= contr ->
    controller;
    
-  % Device node
+  % Device node shorthands
   NodeTypeShorthand =:= device orelse NodeTypeShorthand =:= dev ->
    device;
   

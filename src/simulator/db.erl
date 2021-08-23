@@ -6,8 +6,9 @@
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
--export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read                 
-         get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,get_loc_devs/1]).  
+-export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read
+         get_table_keys/0, get_table_keys/1,get_records_num/0,get_records_num/1,
+		 get_loc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
 
@@ -672,6 +673,137 @@ get_loc_devs(_) ->
  {error,badarg}.
 
 
+%% DESCRIPTION:  Returns the status and the location ID of a manager process (ctr_manager or dev_manager)
+%%
+%% ARGUMENTS:    - NodeTypeShorthand: An atom indicating the node type to be restarted, also
+%%                                    considering shorthand forms, with the following being allowed:
+%%
+%%                                    - controller,ctr,contr -> controller node
+%%                                    - device, dev          -> device node 
+%%
+%%               - Node_id: The node's ID ('loc_id' for controller and 'dev_id' for device nodes)
+%%
+%% RETURNS:      - {ManagerStatus,Loc_id} -> The status and associated ID of the managert process associated with Node_id
+%%
+%% THROWS: 		 - {error,location_not_exists}           -> The location associated with the specified controller node does not exist 
+%%               - {error,device_not_exists}             -> The device associated with the specified device node does not exist
+%%               - {error,{internal,ctrmanager_missing}} -> The location associated with the specified controller node exists, but its
+%%                                                          associated record in the 'ctrmanager' table was not found (consistency error)
+%%               - {error,{internal,devmanager_missing}} -> The device associated with the specified device node exists, but its
+%%                                                          associated record in the 'devmanager' table was not found (consistency error)
+%%
+get_manager_info(controller,Loc_id) ->
+
+ % Attempt to retrieve the record associated with the controller's manager in the 'ctrmanager' table
+ case db:get_record(ctrmanager,Loc_id) of
+	  
+  {error,not_found} ->
+  
+   % If the record was not found, it means either that:
+   %
+   % 1) A non-existing 'loc_id' was passed
+   % 2) There is a consistency error between the database and the 'ctrmanager' table
+   %
+   % Determine which of the two by searching for the location record in the database
+   case db:get_record(location,Loc_id) of
+   
+    % If the location was not found, a non-existing 'loc_id' was passed
+    {error,not_found} ->
+	 throw({error,location_not_exists});
+	
+	% If the location was found, there is a consistency error between the database and the 'ctrmanager' table
+    {ok,_LocationRecord} ->
+	 throw({error,{internal,ctrmanager_missing}})
+   end;
+	
+  {ok,CtrMgrRecord} ->
+	  
+   % If the controller manager's record was successfully retrieved, return its status and the 'loc_id'
+   {CtrMgrRecord#ctrmanager.status,Loc_id}
+ end;
+
+get_manager_info(device,Dev_id) ->
+
+ % Attempt to retrieve the record associated with the device's manager in the 'devmanager' table
+ case db:get_record(devmanager,Dev_id) of
+	  
+  {error,not_found} ->
+  
+   % If the record was not found, it means either that:
+   %
+   % 1) A non-existing 'dev_id' was passed
+   % 2) There is a consistency error between the database and the 'devmanager' table
+   %
+   % Determine which of the two by searching for the device record in the database
+   case db:get_record(device,Dev_id) of
+   
+    % If the device was not found, it means that a non-existing 'dev_id' was passed
+    {error,not_found} ->
+	 throw({error,device_not_exists});
+	
+	% If the device was found, there is a consistency error between the database and the 'devmanager' table
+    {ok,_DeviceRecord} ->
+	 throw({error,{internal,devmanager_missing}})
+   end;
+	
+  {ok,DevMgrRecord} ->
+	  
+   % If the device manager's record was successfully retrieved, return its status and the 'loc_id'
+   {DevMgrRecord#devmanager.status,DevMgrRecord#devmanager.loc_id}
+ end;
+ 
+get_manager_info(NodeTypeShortHand,Node_id) ->
+
+ % Determine the node type, also considering shorthand forms
+ NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
+ 
+ % Call the function's clause associated with the NodeType
+ get_manager_info(NodeType,Node_id).
+
+
+%% DESCRIPTION:  Returns the PID associated with a 'sup_loc' location supervisor
+%%
+%% ARGUMENTS:    - Loc_id: The location ID associated with the 'sup_loc' supervisor
+%%
+%% RETURNS:      - Sup_Pid -> The PID of the 'sup_loc' supervisor associated with location "Loc_id"
+%%
+%% THROWS: 		 - {error,location_not_exists}       -> The location associated with the specified 'sup_loc' supervisor does not exist 
+%%               - {error,{internal,suploc_missing}} -> The location associated with the specified 'sup_loc' supervisor exists, but its
+%%                                                      associated record in the 'suploc' table was not found (consistency error)
+%%
+get_suploc_pid(Loc_id) ->
+
+ % Attempt to retrieve the record associated with the 'sup_loc' supervisor in the 'suploc' table
+ case db:get_record(suploc,Loc_id) of
+  
+  {error,not_found} ->
+  
+   % If the record was not found, it means either that:
+   %
+   % 1) A non-existing 'loc_id' was passed
+   % 2) There is a consistency error between the database and the 'suploc' table
+   %
+   % Determine which of the two by searching for the location record in the database
+   case db:get_record(location,Loc_id) of
+   
+    % If the location was not found, a non-existing 'loc_id' was passed
+	% NOTE: This cannot occur when attempting to change a node's status in the
+	%       "change_node_status" function (the location was checked before)
+    {error,not_found} ->
+	 throw({error,location_not_exists});
+	
+	% If the location was found, there is a consistency error between the database and the 'suploc' table
+    {ok,_LocationRecord} ->
+	 throw({error,{internal,suploc_missing}})
+   end;
+
+  {ok,SuplocRecord} -> 
+  
+   % If the supervisor record was successfully retrieved, return its PID
+   SuplocRecord#suploc.sup_pid
+ end.
+ 
+ 
 %% ========================================================== UPDATE ===============================================================%% 
 
 %% DESCRIPTION:  Updates a device's sublocation
@@ -1196,11 +1328,11 @@ backup(File) ->
 %% ARGUMENTS:    - (none): The default backup file is used for restoring the database ("priv/db/mnesia_backup.db")
 %%               - (File): A custom backup file is used
 %%
-%% RETURNS:      - ok             -> Database successfully restored to the contents of the specified backup file
-%%               - {error,Reason} -> Error in restoring the database from the backup file
-%%                                   (check the file to exist and its read permission to be granted)
-%%               - janet_running  -> The operation cannot be performed while the JANET Simulator is running
-%%               - aborted        -> The user aborted the operation
+%% RETURNS:      - ok                       -> Database successfully restored to the contents of the specified backup file
+%%               - aborted                  -> The user aborted the operation
+%%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
+%%               - {error,Reason}           -> Error in restoring the database from the backup file
+%%                                             (check the file to exist and its read permission to be granted)
 %%
 %% NOTES:        1) The current database contents will be DISCARDED by calling this function
 %%               2) Database backup files can be created via the db:backup()/db:backup(File) function
@@ -1243,9 +1375,9 @@ restore(File) ->
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok            -> Database tables successfully cleared
-%%               - janet_running -> The operation cannot be performed while the JANET Simulator is running
-%%               - aborted       -> The user aborted the operation
+%% RETURNS:      - ok                       -> Database tables successfully cleared
+%%               - aborted                  -> The user aborted the operation
+%%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
 %%
 %% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
 %%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
@@ -1281,9 +1413,9 @@ clear() ->
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok            -> Mnesia database successfully installed
-%%               - janet_running -> The operation cannot be performed while the JANET Simulator is running
-%%               - aborted       -> The user aborted the operation
+%% RETURNS:      - ok                       -> Mnesia database successfully installed
+%%               - aborted                  -> The user aborted the operation
+%%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
 %%
 %% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
 %%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
@@ -1351,9 +1483,9 @@ install() ->
 %%
 %% ARGUMENTS:    - Operation: a string used in the user confirmation request
 %%
-%% RETURNS:      - ok            -> The database utility operation can proceed
-%%               - janet_running -> The operation cannot be performed while the JANET Simulator is running
-%%               - aborted       -> The user aborted the operation
+%% RETURNS:      - ok                       -> The database utility operation can proceed
+%%               - aborted                  -> The user aborted the operation
+%%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
 %%  
 check_db_operation(Operation) ->
 
@@ -1364,7 +1496,7 @@ check_db_operation(Operation) ->
   
    % Inform the user that the JANET Simulator must be stopped before attempting utility operations on the database
    io:format("Please stop the JANET Simulator first ~n"),
-   janet_running;
+   {error,janet_is_running};
    
   false ->
    
