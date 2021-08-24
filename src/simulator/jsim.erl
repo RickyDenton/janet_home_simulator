@@ -11,7 +11,8 @@
 -export([stop_subloc/1,restart_subloc/1]).        % Per-sublocation stop/restart
 -export([stop_loc/1,restart_loc/1]).              % Per-location stop/restart
 -export([stop_all_nodes/0,restart_all_nodes/0]).  % All-nodes stop/restart
-
+-export([print_nodes/0,print_nodes/1]).           % Running and stopped nodes info
+      
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
 
@@ -339,6 +340,34 @@ stop_all_nodes() ->
 restart_all_nodes() ->
  catch(change_all_nodes_statuses(restart)).
 
+
+%% =============================================== RUNNING AND STOPPED NODES INFO =============================================== %%
+
+%% DESCRIPTION:  Prints the IDs of all stopped and/or running JANET nodes
+%%
+%% ARGUMENTS:    - (), (all): Print the IDs of all stopped and running nodes
+%%               - (stopped): Print the IDs of all stopped nodes
+%%               - (running): Print the IDs of all running nodes
+%%
+%% RETURNS:      - ok                        -> The IDs of all stopped and/or running JANET nodes was printed
+%%               - {error,janet_not_running} -> The Janet Simulator is not running
+%%               - {error,badarg}            -> Invalid arguments
+%% 
+print_nodes() ->
+ catch(print_managers(all)).
+
+print_nodes(all) ->
+ catch(print_managers(all));
+ 
+print_nodes(stopped) ->
+ catch(print_managers(stopped));
+ 
+print_nodes(running) ->
+ catch(print_managers(running));
+
+print_nodes(_) ->
+ io:format("usage: print_nodes(stopped|running|all)~n"),
+ {error,badarg}. 
 
 
 %%====================================================================================================================================
@@ -904,6 +933,96 @@ change_ctr_status(Loc_id,Sup_pid,Mode) ->
 
  % Return that the operation was successful and the updated controller manager status
  {ok,Mode}. 
+ 
+ 
+%% =============================================== RUNNING AND STOPPED NODES INFO =============================================== %%
+
+%% Prints the lists of IDs of all stopped and/or running node managers
+%% (print_nodes(),print_nodes(all),print_nodes(Status) helper function)
+print_managers(all) ->
+
+ % Ensure the JANET Simulator to be running
+ case utils:is_running(janet_simulator) of
+  false ->
+  
+   % If it is not, throw an error
+   throw({error,janet_not_running});
+  
+  true ->
+  
+   % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
+   CtrMgrRecords = db:get_table_records(ctrmanager),
+   DevMgrRecords = db:get_table_records(devmanager),
+   
+   % Determine the sorted IDs of all stopped and running controller and device managers
+   StoppedCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =:= "STOPPED" ]),
+   StoppedDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =:= "STOPPED" ]),
+   RunningCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =/= "STOPPED" ]),
+   RunningDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =/= "STOPPED" ]),
+   
+   % Print the IDs of all stopped and running controller and device managers
+   io:format("~nSTOPPED NODES~n============="),
+   print_mgrs_list("Controllers:",StoppedCtrManagers),
+   print_mgrs_list("Devices:    ",StoppedDevManagers),
+   io:format("~n"),
+   io:format("~nRUNNING NODES~n============="),
+   print_mgrs_list("Controllers:",RunningCtrManagers),
+   print_mgrs_list("Devices:    ",RunningDevManagers),
+   io:format("~n~n")
+ end;
+
+print_managers(Status) ->
+
+ % Ensure the JANET Simulator to be running
+ case utils:is_running(janet_simulator) of
+  false ->
+  
+   % If it is not, throw an error
+   throw({error,janet_not_running});
+  
+  true ->
+  
+   % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
+   CtrMgrRecords = db:get_table_records(ctrmanager),
+   DevMgrRecords = db:get_table_records(devmanager),
+   
+   % Depending on the specified Status of node managers
+   case Status of
+    stopped ->
+	
+	 % Determine the sorted IDs of all stopped controller and device managers
+	 StatusCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =:= "STOPPED" ]),
+     StatusDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =:= "STOPPED" ]),
+	 
+	 % Print results header
+	 io:format("~nSTOPPED NODES~n=============");
+	 
+	running ->
+
+	 % Determine the sorted IDs of all running controller and device managers
+	 StatusCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =/= "STOPPED" ]),
+     StatusDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =/= "STOPPED" ]),
+	 
+	 % Print results header
+	 io:format("~nRUNNING NODES~n=============")
+   end,
+   
+   % Print the IDs of all controller and device managers in the specified Status
+   print_mgrs_list("Controllers:",StatusCtrManagers),
+   print_mgrs_list("Devices:    ",StatusDevManagers),
+   io:format("~n~n")
+ end. 
+
+
+%% Prints a list of node managers' statuses (print_managers(all), print_managers(Status) helper function)
+print_mgrs_list(StrHeader,MgrsList) ->
+ io:format("~n~s ",[StrHeader]),
+ if
+  length(MgrsList) > 0 ->
+   io:format("~p",[MgrsList]);
+  true ->
+   io:format("(none)")
+ end.
  
  
 %%====================================================================================================================================

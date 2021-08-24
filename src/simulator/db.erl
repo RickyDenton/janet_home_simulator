@@ -7,7 +7,7 @@
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
 -export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read
-         get_table_keys/0, get_table_keys/1,get_records_num/0,get_records_num/1,
+         get_table_records/1,get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,
 		 get_loc_devs/1,get_subloc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
 -export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
@@ -560,6 +560,34 @@ get_record(_,_) ->
  {error,badarg}.
 
 
+%% DESCRIPTION:  Returns all records in a table as a list (print_table(|all), print_table(Tabletype) helper function)
+%%
+%% ARGUMENTS:    - Tabletype: The table to retrieve the records, or its shorthand form
+%%
+%% RETURNS:      - [TableRecords]        -> The list of records in table Tabletype (possibly empty)
+%%               - {error,unknown_table} -> Unknown table
+%%               - {error,badarg}        -> Invalid arguments
+%%
+get_table_records(Tabletype) when is_atom(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % Otherwise return all table records
+  _ ->
+   mnesia:dirty_select(Table,[{'_',[],['$_']}])  % The second argument is a "catch-all" clause
+ end;
+ 
+get_table_records(_) ->
+ {error,badarg}.
+ 
+ 
 %% DESCRIPTION:  Returns all keys in a specific or all database tables
 %%
 %% ARGUMENTS:    - (),(all):  Retrieve the keys of all database tables
@@ -1549,34 +1577,6 @@ check_db_operation(Operation) ->
    end
  end. 
 
-
-%% DESCRIPTION:  Returns all records in a table as a list (print_table(|all), print_table(Tabletype) helper function)
-%%
-%% ARGUMENTS:    - Tabletype: The table to retrieve the records, or its shorthand form
-%%
-%% RETURNS:      - [TableRecords]        -> The list of records in table Tabletype (possibly empty)
-%%               - {error,unknown_table} -> Unknown table
-%%               - {error,badarg}        -> Invalid arguments
-%%
-get_table_records(Tabletype) when is_atom(Tabletype) ->
-
- % Resolve possible table shorthand forms
- Table = resolve_tabletype_shorthand(Tabletype),
-
- case Table of
- 
-  % If unknown table, return an error
-  unknown ->
-   {error,unknown_table};
-  
-  % Otherwise return all table records
-  _ ->
-   mnesia:dirty_select(Table,[{'_',[],['$_']}])  % The second argument is a "catch-all" clause
- end;
- 
-get_table_records(_) ->
- {error,badarg}.
- 
   
 %% DESCRIPTION:  Returns the list of unique users in the database
 %%
