@@ -9,6 +9,7 @@
 %% ---------------------------------- JANET NODES STOP AND RESTART ---------------------------------- %%
 -export([stop_node/2,restart_node/2]).               % Per-node stop/restart
 -export([stop_subloc/1,restart_subloc/1]).           % Per-sublocation stop/restart
+-export([stop_loc/1,restart_loc/1]).                 % Per-location stop/restart
 
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
@@ -201,10 +202,10 @@ restart_node(_,_) ->
 
 %% DESCRIPTION:  Stops all device nodes in a sublocation, shutting down their managers and so VMs
 %%
-%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation whose devices are to be stopped
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The ID of the sublocation whose devices are to be stopped
 %%
-%% RETURNS:      - ok                             -> Information on the devices that were stopped, were
-%%                                                   already stopped and failed to stop is reported.
+%% RETURNS:      - ok                             -> Information on the devices nodes that were stopped,
+%%                                                   were already stopped and failed to stop is reported.
 %%                                                   This also includes the cases where:
 %%                                                    - The sublocation is empty
 %%                                                    - All sublocation devices were already stopped
@@ -239,10 +240,10 @@ stop_subloc(_) ->
 
 %% DESCRIPTION:  Restarts all device nodes in a sublocation, reinstantiating their managers and so VMs
 %%
-%% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation whose devices are to be restarted
+%% ARGUMENTS:    - {Loc_id,Subloc_id}: The ID of the sublocation whose devices are to be restarted
 %%
-%% RETURNS:      - ok                             -> Information on the devices that were restarted, were
-%%                                                   already running and failed to restart is reported.
+%% RETURNS:      - ok                             -> Information on the devices nodes that were restarted,
+%%                                                   were already running and failed to restart is reported.
 %%                                                   This also includes the cases where:
 %%                                                    - The sublocation is empty
 %%                                                    - All sublocation devices were already running
@@ -275,6 +276,54 @@ restart_subloc(_) ->
  {error,badarg}. 
 
 
+%% ================================================== PER-LOCATION STOP/RESTART ================================================== %%
+
+%% DESCRIPTION:  Stops the controller and all device nodes in a location, shutting down their managers and so VMs
+%%
+%% ARGUMENTS:    - Loc_id: The ID of the location whose controller and devices are to be stopped
+%%
+%% RETURNS:      - ok                          -> Information on the controller and devices nodes that
+%%                                                were already stopped and failed to stop is reported.
+%%                                                This also includes the cases where:
+%%                                                 - The location contains no devices
+%%                                                 - The controller and all devices in
+%%                                                   the location were already stopped
+%%               - {error,janet_not_running}   -> The Janet Simulator is not running
+%%               - {error,location_not_exists} -> The specified location does not exist
+%%               - {error,badarg}              -> Invalid arguments
+%%               - {error,{internal,_}}        -> Internal error (should not happen)
+%%
+stop_loc(Loc_id) when is_number(Loc_id), Loc_id>0 ->
+ catch(change_loc_status(Loc_id,stop));
+ 
+stop_loc(_) ->
+ io:format("usage: stop_loc(loc_id)~n"),
+ {error,badarg}. 
+ 
+
+%% DESCRIPTION:  Restarts the controller and all device nodes in a location, reinstantiating their managers and so VMs
+%%
+%% ARGUMENTS:    - Loc_id: The ID of the location whose controller and devices are to be restarted
+%%
+%% RETURNS:      - ok                          -> Information on the controller and devices nodes that
+%%                                                were already running and failed to restart is reported.
+%%                                                This also includes the cases where:
+%%                                                 - The location contains no devices
+%%                                                 - The controller and all devices in
+%%                                                   the location were already running
+%%               - {error,janet_not_running}   -> The Janet Simulator is not running
+%%               - {error,location_not_exists} -> The specified location does not exist
+%%               - {error,badarg}              -> Invalid arguments
+%%               - {error,{internal,_}}        -> Internal error (should not happen)
+%% 
+restart_loc(Loc_id) when is_number(Loc_id), Loc_id>0 ->
+ catch(change_loc_status(Loc_id,restart));
+ 
+restart_loc(_) ->
+ io:format("usage: restart_loc(loc_id)~n"),
+ {error,badarg}. 
+ 
+
 %%====================================================================================================================================
 %%                                       PRIVATE JANET NODES STOP AND RESTART UTILITY FUNCTIONS
 %%====================================================================================================================================
@@ -299,19 +348,19 @@ change_node_status(NodeTypeShortHand,Node_id,Mode) ->
    % Retrieve the node's manager process status and its location ID
    {MgrStatus,Loc_id} = db:get_manager_info(NodeType,Node_id),
    
-   % Verify that the node status change does not consist in stopping an already stopped or restarting an already running node
+    % Verify the node's status change to be valid (i.e. not attempting
+    % to stop an already stopped or restart an already running node)
    ok = verify_node_status_change(MgrStatus,Mode),
    
    % Retrieve the PID of the node manager's 'sup_loc' supervisor
    Sup_pid = db:get_suploc_pid(Loc_id),
   
-   % Attempt to halt or restart the node's manager child of the 'sup_loc' supervisor
+   % Attempt to change the node's manager status via its 'sup_loc' supervisor as of "Mode"
    ok = change_manager_status(Sup_pid,NodeType,Node_id,Mode)
  end.
    
-
-%% Verifies that a node status change doesn't consist in stopping an already stopped or restarting an already running node
-%% (change_node_status(NodeTypeShortHand,Node_id,Mode) helper function)		
+%% Verifies that a node's status change is valid, i.e. does not consist in stopping an already stopped or restarting an already running node
+%% (change_node_status(NodeTypeShortHand,Node_id,Mode),change_ctr_status(Loc_id,Sup_pid,Mode) helper function)		
 verify_node_status_change(MgrStatus,Mode) ->
  if
  
@@ -330,7 +379,8 @@ verify_node_status_change(MgrStatus,Mode) ->
 
 
 %% Attempts to stop or restart a node by terminating or restarting its associated manager via its 'sup_loc' supervisor
-%% (change_node_status(NodeTypeShortHand,Node_id,Mode) helper function)
+%% (change_node_status(NodeTypeShortHand,Node_id,Mode),change_managers_statuses(Sup_pid,_,RunningMgrs,Mode),
+%% change_ctr_status(Loc_id,Sup_pid,Mode) helper function)
 change_manager_status(Sup_pid,NodeType,Node_id,stop) ->
  
  % Retrieve the node's manager prefix, being it used as ChildID under its 'sup_loc' supervisor
@@ -379,7 +429,7 @@ change_manager_status(Sup_pid,NodeType,Node_id,restart) ->
 	
 %% ================================================ PER-SUBLOCATION STOP/RESTART ================================================ %%
 
-%% Attempts to change the statuses of all devices in a sublocation
+%% Attempts to change the statuses of all device managers in a sublocation
 %% (stop_subloc({Loc_id,Subloc_id}),restart_subloc({Loc_id,Subloc_id}) helper function)
 change_subloc_status({Loc_id,Subloc_id},Mode) ->
 
@@ -398,21 +448,19 @@ change_subloc_status({Loc_id,Subloc_id},Mode) ->
    % Retrieve the PID of the managers' 'sup_loc' supervisor
    Sup_pid = db:get_suploc_pid(Loc_id),
    
-   % Attempt to change the statuses of all devices in the sublocation, obtaining the following lists in return:
-   %
-   %  - StoppedMgrs:          The list of device managers in the sublocation that were already stopped
-   %  - RunningMgrs:          The list of device managers in the sublocation that were already running
-   %  - ChangedMgrsSuccesses: The list of device managers in the sublocation that were successfully restarted or stopped as of "Mode"
-   %  - AllMgrsFail:          The list of device managers in the sublocation that raised errors in retrieving or changing their status 
-   {StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFail} = change_suploc_devs_statuses(DevIdList,Sup_pid,Mode),
+   % Attempt to change the statuses of all devices in the sublocation
+   DevicesStatusesChange = change_devices_statuses(DevIdList,Sup_pid,Mode),
    
    % Print a summary of the operation
-   change_devices_statuses_summary(StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFail,Mode)   
+   print_devs_statuses_change_summary(DevicesStatusesChange,Mode)   
  end.
    
 
-%% Attempts to change the statuses of a list of device nodes via their 'sup_loc' supervisor (change_subloc_status({Loc_id,Subloc_id},Mode) helper function)
-change_suploc_devs_statuses(DevIdList,Sup_pid,Mode) ->
+%% Attempts to change the statuses of a list of device nodes via their 'sup_loc' supervisor
+%% (change_subloc_status({Loc_id,Subloc_id},Mode),change_loc_status(Loc_id,Mode) helper function)
+change_devices_statuses([],_,_) ->
+ {[],[],[],[]};
+change_devices_statuses(DevIdList,Sup_pid,Mode) ->
 
  % Retrieve the statuses of all device managers associated with the 'dev_id's in the "DevIdList"
  MgrsStatuses = [ {element(1,catch(db:get_manager_info(device,Dev_id))),Dev_id} || Dev_id <- DevIdList ],
@@ -430,26 +478,27 @@ change_suploc_devs_statuses(DevIdList,Sup_pid,Mode) ->
  ok = verify_nodes_statuses_change(StoppedMgrs,RunningMgrs,Mode),
    
  % Attempt to stop the RunningMgrs or restart the StoppedMgrs as of "Mode"
- ChangedMgrs = change_managers_states(Sup_pid,StoppedMgrs,RunningMgrs,Mode),
+ ChangedMgrs = change_managers_statuses(Sup_pid,StoppedMgrs,RunningMgrs,Mode),
    
  % Filter possible errors occured while changing the device managers' statuses
  ChangedMgrsFails = [ {ChangeStatus,Dev_id} || {ChangeStatus,Dev_id} <- ChangedMgrs, ChangeStatus =/= 'ok' ],
  ChangedMgrsSuccesses = [ Dev_id || {_,Dev_id}<-lists:subtract(ChangedMgrs,ChangedMgrsFails) ],   
  
  % Derive the list of managers which raised an error in the operation (either in retrieving or changing their status)
- AllMgrsFail = lists:append(MgrsStatusesFailsError,ChangedMgrsFails),
+ AllMgrsFails = lists:append(MgrsStatusesFailsError,ChangedMgrsFails),
  
  % Return the following lists:
  %
  %  - StoppedMgrs:          The list of device managers in the "DevIdList" that were already stopped
  %  - RunningMgrs:          The list of device managers in the "DevIdList" that were running
  %  - ChangedMgrsSuccesses: The list of device managers in the "DevIdList" that were successfully restarted or stopped as of mode
- %  - AllMgrsFail:          The list of device managers in the "devIdList" that raised errors in retrieving or changing their status  
- {StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFail}.  
+ %  - AllMgrsFails:          The list of device managers in the "devIdList" that raised errors in retrieving or changing their status  
+ {StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFails}.  
    
   
-%% Prints a summary of the statuses change operation of multiple devices (change_subloc_status({Loc_id,Subloc_id},Mode) helper function)
-change_devices_statuses_summary(AlreadyStoppedMgrs,_,SuccessStoppedMgrs,FailedStoppedMgrs,stop) ->
+%% Prints a summary of the statuses change operation of multiple devices 
+%% (change_subloc_status({Loc_id,Subloc_id},Mode),print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode) helper function)
+print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,SuccessStoppedMgrs,FailedStoppedMgrs},stop) ->
  if
  
   % If one or more devices were successfully stopped
@@ -490,7 +539,7 @@ change_devices_statuses_summary(AlreadyStoppedMgrs,_,SuccessStoppedMgrs,FailedSt
    ok
  end;
  
-change_devices_statuses_summary(_,AlreadyRunningMgrs,SuccessRestartMgrs,FailedRestartMgrs,restart) ->
+print_devs_statuses_change_summary({_,AlreadyRunningMgrs,SuccessRestartMgrs,FailedRestartMgrs},restart) ->
  if
  
   % If one or more devices were successfully restarted
@@ -533,7 +582,7 @@ change_devices_statuses_summary(_,AlreadyRunningMgrs,SuccessRestartMgrs,FailedRe
  
  
 %% Prints the prefixed 'dev_id' and reason of each of a list of manager status change failures
-%% (change_devices_statuses_summary(StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFail,Mode) helper function 
+%% (print_devs_statuses_change_summary(StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFails,Mode) helper function)
 print_failed_mgrs_changes([]) ->
  ok; 
 print_failed_mgrs_changes([{Reason,Node_id}|NextFailedMgr]) ->
@@ -543,13 +592,14 @@ print_failed_mgrs_changes([{Reason,Node_id}|NextFailedMgr]) ->
  
 %% Attempts to change the statuses of a set of device managers via their 'sup_loc' supervisor
 %% (change_suploc_devs_statuses(DevIdList,Sup_pid,Mode) helper function)
-change_managers_states(Sup_pid,_,RunningMgrs,stop) ->
+change_managers_statuses(Sup_pid,_,RunningMgrs,stop) ->
  [ {catch(change_manager_status(Sup_pid,device,Dev_id,stop)),Dev_id} || {_,Dev_id} <- RunningMgrs ];
-change_managers_states(Sup_pid,StoppedMgrs,_,restart) ->
+change_managers_statuses(Sup_pid,StoppedMgrs,_,restart) ->
  [ {catch(change_manager_status(Sup_pid,device,Dev_id,restart)),Dev_id} || {_,Dev_id} <- StoppedMgrs ].
  
 
 %% Verifies that at least one node in the list can be stopped or restarted depending on "Mode"
+%% (change_devices_statuses(DevIdList,Sup_pid,Mode) helper function)
 verify_nodes_statuses_change(_,RunningMgrs,stop) ->
  if 
  
@@ -575,8 +625,8 @@ verify_nodes_statuses_change(StoppedMgrs,_,restart) ->
  end.
  
 
-%% Retrieves the list of devices in a sublocation, raising throws in case the sublocation
-%% does not exist or is empty (change_subloc_status({Loc_id,Subloc_id},Mode) helper function)
+%% Retrieves the list of devices in a sublocation, raising throws in case the sublocation does not exist or is empty 
+%% (change_subloc_status({Loc_id,Subloc_id},Mode) helper function)
 get_subloc_devs_throw({Loc_id,Subloc_id}) ->
     
  % Retrieve the list of devices in the sublocation
@@ -594,6 +644,130 @@ get_subloc_devs_throw({Loc_id,Subloc_id}) ->
     {atomic,DevIdList} ->
      DevIdList
  end.
+
+
+%% ================================================== PER-LOCATION STOP/RESTART ================================================== %%
+
+%% Attempts to change the statuses of the controller and all devices managers in a location
+%% (stop_loc(Loc_id),restart_loc(Loc_id) helper function)
+change_loc_status(Loc_id,Mode) ->
+
+ % Ensure the JANET Simulator to be running
+ case utils:is_running(janet_simulator) of
+  false ->
+  
+   % If it is not, throw an error
+   throw({error,janet_not_running});
+  
+  true ->
+  
+   % Retrieve the PID of location managers' 'sup_loc' supervisor
+   Sup_pid = db:get_suploc_pid(Loc_id),
+   
+   % Attempt to change the status of the location's controller manager as of "Mode"
+   CtrMgrStatus = catch(change_ctr_status(Loc_id,Sup_pid,Mode)),
+   
+   % Retrieve the list of devices in the sublocation
+   %
+   % NOTE: Differently from "change_subloc_status()" and its "get_subloc_devs_throw()" function in
+   %       this case an empty list can be returned, meaning that the location contains no devices  
+   {atomic,DevIdList} = db:get_loc_devs(Loc_id),
+   
+   % Attempt to change the statuses of all device managers in the location, obtaining in return:
+   %
+   %  - If a non-empty "DevIdList" was passed, the {StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFails}
+   %    lists (see print_loc_status_change_summary())
+   %  - If an empty "DevIdList" was passed, the tuple {[],[],[],[]}
+   %  - If attempting to stop or restart a list of devices that are already all
+   %    stopped or running, the 'all_devs_stopped' or 'all_devs_running' atoms
+   % 
+   DevicesStatusesChange = catch(change_devices_statuses(DevIdList,Sup_pid,Mode)),
+   
+   % Print a summary of the operation
+   print_loc_status_change_summary(Loc_id,CtrMgrStatus,DevicesStatusesChange,Mode)
+ 
+ end.
+
+
+%% Attempts to change the status of a controller manager (change_loc_status(Loc_id,Mode) helper function)
+change_ctr_status(Loc_id,Sup_pid,Mode) ->
+
+ % Retrieve the controller manager status
+ {MgrStatus,_} = db:get_manager_info(controller,Loc_id),
+
+ % Verify the controller manager status change to be valid (i.e. not attempting
+ % to stop an already stopped or restart an already running controller)
+ ok = verify_node_status_change(MgrStatus,Mode),
+
+ % Attempt to change the manager's status via its 'sup_loc' supervisor as of "Mode"
+ ok = change_manager_status(Sup_pid,controller,Loc_id,Mode),
+
+ % Return that the operation was successful and the updated controller manager status
+ {ok,Mode}.
+
+
+%% Prints a summary of the status change operation of the controller and devices in a location
+%% (change_loc_status(Loc_id,Mode) helper function)
+
+% Location controller devices were all already stopped
+print_loc_status_change_summary(_,{error,not_running},all_devs_stopped,stop) ->
+ io:format("The controller and all location devices are already stopped~n");
+ 
+% Location controller devices were all already running  
+print_loc_status_change_summary(_,{error,already_running},all_devs_running,restart) ->
+ io:format("The controller and all location devices are already running~n");
+ 
+% Hybrid case 
+print_loc_status_change_summary(Loc_id,CtrMgrStatus,DevicesStatusesChange,Mode) ->
+
+ % Print a summary of the updated status of the location controller
+ print_ctr_status_change_summary(utils:prefix_node_id(controller,Loc_id),CtrMgrStatus,Mode),
+   
+ % Print a summary of updated statuses of location devices
+ print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode).  
+   
+  
+%% Prints a summary of the updated status of a location's controller
+%% (print_loc_status_change_summary(Loc_id,CtrMgrStatus,DevicesStatusesChange,Mode) helper function)
+
+% The controller is already stopped
+print_ctr_status_change_summary(Pre_Ctr_id,{error,not_running},stop) ->
+ io:format("The controller ~p is already stopped~n",[Pre_Ctr_id]);
+
+% The controller is already running
+print_ctr_status_change_summary(Pre_Ctr_id,{error,already_running},restart) ->
+ io:format("The controller ~p is already running~n",[Pre_Ctr_id]);
+
+% The controller successfully stopped
+print_ctr_status_change_summary(Pre_Ctr_id,{ok,stop},stop) ->
+ io:format("The controller ~p was successfully stopped~n",[Pre_Ctr_id]);
+
+% The controller successfully restarted
+print_ctr_status_change_summary(Pre_Ctr_id,{ok,restart},restart) ->
+ io:format("The controller ~p was successfully restarted~n",[Pre_Ctr_id]);
+
+% Error in stopping the controller
+print_ctr_status_change_summary(Pre_Ctr_id,{error,Reason},stop) ->
+ io:format("The controller ~p raised an error in its stopping: {error,~p}~n",[Pre_Ctr_id,Reason]);
+
+% Error in restarting the controller
+print_ctr_status_change_summary(Pre_Ctr_id,{error,Reason},restart) ->
+ io:format("The controller ~p raised an error in its restarting: {error,~p}~n",[Pre_Ctr_id,Reason]).
+ 
+ 
+%% Prints a summary of the updated statuses of location devices
+%% (print_loc_status_change_summary(Loc_id,CtrMgrStatus,DevicesStatusesChange,Mode) helper function) 
+
+% If the location contained no devices, just notify it
+print_loc_devs_statuses_change_summary({[],[],_,_},_) ->
+ io:format("The location contains no devices~n");
+ 
+% Otherwise print a summary of their statuses change
+% via the "print_devs_statuses_change_summary()" function
+print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode) ->
+ print_devs_statuses_change_summary(DevicesStatusesChange,Mode).
+
+
 
 
 

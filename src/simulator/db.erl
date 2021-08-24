@@ -642,9 +642,9 @@ get_records_num() ->
 %%
 %% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and be >0
 %%
-%% RETURNS:      - {atomic,[LocDevIdList]}     -> The list of 'dev_id's of devices in the location
-%%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
-%%               - {error,badarg}              -> Invalid arguments
+%% RETURNS:      - {atomic,[LocDevIdList]}       -> The list of 'dev_id's of devices in the location
+%%               - {aborted,location_not_exists} -> The location 'Loc_id' does not exist
+%%               - {error,badarg}                -> Invalid arguments
 %% 
 get_loc_devs(Loc_id) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
@@ -663,7 +663,7 @@ get_loc_devs(Loc_id) when is_number(Loc_id), Loc_id>0 ->
 	   [] ->
 	   
 		% Otherwise, if the location doesn't exist, return an error
-		{error,location_not_exists}
+		mnesia:abort(location_not_exists)
 	  end
 	 end,
 	  
@@ -738,6 +738,9 @@ get_manager_info(controller,Loc_id) ->
    case db:get_record(location,Loc_id) of
    
     % If the location was not found, a non-existing 'loc_id' was passed
+	%
+	% NOTE: This cannot happen in the "change_loc_status()" function, for
+	%       the existence of the associated location was already checked for
     {error,not_found} ->
 	 throw({error,location_not_exists});
 	
