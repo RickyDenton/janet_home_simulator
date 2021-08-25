@@ -65,7 +65,7 @@ init([Loc_id]) ->
 %%====================================================================================================================================
 
 %% Called by the locations' tree top supervisor (sup_locs) whenever a new location tree is created, which may happen:
-%%  - At boot time by the locations' tree boot initializer (locs_init)
-%%  - Every time a new location is added to the database ([TODO]: Insert function name here)
+%%  - At boot time by the locations' tree boot initializer     (locs_init:spawn_sup_loc([Loc_id|NextLoc_Id]))
+%%  - At run time when a new location is added to the database (db:add_location(Loc_id,Name,User,Port))
 start_link(Loc_id) ->
  supervisor:start_link(?MODULE,[Loc_id]).

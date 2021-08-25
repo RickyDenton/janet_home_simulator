@@ -209,22 +209,55 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
   
   % If it is, attempt the transaction
   true -> 
-   Result = mnesia:transaction(F), 
-   case Result of
-    
-    % If the transaction succeded
-    {atomic, ok} ->
-     %% [TODO]: Start sup_dev
-	 %% [TODO]: inform the controller of the new device (if not passing directly from it)
-     Result;
-	 
-    _ ->
-     Result
+   case {mnesia:transaction(F),utils:is_running(janet_simulator)} of
+    {{atomic,ok},true} ->
+  
+     % If the transaction was successfully and the JANET simulator is running,
+	 % attempt to spawn the device manager under its 'sup_loc' location supervisor,
+	 % returning the result of the transaction and of the spawn operation
+     {ok,catch(spawn_devmanager(Dev_id,Loc_id))};
+   
+    {TransactionResult,_} ->
+  
+     % Otherwise, just return the transaction result
+     TransactionResult
    end
  end;
-
+ 
 add_device(_,_,_,_) ->
  {error,badarg}.
+
+
+%% Attempts to spawn a device manager under its location 'sup_loc' supervisor
+%% (add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) helper function)
+spawn_devmanager(Dev_id,Loc_id) ->
+
+ % Attempt to retrieve the PID of the location's 'sup_loc' supervisor
+ Sup_pid = get_suploc_pid(Loc_id),
+ 
+ % Device manager child specification
+ DevMgrSpec = {
+               "dev-" ++ integer_to_list(Dev_id),         % ChildID
+               {dev_manager,start_link,[Dev_id,Loc_id]},  % Child Start Function
+	           permanent,                                 % Child Restart Policy
+	           8000,                                      % Child Sub-tree Max Shutdown Time
+	           worker,                  	              % Child Type
+	           [dev_manager]                              % Child Modules (For Release Handling Purposes)
+              },
+
+ % Attempt to spawn the device manager as a child of the 'sup_loc' supervisor
+ case supervisor:start_child(Sup_pid,DevMgrSpec) of
+  
+  % If the spawning was successful, return just its result 
+  {ok,_DevMgrPid} ->
+   ok;
+   
+  % Otherwise, return the error raised in the spawning
+  SpawnError ->
+   SpawnError
+ end.
+
+ %% [TODO]: inform the controller of the new device (if not passing directly from it)
 
 
 %% =========================================================== READ ================================================================%% 
@@ -1288,19 +1321,66 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
 	    mnesia:abort(device_not_exists)
       end
      end,
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   %% [TODO]: Stop the device and remove it from the supervision tree
-   %% [TODO]: Inform the controller that the device no longer exists
-   Result;   
-  _ ->
-   Result
- end; 
+	 
+ case {mnesia:transaction(F),utils:is_running(janet_simulator)} of
+  {{atomic,ok},true} ->
+  
+   % If the transaction was successfully and the JANET simulator is running, attempt to
+   % delete the device manager via its 'sup_loc' supervisor and to remove its entry from
+   % the 'devmanager' table, returning the result of the transaction and of such deletion
+   {ok,catch(delete_devmanager(Dev_id))};
+   
+  {TransactionResult,_} ->
+  
+   % Otherwise, just return the transaction result
+   TransactionResult
+ end;
 
 delete_device(_) ->
  {error,badarg}.
 
+
+%% Attempts to delete a device manager via its 'sup_loc' supervisor and
+%% remove its entry from the 'devmanager' table (delete_device(Dev_id) helper function)
+delete_devmanager(Dev_id) ->
+
+ % Attempt to retrieve the device's location ID from the 'devmanager' table
+ {_,Loc_id} = get_manager_info(device,Dev_id),
+
+ % Attempt to retrieve the PID of the location's 'sup_loc' supervisor
+ Sup_pid = get_suploc_pid(Loc_id),
+ 
+ % Prefix the device's ID
+ Pref_Dev_id = utils:prefix_node_id(device,Dev_id),
+ 
+ % Attempt to terminate the device manager via its 'sup_loc' supervisor
+ case supervisor:terminate_child(Sup_pid,Pref_Dev_id) of
+  {error,Reason} ->
+  
+   % If the termination reported an error, return it
+   {error,Reason};
+   
+  ok ->
+   
+   % If the termination was successful, attempt to delete
+   % the device manager child from its 'sup_loc' supervisor 
+   case supervisor:delete_child(Sup_pid,Pref_Dev_id) of
+    {error,Reason} ->
+  
+     % If the deletion reported an error, return it
+     {error,Reason};
+
+    ok ->
+     % Otherwise delete the device manager entry from the
+	 % 'devmanager' table and return the result of the operation
+     {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({devmanager,Dev_id}) end),
+	 ok
+	 
+	 %% [TODO]: Inform the controller that the device no longer exists
+   
+   end
+ end.
+ 
 
 %%====================================================================================================================================
 %%                                                    PUBLIC UTILITY FUNCTIONS
