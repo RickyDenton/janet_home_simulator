@@ -3,6 +3,10 @@
 -behaviour(gen_fsm).
 
 init(_) ->
+
+ {ok,MgrPid} = application:get_env(mgrpid),
+ gen_server:cast(MgrPid,{dev_statem_pid,self()}),
+ 
  io:format("[fsm_heater]: Initialized~n"),
  {ok,[]}.  % Initial State
 

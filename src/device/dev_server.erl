@@ -1,8 +1,16 @@
 -module(dev_server).
--export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2]).
 -behaviour(gen_server).
 
+-export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2]).
+
+
+
+
 init(_) ->
+
+ {ok,MgrPid} = application:get_env(mgrpid),
+ gen_server:cast(MgrPid,{dev_server_pid,self()}),
+
  io:format("[dev_server]: Initialized~n"),
  {ok,[]}.  % Initial State
 
@@ -23,3 +31,4 @@ handle_cast(reset,State) -> % Resets the server State
  
 start_link() ->
  gen_server:start_link({local,?MODULE},?MODULE,[],[]).
+ 

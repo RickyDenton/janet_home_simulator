@@ -21,13 +21,13 @@ init({Dev_id,Loc_id}) ->
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,sup_pid=self(),status="BOOTING"}) end),
  
  % The device node's inizialization will continue in the handle_continue(Continue,State) callback function for parallelization purposes 
- {ok,{booting,none,Dev_id,Loc_id},{continue,init}}.
+ {ok,{booting,{none,none,none},{Dev_id,Loc_id}},{continue,init}}.
  
 
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
   
 %% Initializes the device's node (called after the 'init' callback function)
-handle_continue(init,{booting,none,Dev_id,Loc_id}) ->
+handle_continue(init,{booting,{none,none,none},{Dev_id,Loc_id}}) ->
  
  %% ---------------- Device Node Configuration Parameters Definition ---------------- %%
  
@@ -63,11 +63,8 @@ handle_continue(init,{booting,none,Dev_id,Loc_id}) ->
  % Launch the Janet Device application on the controller node
  ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,self(),Type,Config]),
  
- % Update the controller status in the 'devmanager' table to 'CONNECTING'
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,sup_pid=self(),status="CONNECTING"}) end),
- 
  % Return the updated manager's state
- {noreply,{online,Node,{Dev_id,Loc_id}}}. 
+ {noreply,{booting,{Node,none,none},{Dev_id,Loc_id}}}. 
  
  
 %% ========================================================== TERMINATE ========================================================== %% 
@@ -94,10 +91,61 @@ handle_call(Num,_,{Sum,N}) when is_number(Num) ->
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
-%% --------- STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
-
+handle_cast({dev_server_pid,DevSrvPid},{MgrState,{Node,_,DevStatemPid},{Dev_id,Loc_id}}) ->
+ 
+ case MgrState of
+  
+  booting ->
+   
+   case DevStatemPid of
+   
+    % We need to wait for the other
+    none ->
+	 {noreply,{booting,{Node,DevSrvPid,DevStatemPid},{Dev_id,Loc_id}}};
+	 
+	% The device has terminated booting, and is now attempting to register within the controller
+	_ ->
+     % Update the controller status in the 'devmanager' table to 'CONNECTING'
+     {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,sup_pid=self(),status="CONNECTING"}) end),
+	 io:format("[devmgr-" ++ integer_to_list(Dev_id) ++ "]: Device node successfully booted (last was the DevSrvPid)~n"),
+     {noreply,{connecting,{Node,DevSrvPid,DevStatemPid},{Dev_id,Loc_id}}}
+	 
+   end;
+ 
+  % Just a random state update (probably the dev_server crashed and was restarted)
+  _ ->
+  
+   {noreply,{MgrState,{Node,DevSrvPid,DevStatemPid},{Dev_id,Loc_id}}}
+ end;
+ 
+ 
+handle_cast({dev_statem_pid,DevStatemPid},{MgrState,{Node,DevSrvPid,_},{Dev_id,Loc_id}}) ->
+ 
+ case MgrState of
+  
+  booting ->
+   
+   case DevSrvPid of
+   
+    % We need to wait for the other
+    none ->
+	 {noreply,{booting,{Node,DevSrvPid,DevStatemPid},{Dev_id,Loc_id}}};
+	 
+	% The device has terminated booting, and is now attempting to register within the controller
+	_ ->
+     % Update the controller status in the 'devmanager' table to 'CONNECTING'
+     {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,sup_pid=self(),status="CONNECTING"}) end),
+	 io:format("[devmgr-" ++ integer_to_list(Dev_id) ++ "]: Device node successfully booted (last was the DevStatemPid)~n"),
+     {noreply,{connecting,{Node,DevSrvPid,DevStatemPid},{Dev_id,Loc_id}}}
+	 
+   end;
+ 
+  % Just a random state update (probably the dev_statem crashed and was restarted)
+  _ ->
+  
+   {noreply,{MgrState,{Node,DevSrvPid,DevStatemPid},{Dev_id,Loc_id}}}
+ end. 
+ 
 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
