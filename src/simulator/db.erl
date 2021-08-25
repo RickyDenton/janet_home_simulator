@@ -75,14 +75,22 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
 	    mnesia:abort(location_already_exists)
       end
      end,
+		
+ case {mnesia:transaction(F),utils:is_running(janet_simulator)} of
+  {{atomic,ok},true} ->
+  
+   % If the transaction was successfully and the JANET simulator is
+   % running, spawn the 'sup_loc' supervisor associated with its "Loc_id"
+   {SpawnRes,_} = supervisor:start_child(sup_locs,[Loc_id]),
  
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   %% [TODO]: Start sup_loc
-   Result;   
-  _ ->
-   Result
+   % Return the result of the transaction and
+   % of the spawning of the 'sup_loc' supervisor
+   {ok,SpawnRes};
+   
+  {TransactionResult,_} ->
+  
+   % Otherwise, just return the transaction result
+   TransactionResult
  end;
  
 add_location(_,_,_,_) ->
@@ -1126,17 +1134,24 @@ delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
 	    mnesia:abort(location_not_exists)
       end
      end,
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   %% [TODO]: Shut down and remove the entire location from the supervision tree
-   Result;   
-  _ ->
-   Result	 
- end; 
+
+ case {mnesia:transaction(F),utils:is_running(janet_simulator)} of
+  {{atomic,ok},true} ->
+  
+   % If the transaction was successfully and the JANET simulator is running, attempt to delete
+   % the location 'sup_loc' supervisor and all its managers' records from the 'ctrmanager'
+   % and 'devmanager' tables, returning the result of the transaction and of such deletion
+   {ok,catch(delete_suploc(Loc_id))};
+   
+  {TransactionResult,_} ->
+  
+   % Otherwise, just return the transaction result
+   TransactionResult
+ end;
 
 delete_location(_) ->
  {error,badarg}.
+
 
 %% Deletes a list of device records from the device table (delete_location(Loc_id) helper function)
 delete_device_records([]) ->
@@ -1145,12 +1160,48 @@ delete_device_records([Dev|NextDev]) ->
  mnesia:delete({device,Dev#device.dev_id}),
  delete_device_records(NextDev).
  
+ 
 %% Deletes a list of sublocation records from the sublocation table (delete_location(Loc_id) helper function)
 delete_subloc_records([]) ->
  ok;
 delete_subloc_records([Subloc|NextSubloc]) ->
  mnesia:delete({sublocation,Subloc#sublocation.sub_id}),
  delete_subloc_records(NextSubloc). 
+
+
+%% Attempts to delete a 'sup_loc' supervisor and all its managers' records from the
+%% 'ctrmanager' and 'devmanager' tables (delete_location(Loc_id) helper function)
+delete_suploc(Loc_id) ->
+   
+ % Attempt to retrieve the PID of the location's 'sup_loc' supervisor
+ SupLocPid = get_suploc_pid(Loc_id),
+ 
+ % Attempt to terminate the 'sup_loc' supervisor via its own 'sup_locs' supervisor
+ ok = supervisor:terminate_child(sup_locs,SupLocPid),
+       
+ % Remove the 'sup_loc' supervisor entry from the 'suploc' table
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({suploc,Loc_id}) end),
+
+ % Remove the location controller manager entry from the 'ctrmanager' table
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({ctrmanager,Loc_id}) end),
+   
+ % Delete all location device managers entries from the 'devmanager' table
+ F = fun() ->
+     
+	   % Retrieve the 'dev_id's of all device managers in the location
+       MatchHead = #devmanager{dev_id='$1', loc_id=Loc_id, _='_'}, % Select all 'dev_id
+       Guard = [],
+       Result = '$1',
+	   LocDevIds = mnesia:select(devmanager,[{MatchHead,Guard,[Result]}]),
+		
+	   % Delete the location device manager entries from the 'devmanager' table
+       lists:foreach(fun(Dev_id) -> mnesia:delete({devmanager,Dev_id}) end, LocDevIds)
+     end,
+	   
+ {atomic,ok} = mnesia:transaction(F),
+ 
+ % Return the success of the operation
+ ok.
 
 
 %% DESCRIPTION:  Deletes a sublocation from the database, moving all its devices to its location's default sublocation {Loc_id,0}
