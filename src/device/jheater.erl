@@ -1,51 +1,64 @@
 -module(jheater).
--export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2,handle_event/3,handle_sync_event/4]).
--behaviour(gen_fsm).
+-behaviour(gen_statem).
+
+-export([start_link/0,callback_mode/0,init/1,terminate/3]).
+
+%% --------- STUB
+-export([button/1]).
+-export([locked/3,open/3]).
+-define(NAME, code_lock).
+
+%% --------- STUB
+callback_mode() ->
+    state_functions.
+
 
 init(_) ->
 
  {ok,MgrPid} = application:get_env(mgrpid),
- gen_server:cast(MgrPid,{dev_statem_pid,self()}),
  
- io:format("[fsm_heater]: Initialized~n"),
- {ok,[]}.  % Initial State
-
-% STUB
-% NOTE: This is currently not called on shutdown since the process is not trapping exit signals
-terminate(normal,_) ->
- io:format("[fsm_heater]: Terminated").
-
-% STUB
-handle_call(Num,_,{Sum,N}) when is_number(Num) ->
- New_Sum = Sum + Num,
- New_N = N+1,
- {reply,New_Sum/New_N,{New_Sum,New_N}}.
-
-% STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
-
-
-
-
-% STUB 
-handle_event(Event, StateName, Data) ->
- unexpected(Event, StateName),
-{next_state, StateName, Data}. 
-
-% STUB
-handle_sync_event(Event, _From, StateName, Data) ->
- unexpected(Event, StateName),
- {next_state, StateName, Data}.
+ io:format("[statem_heater]: Initialized~n"),
  
-% STUB
-unexpected(Msg, State) ->
- io:format("~p received unknown event ~p while in state ~p~n",
- [self(), Msg, State]).
-
-
-
-
+ {ok, locked, MgrPid}.  % Initial State.
  
+
+%% --------- STUB	
+terminate(_Reason, _State, _Data) ->
+    ok.
+	
+%% --------- STUB	
+button(Digit) ->
+    gen_statem:cast(?NAME, {button,Digit}).
+
+%% --------- STUB
+locked(
+  cast, {button,Digit},
+  #{code := Code, remaining := Remaining} = Data) ->
+    case Remaining of
+        [Digit] ->
+	    do_unlock(),
+            {next_state, open, Data#{remaining := Code},
+             [{state_timeout,10000,lock}]};
+        [Digit|Rest] -> % Incomplete
+            {next_state, locked, Data#{remaining := Rest}};
+        _Wrong ->
+            {next_state, locked, Data#{remaining := Code}}
+    end.
+
+open(state_timeout, lock,  Data) ->
+    do_lock(),
+    {next_state, locked, Data};
+open(cast, {button,_}, Data) ->
+    {next_state, open, Data}.
+	
+%% --------- STUB
+do_lock() ->
+    io:format("Lock~n", []).
+do_unlock() ->
+    io:format("Unlock~n", []).
+
+
+
+
 start_link() ->
- gen_server:start_link({local,dev_fsm},?MODULE,[],[]).
+    gen_statem:start_link({local,dev_statem}, ?MODULE, [], []).

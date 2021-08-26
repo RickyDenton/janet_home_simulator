@@ -95,7 +95,13 @@ terminate(shutdown,{_,_,Loc_id}) ->
 handle_call(Num,_,{Sum,N}) when is_number(Num) ->
  New_Sum = Sum + Num,
  New_N = N+1,
- {reply,New_Sum/New_N,{New_Sum,New_N}}.
+ {reply,New_Sum/New_N,{New_Sum,New_N}};
+ 
+%% --------- STUB
+handle_call(_,_,_) ->
+ timer:sleep(4000),
+ {reply,ok,ok}.
+
 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
