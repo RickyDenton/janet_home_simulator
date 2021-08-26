@@ -2,7 +2,7 @@
 
 -module(db).
 
--include("table_records.hrl"). % Mnesia table records definition
+-include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
@@ -601,7 +601,7 @@ get_record(_,_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Returns all records in a table as a list (print_table(|all), print_table(Tabletype) helper function)
+%% DESCRIPTION:  Returns all records in a table as a list
 %%
 %% ARGUMENTS:    - Tabletype: The table to retrieve the records, or its shorthand form
 %%
@@ -1633,30 +1633,46 @@ install() ->
    % Start Mnesia and create its tables 
    ok = application:start(mnesia),
 	 
-   % ----------------------------- disc_copies tables ----------------------------- %   
+   %% ---------------------------- disc_copies tables ---------------------------- %%   
    {atomic,ok} = mnesia:create_table(location,
-                                    [{attributes, record_info(fields, location)},
-                                    {index, [#location.user,#location.port]},
-                                    {disc_copies, [node()]}]),				 
+                                     [
+									  {attributes, record_info(fields, location)},
+                                      {index, [#location.user,#location.port]},
+                                      {disc_copies, [node()]}
+									 ]),
+									 
    {atomic,ok} = mnesia:create_table(sublocation,
-                                    [{attributes, record_info(fields, sublocation)},
-					                {type, ordered_set},
-                                    {disc_copies, [node()]}]),		 
+                                     [
+									  {attributes, record_info(fields, sublocation)},
+					                  {type, ordered_set},
+                                      {disc_copies, [node()]}
+									 ]),
+									 
    {atomic,ok} = mnesia:create_table(device,
-                                    [{attributes, record_info(fields, device)},
-                                    {index, [#device.sub_id]},
-                                    {disc_copies, [node()]}]),
+                                     [
+									  {attributes, record_info(fields, device)},
+                                      {index, [#device.sub_id]},
+                                      {disc_copies, [node()]}
+									 ]),
    
-   % ----------------------------- ram_copies tables ----------------------------- %   
+   %% ---------------------------- ram_copies tables ---------------------------- %%  
    {atomic,ok} = mnesia:create_table(suploc,
-                                    [{attributes, record_info(fields, suploc)},
-                                    {ram_copies, [node()]}]),
+                                     [
+									  {attributes, record_info(fields, suploc)},
+                                      {ram_copies, [node()]}
+									 ]),
+									 
    {atomic,ok} = mnesia:create_table(ctrmanager,
-                                    [{attributes, record_info(fields, ctrmanager)},
-                                    {ram_copies, [node()]}]),
+                                     [
+									  {attributes, record_info(fields, ctrmanager)},
+                                      {ram_copies, [node()]}
+									 ]),
+									 
    {atomic,ok} = mnesia:create_table(devmanager,
-                                    [{attributes, record_info(fields, devmanager)},
-                                    {ram_copies, [node()]}]),
+                                     [
+									  {attributes, record_info(fields, devmanager)},
+                                      {ram_copies, [node()]}
+									 ]),
 	
    % Report the result of the operation		
    io:format("Mnesia database successfully installed~n");
@@ -1731,10 +1747,19 @@ get_all_users() ->
 
 %% DESCRIPTION:  Returns the table name atom associated to its argument, also considering shorthand forms
 %%
-%% ARGUMENTS:    - Tabletype: A table name, possibly in a shorthand form
+%% ARGUMENTS:    - Tabletype: A table name, possibly in a shorthand form, with the following being allowed:
+%%                            
+%%                            - location, loc                   -> location
+%%                            - sublocation, subloc, sub        -> sublocation
+%%                            - device, dev                     -> device
+%%                            - suploc, sup                     -> suploc
+%%                            - ctrmanager,ctrmgr,ctr,          -> ctrmanager
+%%                              controllermgr,controllermanager
+%%                            - devmanager,devmgr,devicemgr     -> devmanager
+%%                              devicemanager
 %%
-%% RETURNS:      - Table   -> The table name atom associated to the Tabletype
-%%               - Unknown -> If no table name could be associated to Tabletype
+%% RETURNS:      - Tableatom -> The table name atom associated to the Tabletype
+%%               - Unknown   -> If no table name could be associated to Tabletype
 %%
 resolve_tabletype_shorthand(Tabletype) ->
  if

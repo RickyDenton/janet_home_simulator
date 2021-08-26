@@ -53,7 +53,7 @@ run(Dev_id,Loc_id,MgrPid,Type,Config) when is_number(Dev_id), Dev_id>0, is_numbe
      application:set_env(janet_device,type,Type),
      application:set_env(janet_device,config,Config),
 	 
-	 % Start the JANET Device as a PERMANENT application (i.e. the entire node is shut down if the application terminates)
+	 % Start the JANET Device in permanent mode
      %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
      application:start(janet_device,permanent)
    end

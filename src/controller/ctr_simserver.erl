@@ -1,7 +1,6 @@
-%% This module represents the server in the JANET device application used for interfacing
-%% interfacing both with the JANET Simulator and its location's JANET Controller node
+%% This module represents the server in the JANET Controller application used for interfacing with the JANET simulator node %%
 
--module(dev_server).
+-module(ctr_simserver).
 -behaviour(gen_server).
 
 -export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2,handle_continue/2]).  % gen_server Behaviour Callback Functions
@@ -19,55 +18,35 @@ init(_) ->
  %% process_flag(trap_exit,true),
  
  % Return the server initial state, where further initialization operations will be performed in the "handle_continue(Continue,State)"
- % callback function for parallelization purposes (and for allowing the dev_manager process to respond to the registration request)  
+ % callback function for parallelization purposes (and for allowing the ctr_manager process to respond to the registration request)  
  {ok,booting,{continue,init}}. %% [TODO]: Define the server state via a proper record
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%  
 
-%% Registers the JANET device node with its device manager in the JANET simulator node by passing the PIDs of
-%% the dev_server and of the dev_statem for then attempting to register the devices with its location controller
-%%
-%% [TODO]: Rewrite description if necessary
-%%
+%% Registers the JANET controller node with its controller manager in the JANET simulator node by passing the PID of the ctr_simserver
 handle_continue(init,booting) ->
 
  % Retrieve the 'mgrpid' environment variable
  {ok,MgrPid} = application:get_env(mgrpid),
  
- % Retrieve the PID of the device's state
- % machine via the local naming registry
- case whereis(dev_statem) of
-  undefined ->
-  
-   % The device state machine not being registered in the local naming registry is a
-   % fatal error, and dev_server, along with the entire device node, must be shut down
-   {stop,dev_statem_not_registered,booting};
-   
-  Dev_statem_pid ->
-  
-   % If the PID of the device state machine was successfully retrieved, attempt
-   % to register the JANET device node with its device manager in the simulator
-   % node by passing the PIDs of the 'dev_statem' and of the 'dev_server'
-   %
-   % NOTE: This registration request is performed synchronously since
-   %       the controller node's execution cannot continue if it fails 
-   gen_server:call(MgrPid,{dev_reg,self(),Dev_statem_pid},10000),
-   
-	 
-   %% [TODO]: Continue from here
-	 
-   io:format("[dev_server]: Initialized~n"),
-   {noreply,connecting}
- end.
+ % Attempt to register the JANET controller node with its controller
+ % manager in the simulator node by passing the PID of the ctr_simserver
+ %
+ % NOTE: This registration request is performed synchronously since
+ %       the controller node's execution cannot continue if it fails 
+ gen_server:call(MgrPid,{ctr_reg,self()},10000),
+ 
+ io:format("[dev_server]: Initialized~n"),
+ {noreply,online}. %% [TODO]: Online or something else?
  
  
 %% ========================================================== TERMINATE ========================================================== %% 
- 
+
 %% --------- STUB
 % NOTE: This is currently not called on shutdown since the process is not trapping exit signals
 terminate(normal,_) ->
- io:format("[dev_server]: Terminated").
+ io:format("[ctr_simserver]: Terminated").
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
@@ -85,11 +64,10 @@ handle_call(Num,_,{Sum,N}) when is_number(Num) ->
 handle_cast(reset,State) -> % Resets the server State
  {noreply,State}.
 
-
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
-%%==================================================================================================================================== 
+%%====================================================================================================================================
 
-%% Called by its 'sup_jdev' supervisor during the JANET Device boot
+%% Called by its 'sup_jctr' supervisor during the JANET Controller boot
 start_link() ->
  gen_server:start_link({local,?MODULE},?MODULE,[],[]).

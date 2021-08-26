@@ -10,16 +10,6 @@
 %%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        
 %%====================================================================================================================================
 init(_) ->
-
- % Initialize the ETS 'devalloc' table from the contents of the 'devalloc' environment variable
- {ok,DevAlloc} = application:get_env(devalloc),
- ets:new(devalloc,[set,public,named_table]),
- ets:insert(devalloc,DevAlloc),
-
- % Initialize the ETS 'devhandler' table
- ets:new(devhandler,[set,public,named_table]),
- 
- % Return the supervisor flags and the list of children specifications
  {ok,
   {
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
@@ -31,7 +21,7 @@ init(_) ->
    
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
    [
-    %% ------------- The Janet Controller's REST server (ctr_restserver) ------------- %%
+    %% ----------------- The controller REST server (ctr_restserver) ----------------- %%
     {
      ctr_restserver,		            % ChildID
      {ctr_restserver,start_link,[]},    % Child Start Function
@@ -59,6 +49,16 @@ init(_) ->
 	 1000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [ctr_regserver]                    % Child Modules (For Release Handling Purposes)
+    },
+	
+	%% -------------- The controller simulation server (ctr_simserver) -------------- %%
+	{
+     ctr_simserver,		                % ChildID
+     {ctr_simserver,start_link,[]},     % Child Start Function
+ 	 permanent,                         % Child Restart Policy
+	 4000,                              % Child Sub-tree Max Shutdown Time
+	 worker,                  	        % Child Type
+	 [ctr_simserver]                    % Child Modules (For Release Handling Purposes)
     }
    ] 
   }

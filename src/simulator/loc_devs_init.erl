@@ -5,7 +5,7 @@
 -export([loc_devs_init/2]).     % Process Body
 -export([spawn_link/2]).        % Start Function (spawn_link/2 instead of start_link/1 because this is no OTP Behaviour callback module)
  
--include("table_records.hrl").  % Mnesia Table Records Definitions
+-include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %%====================================================================================================================================
 %%                                                         PROCESS BODY                                                        
@@ -62,6 +62,6 @@ init_devs_mgrs([Dev_id|NextDev_id],Loc_id,Sup_pid) ->
 %%                                                         START FUNCTION                                                        
 %%====================================================================================================================================
 
-%% Called by its 'sup_loc' location supervisor when a new location tree is created
+%% Called by its 'sup_loc' location supervisor when a new location management tree is created
 spawn_link(Loc_id,Sup_pid) ->
  {ok,spawn_link(?MODULE,loc_devs_init,[Loc_id,Sup_pid])}.  % The first 'ok' parameter is for attuning to standard interface of an OTP supervision tree
