@@ -110,7 +110,7 @@ terminate(shutdown,SrvState) ->
 %% NOTE:      This message can be received only once, since if the dev_server process crashes, the entire
 %%            device node is shut down by its application master (The Janet Device is a permanent application)
 %%
-handle_call({dev_reg,DevSrvPid,DevStatemPid},_,SrvState) when SrvState#devmgrstate.dev_state =:= booting ->
+handle_call({dev_reg,DevSrvPid,DevStatemPid},{DevSrvPid,_},SrvState) when SrvState#devmgrstate.dev_state =:= booting andalso node(DevSrvPid) =:= SrvState#devmgrstate.dev_node ->
 
  % Update the device's state to "CONNECTING" in the 'devmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,sup_pid=self(),status="CONNECTING"}) end),
