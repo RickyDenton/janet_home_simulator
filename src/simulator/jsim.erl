@@ -11,13 +11,15 @@
 -export([stop_subloc/1,restart_subloc/1]).        % Per-sublocation stop/restart
 -export([stop_loc/1,restart_loc/1]).              % Per-location stop/restart
 -export([stop_all_nodes/0,restart_all_nodes/0]).  % All-nodes stop/restart
+
+%% ---------------------------------- SIMULATION UTILITY FUNCTIONS ---------------------------------- %%
 -export([print_nodes/0,print_nodes/1]).           % Running and stopped nodes info
-      
+-export([print_ctr_table/1,print_ctr_table/2]).   % Controller Nodes interaction
+	  
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
 
 -include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
-
 
 %%====================================================================================================================================
 %%                                                  JANET SIMULATOR RUN AND STOP                                                       
@@ -341,6 +343,10 @@ restart_all_nodes() ->
  catch(change_all_nodes_statuses(restart)).
 
 
+%%====================================================================================================================================
+%%                                                   SIMULATION UTILITY FUNCTIONS                                                        
+%%====================================================================================================================================
+
 %% =============================================== RUNNING AND STOPPED NODES INFO =============================================== %%
 
 %% DESCRIPTION:  Prints the IDs of all stopped and/or running JANET nodes
@@ -368,6 +374,43 @@ print_nodes(running) ->
 print_nodes(_) ->
  io:format("usage: print_nodes(stopped|running|all)~n"),
  {error,badarg}. 
+ 
+ 
+%% ================================================ CONTROLLER NODES INTERACTION  ================================================ %%
+
+%% DESCRIPTION:  Prints a specific or all Mnesia RAM Tables in a running controller node
+%%
+%% ARGUMENTS:    - (Loc_id), (Loc_id,all): Print all Mnesia RAM Tables in the controller node of location "Loc_id"
+%%               - (Loc_id,TableType):     Prints the TableType Mnesia RAM table in the controller node of location "Loc_id",
+%%                                         with the following table types being allowed, also considering shorthand forms
+%%                                           - devalloc
+%%                                           - devhandler
+%%
+%% RETURNS:      - ok                          -> The specified tables were printed
+%%               - {error,janet_not_running}   -> The Janet Simulator is not running
+%%               - {error,location_not_exists} -> The location associated with the specified controller node does not exist 
+%%               - {error,ctrmanager_stopped}  -> The controller node is currently stopped
+%%               - {error,unknown_table}       -> Unknown TableType
+%%               - {error,request_timeout}     -> Request timeout (either on the controller node or in its manager)
+%%               - {error,ctr_timeout}         -> Controller node timeout
+%%               - {error,badarg}              -> Invalid arguments
+%%
+%% NOTE:         This function relies on the fact that all I/O of the controller (slave)
+%%               node is automatically reidirected to the simulator (master) node
+%%
+print_ctr_table(Loc_id) when is_number(Loc_id), Loc_id>0 ->
+ catch(ctr_command(Loc_id,ctr_db,print_table,[]));
+ 
+print_ctr_table(_) -> 
+ io:format("usage: print_ctr_table(Loc_id,|all|Ctr_Table)~n"),
+ {error,badarg}. 
+ 
+print_ctr_table(Loc_id,TableType) when is_number(Loc_id), Loc_id>0, is_atom(TableType) ->
+ catch(ctr_command(Loc_id,ctr_db,print_table,[TableType]));
+
+print_ctr_table(_,_) -> 
+ io:format("usage: print_ctr_table(Loc_id,|all|Ctr_Table)~n"),
+ {error,badarg}. 
 
 
 %%====================================================================================================================================
@@ -392,8 +435,8 @@ change_node_status(NodeTypeShortHand,Node_id,Mode) ->
    % If it is running, determine the passed node type, taking shorthand forms into account
    NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
    
-   % Retrieve the node's manager process status and its location ID
-   {MgrStatus,Loc_id} = db:get_manager_info(NodeType,Node_id),
+   % Retrieve the node's manager location ID and status
+   {Loc_id,_,MgrStatus} = db:get_manager_info(NodeType,Node_id),
    
     % Verify the node's status change to be valid (i.e. not attempting
     % to stop an already stopped or restart an already running node)
@@ -754,7 +797,7 @@ change_devices_statuses([],_,_) ->
 change_devices_statuses(DevIdList,Sup_pid,Mode) ->
 
  % Retrieve the statuses of all device managers associated with the 'dev_id's in the "DevIdList"
- MgrsStatuses = [ {element(1,catch(db:get_manager_info(device,Dev_id))),Dev_id} || Dev_id <- DevIdList ],
+ MgrsStatuses = [ {element(3,catch(db:get_manager_info(device,Dev_id))),Dev_id} || Dev_id <- DevIdList ],
 	
  % Filter possible errors occured while retrieving the device managers' statuses
  MgrsStatusesFails = [ {MgrStatusFail,Dev_id} || {MgrStatusFail,Dev_id} <- MgrsStatuses, MgrStatusFail =:= 'error' ],
@@ -922,7 +965,7 @@ verify_nodes_statuses_change(StoppedMgrs,_,restart) ->
 change_ctr_status(Loc_id,Sup_pid,Mode) ->
 
  % Retrieve the controller manager status
- {MgrStatus,_} = db:get_manager_info(controller,Loc_id),
+ {_,_,MgrStatus} = db:get_manager_info(controller,Loc_id),
 
  % Verify the controller manager status change to be valid (i.e. not attempting
  % to stop an already stopped or restart an already running controller)
@@ -934,7 +977,11 @@ change_ctr_status(Loc_id,Sup_pid,Mode) ->
  % Return that the operation was successful and the updated controller manager status
  {ok,Mode}. 
  
- 
+
+%%====================================================================================================================================
+%%                                            SIMULATION UTILITY PRIVATE HELPER FUNCTIONS                                                        
+%%====================================================================================================================================
+
 %% =============================================== RUNNING AND STOPPED NODES INFO =============================================== %%
 
 %% Prints the lists of IDs of all stopped and/or running node managers
@@ -1024,6 +1071,44 @@ print_mgrs_list(StrHeader,MgrsList) ->
    io:format("(none)")
  end.
  
+ 
+%% ================================================ CONTROLLER NODES INTERACTION  ================================================ %%
+
+%% Attempts to synchronously execute a command on a running controller node by forwarding the request
+%% to its manager, returning the result of the operation (print_ctr_table(Loc_id,Table) helper function)
+ctr_command(Loc_id,Mod,Fun,Args) ->
+
+ % Ensure the JANET Simulator to be running
+ case utils:is_running(janet_simulator) of
+  false ->
+  
+   % If it is not, throw an error
+   throw({error,janet_not_running});
+  
+  true ->
+  
+   % Retrieve the controller's manager PID and status
+   {_,CtrMgrPid,CtrMgrStatus} = db:get_manager_info(controller,Loc_id),
+   case CtrMgrStatus of
+    "STOPPED" ->
+	
+	 % If the manager and thus the controller node
+	 % is stopped, the command cannot be forwarded
+	 throw({error,ctrmanager_stopped});
+	 
+	_ ->
+	
+	 % Otherwise forward the command to the controller node's
+	 % manager and wait for a response up to a predefined timeout
+	 try gen_server:call(CtrMgrPid,{ctr_command,Mod,Fun,Args},5000)
+     catch
+	  exit:{timeout,_} ->
+	   
+	   % Command timeout
+	   throw({error,request_timeout})
+     end	   
+   end
+ end.
  
 %%====================================================================================================================================
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        

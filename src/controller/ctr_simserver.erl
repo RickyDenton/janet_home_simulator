@@ -19,13 +19,13 @@ init(_) ->
  
  % Return the server initial state, where further initialization operations will be performed in the "handle_continue(Continue,State)"
  % callback function for parallelization purposes (and for allowing the ctr_manager process to respond to the registration request)  
- {ok,booting,{continue,init}}. %% [TODO]: Define the server state via a proper record
+ {ok,{booting,none},{continue,init}}. %% [TODO]: Define the server state via a proper record
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%  
 
 %% Registers the JANET controller node with its controller manager in the JANET simulator node by passing the PID of the ctr_simserver
-handle_continue(init,booting) ->
+handle_continue(init,{booting,none}) ->
 
  % Retrieve the 'mgrpid' environment variable
  {ok,MgrPid} = application:get_env(mgrpid),
@@ -38,7 +38,7 @@ handle_continue(init,booting) ->
  gen_server:call(MgrPid,{ctr_reg,self()},10000),
  
  io:format("[dev_server]: Initialized~n"),
- {noreply,online}. %% [TODO]: Online or something else?
+ {noreply,{online,MgrPid}}. %% [TODO]: Online or something else?
  
  
 %% ========================================================== TERMINATE ========================================================== %% 
@@ -51,6 +51,21 @@ terminate(normal,_) ->
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
+%% SENDER:    The controller node's manager
+%% WHEN:      (varies) [TODO]: Double-check
+%% PURPOSE:   Execute a command on the controller's node and return the result of the operation
+%% CONTENTS:  The Module, Function and Arguments to be evaluated by the via apply()
+%% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Simulator)
+%% ACTIONS:   Execute the required command via apply()
+%% ANSWER:    The result of the apply() function
+%% NEW STATE: -
+%%
+handle_call({ctr_command,Mod,Fun,Args},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
+
+ % Execute the required command and return its result
+ {reply,apply(Mod,Fun,Args),{State,MgrPid}};  
+ 
+ 
 %% --------- STUB
 handle_call(Num,_,{Sum,N}) when is_number(Num) ->
  New_Sum = Sum + Num,

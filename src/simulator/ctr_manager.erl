@@ -28,7 +28,7 @@ init(Loc_id) ->
  process_flag(trap_exit,true),
  
  % Register the manager in the 'ctrmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=Loc_id,sup_pid=self(),status="BOOTING"}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=Loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
  % Return the server initial state, where the initialization of the controller node will continue
  % in the "handle_continue(Continue,State)" callback function for parallelization purposes 
@@ -91,7 +91,7 @@ handle_continue(init,SrvState) ->
 terminate(shutdown,SrvState) ->
  
  % Update the controller node state as "STOPPED" and deregister the manager's PID from the 'ctrmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,sup_pid='-',status="STOPPED"}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid='-',status="STOPPED"}) end),
  
  % Note that since they are linked the termination of the controller manager
  % also causes the controller node to terminate with reason 'shutdown'
@@ -106,7 +106,7 @@ terminate(shutdown,SrvState) ->
 %% WHEN:      During the ctr_simserver initialization (handle_continue(init,_))
 %% PURPOSE:   Controller registration request
 %% CONTENTS:  The PID of the ctr_simserver
-%% MATCHES:   When the controller is booting (and the requests comes from the spawned controller node)
+%% MATCHES:   When the controller is booting (and the request comes from the spawned controller node)
 %% ACTIONS:   Update the controller's state to "ONLINE" in the 'ctrmanager' table
 %% ANSWER:    'ok' (the controller registration was successful)
 %% NEW STATE: Set the 'ctr_srv_pid' and update the 'ctr_state' to 'online"
@@ -118,13 +118,41 @@ handle_call({ctr_reg,CtrSrvPid},{CtrSrvPid,_},SrvState) when SrvState#ctrmgrstat
 
  % Update the controller node state to "ONLINE" in the 'ctrmanager' table 
  %% [TODO]: Maybe another intermediate state is required for checking if it can connect with the remote MongoDB database 
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,sup_pid=self(),status="ONLINE"}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="ONLINE"}) end),
  
  % Log that the controller has successfully booted
  io:format("[ctrmgr-" ++ integer_to_list(SrvState#ctrmgrstate.loc_id) ++ "]: Controller node successfully booted~n"),
  
  % Confirm the controller registration and update the 'ctr_srv_pid' and the 'ctr_state' state variables
  {reply,ok,SrvState#ctrmgrstate{ctr_state = online, ctr_srv_pid = CtrSrvPid}}; 
+ 
+ 
+%% SENDER:    The simulation controller (the user)
+%% WHEN:      -
+%% PURPOSE:   Execute a command on the controller's node via its 'ctr_simserver' and return the result of the operation
+%% CONTENTS:  The Module, Function and Arguments to be evaluated by the 'ctr_simserver' via apply()
+%% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Simulator)
+%% ACTIONS:   Forward the command to the 'ctr_simserver' via a synhcronous call and return its response [TODO]: Rewrite using a gen_cli?
+%% ANSWER:    The answer of the 'ctr_simserver', consisting in the result of the specified command
+%% NEW STATE: -
+%%
+handle_call({ctr_command,Mod,Fun,Args},{CommPid,_},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =/= none andalso node(CommPid) =:= node() ->
+
+ % Forward the command to the controller 'ctr_simserver' wait for its response up to a predefined timeout
+ Res = try gen_server:call(SrvState#ctrmgrstate.ctr_srv_pid,{ctr_command,Mod,Fun,Args},4800)
+ catch
+  exit:{timeout,_} ->
+  
+   % ctr_simserver timeout
+   {error,ctr_timeout}
+ end,
+ 
+ % Return the 'ctr_simserver' response (or the timeout expiration)
+ {reply,Res,SrvState};  
+ 
+ 
+ 
+ 
  
 %% --------- STUB
 handle_call(Num,_,{Sum,N}) when is_number(Num) ->

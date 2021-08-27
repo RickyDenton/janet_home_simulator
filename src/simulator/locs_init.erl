@@ -26,7 +26,7 @@ locs_init() ->
   N_Loc > 0 ->
    
    % Report that the initialization process is starting by printing the number of records in the database disc_copies tables
-   io:format("[locs_init]: The database contains ~w location(s), ~w sublocation(s) and ~w device(s), initializing the locations' tree...~n",[N_Loc,N_Subloc,N_Dev]),
+   io:format("[locs_init]: The database contains ~w location(s), ~w sublocation(s) and ~w device(s), spawning the locations' trees...~n",[N_Loc,N_Subloc,N_Dev]),
    
    % Retrieve the IDs of all locations in the database and use them for spawning their associated
    % location supervisors (sup_loc) under the locations' tree top supervisor (sup_locs)

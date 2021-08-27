@@ -45,7 +45,7 @@
 -record(ctrmanager,
         {
 		 loc_id,        % The location ID
-		 sup_pid,       % The PID of the controller node's manager
+		 mgr_pid,       % The PID of the controller node's manager
 		 status         % The controller node's status ("BOOTING" | "ONLINE" | "STOPPED")
 		}).
 
@@ -54,6 +54,6 @@
         {
 		 dev_id,        % The device ID
 		 loc_id,        % The ID of the location the device belongs to
-		 sup_pid,       % The PID of the device node's manager
+		 mgr_pid,       % The PID of the device node's manager
 		 status         % The device node's status ("BOOTING" | "CONNNECTING" | "ONLINE" | "STOPPED")
 		}).    

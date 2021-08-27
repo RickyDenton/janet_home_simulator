@@ -29,7 +29,7 @@ init({Dev_id,Loc_id}) ->
  process_flag(trap_exit,true),
  
  % Register the manager in the 'devmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,sup_pid=self(),status="BOOTING"}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
  % Return the server initial state, where the initialization of the device node will continue
  % in the "handle_continue(Continue,State)" callback function for parallelization purposes  
@@ -88,7 +88,7 @@ handle_continue(init,SrvState) ->
 terminate(shutdown,SrvState) ->
   
  % Update the device node state as "STOPPED" and deregister the manager's PID from the 'devmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,sup_pid='-',status="STOPPED"}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid='-',status="STOPPED"}) end),
  
  % Note that since they are linked the termination of the device manager
  % also causes the device node to terminate with reason 'shutdown'
@@ -103,7 +103,7 @@ terminate(shutdown,SrvState) ->
 %% WHEN:      During the dev_server initialization (handle_continue(init,_))
 %% PURPOSE:   Device registration request
 %% CONTENTS:  The dev_server and dev_statem PIDs
-%% MATCHES:   When the device is booting (and the requests comes from the spawned device node)
+%% MATCHES:   When the device is booting (and the request comes from the spawned device node)
 %% ACTIONS:   Update the device's state to "CONNECTING" in the 'devmanager' table
 %% ANSWER:    'ok' (the device registration was successful)
 %% NEW STATE: Set the 'dev_srv_pid' and 'dev_statem_pid' and update the 'dev_state' to 'connecting'
@@ -114,7 +114,7 @@ terminate(shutdown,SrvState) ->
 handle_call({dev_reg,DevSrvPid,DevStatemPid},{DevSrvPid,_},SrvState) when SrvState#devmgrstate.dev_state =:= booting andalso node(DevSrvPid) =:= SrvState#devmgrstate.dev_node ->
 
  % Update the device node state to "CONNECTING" in the 'devmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,sup_pid=self(),status="CONNECTING"}) end),
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid=self(),status="CONNECTING"}) end),
  
  % Log that the device has successfully booted
  io:format("[devmgr-" ++ integer_to_list(SrvState#devmgrstate.dev_id) ++ "]: Device node successfully booted~n"),

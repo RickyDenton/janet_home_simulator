@@ -322,9 +322,9 @@ print_table_header(device) ->
 print_table_header(suploc) -> 
  io:format("SUPLOC TABLE {loc_id,sup_pid}~n============~n");
 print_table_header(ctrmanager) -> 
- io:format("CTRMANAGER TABLE {loc_id,sup_pid,status}~n================~n");
+ io:format("CTRMANAGER TABLE {loc_id,mgr_pid,status}~n================~n");
 print_table_header(devmanager) -> 
- io:format("DEVMANAGER TABLE {dev_id,loc_id,sup_pid,status}~n================~n").
+ io:format("DEVMANAGER TABLE {dev_id,loc_id,mgr_pid,status}~n================~n").
 
 %% Prints all records in a table, or "(empty)" if there are none (print_table(Table) helper function)
 print_table_records(TableRecords) ->
@@ -775,7 +775,7 @@ get_subloc_devs(_) ->
  {error,badarg}.
  
  
-%% DESCRIPTION:  Returns the status and the location ID of a node's manager (ctr_manager or dev_manager)
+%% DESCRIPTION:  Returns the location ID, the PID and the status of a node's manager (ctr_manager or dev_manager)
 %%
 %% ARGUMENTS:    - NodeTypeShorthand: An atom indicating the type of node to be restarted, also taking
 %%                                    into account shorthand forms, with the following being allowed:
@@ -783,7 +783,7 @@ get_subloc_devs(_) ->
 %%                                     - device, dev          -> device node
 %%               - Node_id: The node's ID ('loc_id' for controller and 'dev_id' for device nodes)
 %%
-%% RETURNS:      - {ManagerStatus,Loc_id} -> The status and associated location ID of the manager of node "Node_id"
+%% RETURNS:      - {Loc_id,Mgr_Pid,MgrStatus}            -> The node's manager location ID, PID and status as a tuple
 %%
 %% THROWS: 		 - {error,location_not_exists}           -> The location associated with the specified controller node does not exist 
 %%               - {error,device_not_exists}             -> The specified device does not exist
@@ -820,8 +820,8 @@ get_manager_info(controller,Loc_id) ->
 	
   {ok,CtrMgrRecord} ->
 	  
-   % If the controller manager's record was successfully retrieved, return its status and the Loc_id
-   {CtrMgrRecord#ctrmanager.status,Loc_id}
+   % If the controller manager's record was successfully retrieved, return its location ID, PID and status
+   {Loc_id,CtrMgrRecord#ctrmanager.mgr_pid,CtrMgrRecord#ctrmanager.status}
  end;
 
 get_manager_info(device,Dev_id) ->
@@ -850,10 +850,10 @@ get_manager_info(device,Dev_id) ->
 	
   {ok,DevMgrRecord} ->
 	  
-   % If the device manager's record was successfully retrieved, return its status and 'loc_id'
-   {DevMgrRecord#devmanager.status,DevMgrRecord#devmanager.loc_id}
+   % If the device manager's record was successfully retrieved, return its location ID, PID and status
+   {DevMgrRecord#devmanager.loc_id,DevMgrRecord#devmanager.mgr_pid,DevMgrRecord#devmanager.status}
  end;
- 
+  
 get_manager_info(NodeTypeShortHand,Node_id) ->
 
  % Determine the node type, also taking shorthand forms into account
@@ -1345,7 +1345,7 @@ delete_device(_) ->
 delete_devmanager(Dev_id) ->
 
  % Attempt to retrieve the device's location ID from the 'devmanager' table
- {_,Loc_id} = get_manager_info(device,Dev_id),
+ {Loc_id,_,_} = get_manager_info(device,Dev_id),
 
  % Attempt to retrieve the PID of the location's 'sup_loc' supervisor
  Sup_pid = get_suploc_pid(Loc_id),
