@@ -312,7 +312,7 @@ print_table(_) ->
 print_table() ->
  print_table(all).
  
-%% Prints the header of a table (print_table() helper function) 
+%% Prints a table's header (print_table() helper function) 
 print_table_header(location) ->
  io:format("LOCATION TABLE {loc_id,name,user,port}~n==============~n");
 print_table_header(sublocation) ->
@@ -327,19 +327,10 @@ print_table_header(devmanager) ->
  io:format("DEVMANAGER TABLE {dev_id,loc_id,mgr_pid,status}~n================~n").
 
 %% Prints all records in a table, or "(empty)" if there are none (print_table(Table) helper function)
+print_table_records(TableRecords) when TableRecords == [] ->
+ io:format("(empty)~n~n");
 print_table_records(TableRecords) ->
-
- % Check if the TableRecords are empty
- case TableRecords of
- 
-  % If they are, just print "(empty)"
-  [] ->
-   io:format("(empty)~n~n");
-   
-  % Otherwise recursively print all records in the table
-  _ ->
-   print_table_records_list(TableRecords)
- end.
+ print_table_records_list(TableRecords).
 
 %% Prints all records in a list (print_table(Table)->print_table_records(TableRecords) helper function)  
 print_table_records_list([]) ->
@@ -620,7 +611,7 @@ get_table_records(Tabletype) when is_atom(Tabletype) ->
   unknown ->
    {error,unknown_table};
   
-  % Otherwise return all table records
+  % Otherwise return all the table's records
   _ ->
    mnesia:dirty_select(Table,[{'_',[],['$_']}])  % The second argument is a "catch-all" clause
  end;
@@ -1745,7 +1736,7 @@ get_all_users() ->
  lists:usort(UnfilteredUserList).
  
 
-%% DESCRIPTION:  Returns the table name atom associated to its argument, also considering shorthand forms
+%% DESCRIPTION:  Returns the table name atom associated with its argument, also considering shorthand forms
 %%
 %% ARGUMENTS:    - Tabletype: A table name, possibly in a shorthand form, with the following being allowed:
 %%                            
@@ -1758,10 +1749,11 @@ get_all_users() ->
 %%                            - devmanager,devmgr,devicemgr     -> devmanager
 %%                              devicemanager
 %%
-%% RETURNS:      - Tableatom -> The table name atom associated to the Tabletype
-%%               - Unknown   -> If no table name could be associated to Tabletype
+%% RETURNS:      - Tableatom      -> The table atom name associated with Tabletype
+%%               - unknown        -> If no table name could be associated with Tabletype
+%%               - {error,badarg} -> Invalid arguments
 %%
-resolve_tabletype_shorthand(Tabletype) ->
+resolve_tabletype_shorthand(Tabletype) when is_atom(Tabletype) ->
  if
   % --- disc_copies tables --- %
   Tabletype =:= loc orelse Tabletype =:= location ->
@@ -1782,4 +1774,7 @@ resolve_tabletype_shorthand(Tabletype) ->
   % Unknown Tabletype  
   true ->
    unknown
- end.
+ end;
+ 
+resolve_tabletype_shorthand(_) ->
+ {error,badarg}. 

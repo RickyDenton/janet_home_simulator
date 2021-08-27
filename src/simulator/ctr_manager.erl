@@ -130,16 +130,16 @@ handle_call({ctr_reg,CtrSrvPid},{CtrSrvPid,_},SrvState) when SrvState#ctrmgrstat
 %% SENDER:    The simulation controller (the user)
 %% WHEN:      -
 %% PURPOSE:   Execute a command on the controller's node via its 'ctr_simserver' and return the result of the operation
-%% CONTENTS:  The Module, Function and Arguments to be evaluated by the 'ctr_simserver' via apply()
-%% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Simulator)
+%% CONTENTS:  The Module, Function and ArgsList to be evaluated by the 'ctr_simserver' via apply()
+%% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Simulator node)
 %% ACTIONS:   Forward the command to the 'ctr_simserver' via a synhcronous call and return its response [TODO]: Rewrite using a gen_cli?
 %% ANSWER:    The answer of the 'ctr_simserver', consisting in the result of the specified command
 %% NEW STATE: -
 %%
-handle_call({ctr_command,Mod,Fun,Args},{CommPid,_},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =/= none andalso node(CommPid) =:= node() ->
+handle_call({ctr_command,Module,Function,ArgsList},{CommPid,_},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =/= none andalso node(CommPid) =:= node() ->
 
- % Forward the command to the controller 'ctr_simserver' wait for its response up to a predefined timeout
- Res = try gen_server:call(SrvState#ctrmgrstate.ctr_srv_pid,{ctr_command,Mod,Fun,Args},4800)
+ % Forward the command to the controller 'ctr_simserver', waiting for its response up to a predefined timeout
+ Res = try gen_server:call(SrvState#ctrmgrstate.ctr_srv_pid,{ctr_command,Module,Function,ArgsList},4800)
  catch
   exit:{timeout,_} ->
   

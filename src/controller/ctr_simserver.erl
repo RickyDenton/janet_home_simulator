@@ -53,17 +53,17 @@ terminate(normal,_) ->
 
 %% SENDER:    The controller node's manager
 %% WHEN:      (varies) [TODO]: Double-check
-%% PURPOSE:   Execute a command on the controller's node and return the result of the operation
-%% CONTENTS:  The Module, Function and Arguments to be evaluated by the via apply()
+%% PURPOSE:   Execute a command on the controller node and return the result of the operation
+%% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()
 %% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Simulator)
 %% ACTIONS:   Execute the required command via apply()
 %% ANSWER:    The result of the apply() function
 %% NEW STATE: -
 %%
-handle_call({ctr_command,Mod,Fun,Args},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
+handle_call({ctr_command,Module,Function,ArgsList},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
 
  % Execute the required command and return its result
- {reply,apply(Mod,Fun,Args),{State,MgrPid}};  
+ {reply,apply(Module,Function,ArgsList),{State,MgrPid}};  
  
  
 %% --------- STUB

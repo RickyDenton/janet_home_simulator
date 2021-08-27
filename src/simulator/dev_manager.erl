@@ -123,6 +123,32 @@ handle_call({dev_reg,DevSrvPid,DevStatemPid},{DevSrvPid,_},SrvState) when SrvSta
  {reply,ok,SrvState#devmgrstate{dev_state = connecting, dev_srv_pid = DevSrvPid, dev_statem_pid = DevStatemPid}}; 
 
 
+%% SENDER:    The simulation controller (the user)
+%% WHEN:      -
+%% PURPOSE:   Execute a command on the device's node via its 'dev_server' and return the result of the operation
+%% CONTENTS:  The Module, Function and ArgsList to be evaluated by the 'dev_server' via apply()
+%% MATCHES:   When the 'dev_server' is registered (and the request comes from the JANET Simulator node)
+%% ACTIONS:   Forward the command to the 'dev_server' via a synhcronous call and return its response [TODO]: Rewrite using a gen_cli?
+%% ANSWER:    The answer of the 'dev_server', consisting in the result of the specified command
+%% NEW STATE: -
+%%
+handle_call({dev_command,Module,Function,ArgsList},{CommPid,_},SrvState) when SrvState#devmgrstate.dev_srv_pid =/= none andalso node(CommPid) =:= node() ->
+
+ % Forward the command to the device 'dev_server', waiting for its response up to a predefined timeout
+ Res = try gen_server:call(SrvState#devmgrstate.dev_srv_pid,{dev_command,Module,Function,ArgsList},4800)
+ catch
+  exit:{timeout,_} ->
+  
+   % dev_server timeout
+   {error,dev_timeout}
+ end,
+ 
+ % Return the 'dev_server' response (or the timeout expiration)
+ {reply,Res,SrvState};  
+ 
+ 
+ 
+
 %% --------- STUB
 handle_call(Num,_,{Sum,N}) when is_number(Num) ->
  New_Sum = Sum + Num,

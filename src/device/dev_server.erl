@@ -20,7 +20,7 @@ init(_) ->
  
  % Return the server initial state, where further initialization operations will be performed in the "handle_continue(Continue,State)"
  % callback function for parallelization purposes (and for allowing the dev_manager process to respond to the registration request)  
- {ok,booting,{continue,init}}. %% [TODO]: Define the server state via a proper record
+ {ok,{booting,none},{continue,init}}. %% [TODO]: Define the server state via a proper record
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%  
@@ -30,7 +30,7 @@ init(_) ->
 %%
 %% [TODO]: Rewrite description if necessary
 %%
-handle_continue(init,booting) ->
+handle_continue(init,{booting,none}) ->
 
  % Retrieve the 'mgrpid' environment variable
  {ok,MgrPid} = application:get_env(mgrpid),
@@ -58,7 +58,7 @@ handle_continue(init,booting) ->
    %% [TODO]: Continue from here
 	 
    io:format("[dev_server]: Initialized~n"),
-   {noreply,connecting}
+   {noreply,{connecting,MgrPid}}
  end.
  
  
@@ -71,6 +71,25 @@ terminate(normal,_) ->
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
+
+%% SENDER:    The device node's manager
+%% WHEN:      (varies) [TODO]: Double-check
+%% PURPOSE:   Execute a command on the device node and return the result of the operation
+%% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()
+%% MATCHES:   When the 'dev_server' is registered (and the request comes from the JANET Simulator)
+%% ACTIONS:   Execute the required command via apply()
+%% ANSWER:    The result of the apply() function
+%% NEW STATE: -
+%%
+handle_call({dev_command,Module,Function,ArgsList},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
+
+ % Execute the required command and return its result
+ {reply,apply(Module,Function,ArgsList),{State,MgrPid}};  
+
+
+
+
+
 
 %% --------- STUB
 handle_call(Num,_,{Sum,N}) when is_number(Num) ->

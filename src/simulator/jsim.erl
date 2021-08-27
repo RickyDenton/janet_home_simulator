@@ -14,7 +14,9 @@
 
 %% ---------------------------------- SIMULATION UTILITY FUNCTIONS ---------------------------------- %%
 -export([print_nodes/0,print_nodes/1]).           % Running and stopped nodes info
--export([print_ctr_table/1,print_ctr_table/2]).   % Controller Nodes interaction
+-export([print_ctr_table/1,print_ctr_table/2,     % Controller Nodes interaction
+         print_ctr_tree/1,ctr_command/4]).   
+-export([dev_command/4]).                         % Device Nodes interaction
 	  
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
@@ -389,28 +391,101 @@ print_nodes(_) ->
 %% RETURNS:      - ok                          -> The specified tables were printed
 %%               - {error,janet_not_running}   -> The Janet Simulator is not running
 %%               - {error,location_not_exists} -> The location associated with the specified controller node does not exist 
-%%               - {error,ctrmanager_stopped}  -> The controller node is currently stopped
+%%               - {error,node_stopped}        -> The controller node is currently stopped
 %%               - {error,unknown_table}       -> Unknown TableType
 %%               - {error,request_timeout}     -> Request timeout (either on the controller node or in its manager)
 %%               - {error,ctr_timeout}         -> Controller node timeout
 %%               - {error,badarg}              -> Invalid arguments
 %%
-%% NOTE:         This function relies on the fact that all I/O of the controller (slave)
+%% NOTE:         This function relies on the fact that all I/O in the controller (slave)
 %%               node is automatically reidirected to the simulator (master) node
 %%
 print_ctr_table(Loc_id) when is_number(Loc_id), Loc_id>0 ->
- catch(ctr_command(Loc_id,ctr_db,print_table,[]));
+ catch(gen_ctr_command(Loc_id,ctr_db,print_table,[]));
  
 print_ctr_table(_) -> 
  io:format("usage: print_ctr_table(Loc_id,|all|Ctr_Table)~n"),
  {error,badarg}. 
  
 print_ctr_table(Loc_id,TableType) when is_number(Loc_id), Loc_id>0, is_atom(TableType) ->
- catch(ctr_command(Loc_id,ctr_db,print_table,[TableType]));
+ catch(gen_ctr_command(Loc_id,ctr_db,print_table,[TableType]));
 
 print_ctr_table(_,_) -> 
  io:format("usage: print_ctr_table(Loc_id,|all|Ctr_Table)~n"),
  {error,badarg}. 
+
+
+%% DESCRIPTION:  Prints the devices sublocations allocation in a running controller node as a tree
+%%
+%% ARGUMENTS:    - Loc_id: The location ID of the controller node
+%%
+%% RETURNS:      - ok                          -> The devices sublocations allocation in the controller was printed
+%%               - {error,janet_not_running}   -> The Janet Simulator is not running
+%%               - {error,location_not_exists} -> The location associated with the specified controller node does not exist 
+%%               - {error,node_stopped}        -> The controller node is currently stopped
+%%               - {error,request_timeout}     -> Request timeout (either on the controller node or in its manager)
+%%               - {error,ctr_timeout}         -> Controller node timeout
+%%               - {error,badarg}              -> Invalid arguments
+%%
+%% NOTE:         This function relies on the fact that all I/O in the controller (slave)
+%%               node is automatically reidirected to the simulator (master) node
+%%
+print_ctr_tree(Loc_id) when is_number(Loc_id), Loc_id>0 ->
+ catch(gen_ctr_command(Loc_id,ctr_db,print_tree,[]));
+ 
+print_ctr_tree(_) -> 
+ io:format("usage: print_ctr_tree(Loc_id)~n"),
+ {error,badarg}.
+
+
+%% DESCRIPTION:  Executes a custom command on a running controller node
+%%
+%% ARGUMENTS:    - Loc_id:   The location ID of the controller node
+%%               - Module:   The Erlang module where the function to be executed is defined
+%%               - Function: The function to be executed
+%%               - ArgsList: The [LIST] of function arguments
+%%
+%% RETURNS:      - ok                          -> The devices sublocations allocation in the controller was printed
+%%               - {error,janet_not_running}   -> The Janet Simulator is not running
+%%               - {error,location_not_exists} -> The location associated with the specified controller node does not exist 
+%%               - {error,node_stopped}        -> The controller node is currently stopped
+%%               - {error,request_timeout}     -> Request timeout (either on the controller node or in its manager)
+%%               - {error,ctr_timeout}         -> Controller node timeout
+%%               - {error,badarg}              -> Invalid arguments
+%%
+%% NOTE:         This function is for DEBUGGING PURPOSES ONLY, and will crash the controller node in case of errors
+%%
+ctr_command(Loc_id,Module,Function,ArgsList) when is_number(Loc_id), Loc_id>0 ->
+ catch(gen_ctr_command(Loc_id,Module,Function,ArgsList));
+ 
+ctr_command(_,_,_,_) ->
+ io:format("usage: ctr_command(Loc_id,Module,Function,ArgsList)~n").
+
+
+%% ================================================== DEVICE NODES INTERACTION  ================================================== %%
+
+%% DESCRIPTION:  Executes a custom command on a running device node
+%%
+%% ARGUMENTS:    - Dev_id:   The node's device ID
+%%               - Module:   The Erlang module where the function to be executed is defined
+%%               - Function: The function to be executed
+%%               - ArgsList: The [LIST] of function arguments
+%%
+%% RETURNS:      - ok                        -> The devices sublocations allocation in the controller was printed
+%%               - {error,janet_not_running} -> The Janet Simulator is not running
+%%               - {error,device_not_exists} -> The specified device does not exist
+%%               - {error,node_stopped}      -> The device node is currently stopped
+%%               - {error,request_timeout}   -> Request timeout (either on the device node or in its manager)
+%%               - {error,dev_timeout}       -> Device node timeout
+%%               - {error,badarg}            -> Invalid arguments
+%%
+%% NOTE:         This function is for DEBUGGING PURPOSES ONLY, and will crash the device node in case of errors
+%%
+dev_command(Dev_id,Module,Function,ArgsList) when is_number(Dev_id), Dev_id>0 ->
+ catch(gen_dev_command(Dev_id,Module,Function,ArgsList));
+ 
+dev_command(_,_,_,_) ->
+ io:format("usage: dev_command(Dev_id,Module,Function,ArgsList)~n").
 
 
 %%====================================================================================================================================
@@ -1074,9 +1149,10 @@ print_mgrs_list(StrHeader,MgrsList) ->
  
 %% ================================================ CONTROLLER NODES INTERACTION  ================================================ %%
 
-%% Attempts to synchronously execute a command on a running controller node by forwarding the request
-%% to its manager, returning the result of the operation (print_ctr_table(Loc_id,Table) helper function)
-ctr_command(Loc_id,Mod,Fun,Args) ->
+%% Attempts to synchronously execute a command on a running controller node by forwarding the
+%% request to its manager, returning the result of the operation (print_ctr_table(Loc_id,Table),
+%% print_ctr_tree(Loc_id), ctr_command(Loc_id,Module,Function,ArgsList) helper function)
+gen_ctr_command(Loc_id,Module,Function,ArgsList) ->
 
  % Ensure the JANET Simulator to be running
  case utils:is_running(janet_simulator) of
@@ -1094,13 +1170,13 @@ ctr_command(Loc_id,Mod,Fun,Args) ->
 	
 	 % If the manager and thus the controller node
 	 % is stopped, the command cannot be forwarded
-	 throw({error,ctrmanager_stopped});
+	 throw({error,node_stopped});
 	 
 	_ ->
 	
 	 % Otherwise forward the command to the controller node's
 	 % manager and wait for a response up to a predefined timeout
-	 try gen_server:call(CtrMgrPid,{ctr_command,Mod,Fun,Args},5000)
+	 try gen_server:call(CtrMgrPid,{ctr_command,Module,Function,ArgsList},5000)
      catch
 	  exit:{timeout,_} ->
 	   
@@ -1109,6 +1185,46 @@ ctr_command(Loc_id,Mod,Fun,Args) ->
      end	   
    end
  end.
+
+
+%% ================================================== DEVICE NODES INTERACTION  ================================================== %%
+
+%% Attempts to synchronously execute a command on a running device node by forwarding the request to its
+%% manager, returning the result of the operation (dev_command(Loc_id,Module,Function,ArgsList) helper function)
+gen_dev_command(Dev_id,Module,Function,ArgsList) ->
+
+ % Ensure the JANET Simulator to be running
+ case utils:is_running(janet_simulator) of
+  false ->
+  
+   % If it is not, throw an error
+   throw({error,janet_not_running});
+  
+  true ->
+  
+   % Retrieve the device's manager PID and status
+   {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
+   case DevMgrStatus of
+    "STOPPED" ->
+	
+	 % If the manager and thus the device node
+	 % is stopped, the command cannot be forwarded
+	 throw({error,node_stopped});
+	 
+	_ ->
+	
+	 % Otherwise forward the command to the device node's manager
+	 % and wait for a response up to a predefined timeout
+	 try gen_server:call(DevMgrPid,{dev_command,Module,Function,ArgsList},5000)
+     catch
+	  exit:{timeout,_} ->
+	   
+	   % Command timeout
+	   throw({error,request_timeout})
+     end	   
+   end
+ end.
+
  
 %%====================================================================================================================================
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
