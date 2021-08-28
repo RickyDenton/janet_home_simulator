@@ -15,7 +15,7 @@ callback_mode() ->
 
 init(_) ->
 
- {ok,MgrPid} = application:get_env(mgrpid),
+ {ok,MgrPid} = application:get_env(mgr_pid),
  
  io:format("[statem_thermostat]: Initialized~n"),
  

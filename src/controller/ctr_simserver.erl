@@ -3,7 +3,7 @@
 -module(ctr_simserver).
 -behaviour(gen_server).
 
--export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2,handle_continue/2]).  % gen_server Behaviour Callback Functions
+-export([start_link/0,init/1,handle_call/3,handle_cast/2,handle_continue/2]).  % gen_server Behaviour Callback Functions
 
 %% [TODO]: Server state?
 
@@ -27,27 +27,19 @@ init(_) ->
 %% Registers the JANET controller node with its controller manager in the JANET simulator node by passing the PID of the ctr_simserver
 handle_continue(init,{booting,none}) ->
 
- % Retrieve the 'mgrpid' environment variable
- {ok,MgrPid} = application:get_env(mgrpid),
+ % Retrieve the 'mgr_pid' environment variable
+ {ok,MgrPid} = application:get_env(mgr_pid),
  
  % Attempt to register the JANET controller node with its controller
  % manager in the simulator node by passing the PID of the ctr_simserver
  %
  % NOTE: This registration request is performed synchronously since
  %       the controller node's execution cannot continue if it fails 
- gen_server:call(MgrPid,{ctr_reg,self()},10000),
+ ok = gen_server:call(MgrPid,{ctr_reg,self()},10000),
  
- io:format("[dev_server]: Initialized~n"),
+ io:format("[ctr_simserver]: Initialized~n"),
  {noreply,{online,MgrPid}}. %% [TODO]: Online or something else?
  
- 
-%% ========================================================== TERMINATE ========================================================== %% 
-
-%% --------- STUB
-% NOTE: This is currently not called on shutdown since the process is not trapping exit signals
-terminate(normal,_) ->
- io:format("[ctr_simserver]: Terminated").
-
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
@@ -78,6 +70,7 @@ handle_call(Num,_,{Sum,N}) when is_number(Num) ->
 %% --------- STUB
 handle_cast(reset,State) -> % Resets the server State
  {noreply,State}.
+
 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        

@@ -553,17 +553,17 @@ print_tree_device([Dev|NextDev],Indent) ->
  print_tree_device(NextDev,Indent).
 
 
-%% DESCRIPTION:  Returns a specific records in a table, if it exists
+%% DESCRIPTION:  Returns a table record by key, if it exists
 %%
-%% ARGUMENTS:    - Tabletype: The table where to search the record in, also considering shorthand forms
-%%               - Id:        The id of the record to be returned (>=0)
+%% ARGUMENTS:    - Tabletype: The table where to search the record, also considering shorthand forms
+%%               - Key:       The record key (>=0)
 %%
-%% RETURNS:      - {ok,Record}           -> The required record of id "Id" in table "Tabletype"
-%%               - {error,not_found}     -> The record with id "Id" was not found in table "Tabletype"
+%% RETURNS:      - {ok,Record}           -> The record with key "Key" in table "Tabletype"
+%%               - {error,not_found}     -> The record with key "Key" was not found in table "Tabletype"
 %%               - {error,unknown_table} -> Unknown table
 %%               - {error,badarg}        -> Invalid arguments
 %%
-get_record(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
+get_record(Tabletype,Key) when is_atom(Tabletype), is_number(Key), Key>=0 ->
 
  % Resolve possible table shorthand forms
  Table = resolve_tabletype_shorthand(Tabletype),
@@ -574,9 +574,9 @@ get_record(Tabletype,Id) when is_atom(Tabletype), is_number(Id), Id>=0 ->
   unknown ->
    {error,unknown_table};
   
-  % Otherwise, search for the record by Id
+  % Otherwise, search for the record by Key
   _ ->
-   case mnesia:transaction(fun() -> mnesia:read({Table,Id}) end) of
+   case mnesia:transaction(fun() -> mnesia:read({Table,Key}) end) of
     
 	% If the record was found, return it
     {atomic,[Record]} ->

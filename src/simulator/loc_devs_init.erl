@@ -32,11 +32,12 @@ init_devs_mgrs([],_,_) ->
  ok;
 init_devs_mgrs([Dev_id|NextDev_id],Loc_id,Sup_pid) -> 
  
- % Check the device manager associated to Dev_id not to be already registered in the 'devmanager' table
- case db:get_record(devmanager,Dev_id) of
-   
-  % If it is not, spawn it under the location 'sup_loc' supervisor
+ % Check if the device manager process already exists as a child of the 'sup_loc' supervisor
+ % (this is to take into account possible crashes of the 'loc_devs_init' and/or of the 'sup_loc' supervisor)
+ case supervisor:get_childspec(Sup_pid,utils:prefix_node_id(device,Dev_id)) of
   {error,not_found} ->
+ 
+   % If the device manager process doesn't exist, spawn it as a child of the 'sup_loc' supervisor
    {ok,_DevMgrPid} = supervisor:start_child(Sup_pid,
                                             {
                                              "dev-" ++ integer_to_list(Dev_id),         % ChildID
@@ -47,13 +48,12 @@ init_devs_mgrs([Dev_id|NextDev_id],Loc_id,Sup_pid) ->
 	                                         [dev_manager]                              % Child Modules (For Release Handling Purposes)
                                             });
 											
-  % Otherwise, if it is already registered, it means that it was spawned by a
-  % previous instance of this process that crashed, and so skip its initialization
-  {ok,_DevMgrRecord} ->
-   ok
-   
- end,
- 
+  {ok,_ChildSpec} ->
+
+    % If the device manager process already exists it means that it was spawned by a
+	% previous instance of this process that crashed, and so skip its initialization
+    ok
+ end, 
  % Initialize the next device manager
  init_devs_mgrs(NextDev_id,Loc_id,Sup_pid).
 

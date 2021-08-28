@@ -20,8 +20,8 @@
 %%                 (in particular, the loc_init process is created)
 %%
 %% THROWS:       none 
-init([Loc_id]) ->
-
+init(Loc_id) ->
+  
  % Register the PID of the location supervisor in the 'suploc' table using the location ID
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#suploc{loc_id=Loc_id,sup_pid=self()}) end),
 
@@ -64,8 +64,8 @@ init([Loc_id]) ->
 %%                                                         START FUNCTION                                                        
 %%====================================================================================================================================
 
-%% Called by the locations' tree top supervisor (sup_locs) whenever a new location tree is created, which may happen:
+%% Called by the locations' tree top supervisor 'sup_locs' whenever a new location tree is created, which may happen:
 %%  - At boot time by the locations' tree boot initializer     (locs_init:spawn_sup_loc([Loc_id|NextLoc_Id]))
 %%  - At run time when a new location is added to the database (db:add_location(Loc_id,Name,User,Port))
 start_link(Loc_id) ->
- supervisor:start_link(?MODULE,[Loc_id]).
+ supervisor:start_link(?MODULE,Loc_id).

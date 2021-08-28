@@ -49,7 +49,7 @@ run(Dev_id,Loc_id,MgrPid,Type,Config) when is_number(Dev_id), Dev_id>0, is_numbe
 	 % Otherwise initialize the JANET Device configuration parameters as for the arguments
      application:set_env(janet_device,dev_id,Dev_id),
      application:set_env(janet_device,loc_id,Loc_id),
-     application:set_env(janet_device,mgrpid,MgrPid),
+     application:set_env(janet_device,mgr_pid,MgrPid),
      application:set_env(janet_device,type,Type),
      application:set_env(janet_device,config,Config),
 	 

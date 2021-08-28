@@ -36,7 +36,7 @@ run(Loc_id,DevAlloc,MgrPid,RestPort,RemoteHost) when is_number(Loc_id), Loc_id>0
    
    % Otherwise, initialize the JANET Controller configuration parameters as for the arguments
    application:set_env(janet_controller,loc_id,Loc_id),
-   application:set_env(janet_controller,mgrpid,MgrPid),
+   application:set_env(janet_controller,mgr_pid,MgrPid),
    application:set_env(janet_controller,rest_port,RestPort),
    application:set_env(janet_controller,remotehost,RemoteHost),
    

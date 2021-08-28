@@ -385,8 +385,8 @@ print_nodes(_) ->
 %% ARGUMENTS:    - (Loc_id), (Loc_id,all): Print all Mnesia RAM Tables in the controller node of location "Loc_id"
 %%               - (Loc_id,TableType):     Prints the TableType Mnesia RAM table in the controller node of location "Loc_id",
 %%                                         with the following table types being allowed, also considering shorthand forms
-%%                                           - devalloc
-%%                                           - devhandler
+%%                                          - deva,devall,alloc,devalloc      -> devalloc
+%%                                          - devr,devreg,devregi,devregister -> devregister
 %%
 %% RETURNS:      - ok                          -> The specified tables were printed
 %%               - {error,janet_not_running}   -> The Janet Simulator is not running

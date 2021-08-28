@@ -2,9 +2,9 @@
 
 -module(ctr_db).
 -export([init_mnesia/1]).
--export([print_tree/0,print_table/0,print_table/1,get_table_records/1]).
+-export([print_tree/0,print_table/0,print_table/1,get_table_records/1,get_record/2]).
 
--include("ctr_mnesia_tables_definitions.hrl").  % Janet Cotnroller Mnesia Tables Records Definitions
+-include("ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
 
 
 %% DESCRIPTION:  Starts Mnesia in disc-less and permanent mode and initializes
@@ -38,9 +38,9 @@ init_mnesia(DevAlloc) ->
                                       {ram_copies, [node()]}
 									 ]),
 									
-   {atomic,ok} = mnesia:create_table(devhandler,
+   {atomic,ok} = mnesia:create_table(devregister,
                                      [
-									  {attributes, record_info(fields, devhandler)},
+									  {attributes, record_info(fields, devregister)},
                                       {ram_copies, [node()]}
 									 ]),
 									
@@ -82,8 +82,8 @@ print_table(all) ->
  io:format("~n"),
  print_table_header(devalloc),
  print_table_records(get_table_records(devalloc)),
- print_table_header(devhandler),
- print_table_records(get_table_records(devhandler));
+ print_table_header(devregister),
+ print_table_records(get_table_records(devregister));
 
 print_table(Tabletype) when is_atom(Tabletype) ->
 
@@ -112,9 +112,9 @@ print_table() ->
 %% Prints a table's header (print_table() helper function) 
 print_table_header(devalloc) ->
  io:format("DEVALLOC TABLE {subloc_id,devlist}~n==============~n");
-print_table_header(devhandler) ->
- io:format("DEVHANDLER TABLE {dev_id,handler_pid,devserver_pid}~n================~n").
-
+print_table_header(devregister) ->
+ io:format("DEVREGISTER TABLE {dev_id,handler_pid}~n=================~n").
+            
 %% Prints all records in a table, or "(empty)" if there are none (print_table(Table) helper function)
 print_table_records(TableRecords) when TableRecords == [] ->
  io:format("(empty)~n~n");
@@ -199,13 +199,14 @@ print_tree_devlist([],_) ->
  ok;
 print_tree_devlist([Dev_id|Next_Devid],Indentation) ->
 
- % Determine if the device "Dev_id" is currently registered within the controller
- case mnesia:dirty_read({devhandler,Dev_id}) of
+ % Determine if the device "Dev_id" is currently
+ % registered within and so connected to the controller
+ case mnesia:dirty_read({devregister,Dev_id}) of
   [] ->
-   DevRegStatus = "NOT_REGISTERED";
+   DevRegStatus = "OFFLINE";
    
   _ ->
-   DevRegStatus = "REGISTERED"
+   DevRegStatus = "ONLINE"
  end,
  
  % Print the device "Dev_id" along with its registration status
@@ -243,12 +244,51 @@ get_table_records(_) ->
  {error,badarg}.
  
  
+%% DESCRIPTION:  Returns a table record by key, if it exists
+%%
+%% ARGUMENTS:    - Tabletype: The table where to search the record, also considering shorthand forms
+%%               - Key:       The record key (>=0)
+%%
+%% RETURNS:      - {ok,Record}           -> The record with key "Key" in table "Tabletype"
+%%               - {error,not_found}     -> The record with key "Key" was not found in table "Tabletype"
+%%               - {error,unknown_table} -> Unknown table
+%%               - {error,badarg}        -> Invalid arguments
+%%
+get_record(Tabletype,Key) when is_atom(Tabletype) ->
+
+ % Resolve possible table shorthand forms
+ Table = resolve_tabletype_shorthand(Tabletype),
+ 
+ case Table of
+ 
+  % If unknown table, return an error
+  unknown ->
+   {error,unknown_table};
+  
+  % Otherwise, search for the record by Key
+  _ ->
+   case mnesia:transaction(fun() -> mnesia:read({Table,Key}) end) of
+    
+	% If the record was found, return it
+    {atomic,[Record]} ->
+	 {ok,Record};
+	 
+	% Otherwise, return that it was not found 
+	{atomic,[]} ->
+	 {error,not_found}
+   end
+ end;
+
+get_record(_,_) ->
+ {error,badarg}.
+ 
+ 
 %% DESCRIPTION:  Returns the table name atom associated with its argument, also considering shorthand forms
 %%
 %% ARGUMENTS:    - Tabletype: A table name, possibly in a shorthand form, with the following being allowed:
 %%
 %%                             - deva,devall,alloc,devalloc      -> devalloc
-%%                             - devh,devhand,devhandler,handler -> devhandler
+%%                             - devr,devreg,devregi,devregister -> devregister
 %%
 %% RETURNS:      - Tableatom      -> The table atom name associated with Tabletype
 %%               - unknown        -> If no table name could be associated with Tabletype
@@ -259,8 +299,8 @@ resolve_tabletype_shorthand(Tabletype) when is_atom(Tabletype) ->
   % --- ram_copies tables --- %
   Tabletype =:= deva orelse Tabletype =:= devall orelse Tabletype =:= alloc orelse Tabletype =:= devalloc ->
    devalloc;
-  Tabletype =:= devh orelse Tabletype =:= devhand orelse Tabletype =:= handler orelse Tabletype =:= devhandler ->
-   devhandler;
+  Tabletype =:= devr orelse Tabletype =:= devreg orelse Tabletype =:= devregi orelse Tabletype =:= devregister ->
+   devregister;
 
   % Unknown Tabletype  
   true ->

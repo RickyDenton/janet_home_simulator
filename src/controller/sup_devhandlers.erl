@@ -10,17 +10,12 @@
 %%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        
 %%====================================================================================================================================
 init(_) ->
-
- % Reset the contents of the 'devhandler' table for enforcing consistency in case this supervisor is restarted
- ets:delete_all_objects(devhandler),
- 
- % Return the supervisor flags and the list of children specifications
  {ok,
   {
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
    {
     simple_one_for_one,   % RestartStrategy (simple_one_for_one for optimization purposes since all its children are of the same type)
-	2,                    % MaxRestarts
+	1,                    % MaxRestarts
 	30                    % TimePeriod for MaxRestarts
    },
    

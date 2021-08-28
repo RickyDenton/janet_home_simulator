@@ -175,6 +175,7 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
 %% 
 %% NOTE:         While generating dynamic atoms is strongly discouraged in general, this is required
 %%               by some BIFs used in the application (e.g. erlang:set_cookie('node','cookie'))
+%%               [TODO]: Also used by 'dev_server's when attempting to register with their controller nodes
 %%
 str_to_atom(Str) ->
  list_to_atom(lists:flatten(io_lib:format("~s",[Str]))). 

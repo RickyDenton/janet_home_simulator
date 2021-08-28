@@ -13,9 +13,8 @@
         }).		 
 		
 %% Information on a device registered within the controller	
--record(devhandler,
+-record(devregister,
         {
 		 dev_id,         % The device's 'dev_id'
-		 handler_pid,    % The PID of the device handler in the Janet Controller
-		 devserver_pid   % The PID of the device server in the Janet Device
+		 handler_pid     % The PID of the device handler in the Janet Controller
 		}).
