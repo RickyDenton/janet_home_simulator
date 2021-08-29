@@ -549,7 +549,7 @@ print_tree_device([Dev|NextDev],Indent) ->
  end,
  
  % Print information on the device
- io:format("~s~s - ~s~n",[Indent,io_lib:format("~p",[Dev]),DevMgrStatus]),
+ io:format("~s{~w,~s,~w,~w,~p} - ~s~n",[Indent,Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]),Dev#device.sub_id,Dev#device.type,utils:deprefix_dev_config(Dev#device.config),DevMgrStatus]),
  print_tree_device(NextDev,Indent).
 
 
@@ -976,11 +976,10 @@ update_dev_sub(_,_) ->
 %% ARGUMENTS:    - Dev_id: The ID of the device to update the configuration, which must exist and be >0
 %%               - Config: The updated device configuration
 %%
-%% RETURNS:      - {atomic,ok}               -> Device configuration successfully updated
-%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
-%%               - {error,badarg}            -> Invalid arguments
-%%
-%% NOTE:         This function does not check the new configuration to be valid according to the device's type
+%% RETURNS:      - {atomic,ok}                 -> Device configuration successfully updated
+%%               - {aborted,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {aborted,invalid_devconfig} -> The updated device configuration is not valid
+%%               - {error,badarg}              -> Invalid arguments
 %%
 update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
  F = fun() ->
@@ -988,19 +987,34 @@ update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
       % Check the device to exist
 	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
 	   [Device] ->
+	   
+	    % If it exists, check if the new and old configurations coincide
 		if 
-		
-		 % If the new and old configuration coincide, return
-		 Device#device.config =:= Config ->  
+		 Device#device.config =:= Config ->
+		 
+          % If they do, simply return
 		  ok;
 
-         % Otherwise, update the configuration (NOTE: no check on the validity of "Config" is performed)
-		 true ->
-		  UpdatedDevice = Device#device{config=Config},
-		  mnesia:write(UpdatedDevice)
+         true ->
+		  
+		  % Otherwise, ensure the configuration to be valid
+		  case catch(utils:validate_dev_config(Config,Device#device.type)) of
+		   ok ->
+		     
+			% If the configuration is valid, update it
+		    UpdatedDevice = Device#device{config=Config},
+		    mnesia:write(UpdatedDevice);
+			
+		   {error,invalid_devconfig} ->
+		   
+		    % Otherwise if it is not valid, abort the transaction
+			mnesia:abort(invalid_devconfig)
+		  end
 	    end;
 		
 	   [] ->
+	   
+	    % If the device does not exist, abort the transaction
 	    mnesia:abort(device_not_exists)
       end
      end,

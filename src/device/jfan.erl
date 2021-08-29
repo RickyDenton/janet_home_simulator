@@ -1,7 +1,16 @@
+%% This module represents the state machine of a simulated fan in the JANET Device application %%
+
 -module(jfan).
 -behaviour(gen_statem).
 
--export([start_link/0,callback_mode/0,init/1,terminate/3]).
+-export([start_link/1,callback_mode/0,init/1,terminate/3]).
+
+%%====================================================================================================================================
+%%                                                  GEN_STATEM CALLBACK FUNCTIONS                                                        
+%%====================================================================================================================================
+
+%% ============================================================ INIT ============================================================ %%
+
 
 %% --------- STUB
 -export([button/1]).
@@ -13,11 +22,11 @@ callback_mode() ->
     state_functions.
 
 
-init(_) ->
+init(Config) ->
 
  {ok,MgrPid} = application:get_env(mgr_pid),
  
- io:format("[statem_fan]: Initialized~n"),
+ io:format("[statem_fan]: Initialized (config = ~p)~n",[Config]),
  
  {ok, locked, MgrPid}.  % Initial State.
  
@@ -60,5 +69,5 @@ do_unlock() ->
 
 
 
-start_link() ->
-    gen_statem:start_link({local,dev_statem}, ?MODULE, [], []).
+start_link(Config) ->
+    gen_statem:start_link({local,dev_statem}, ?MODULE, Config, []).

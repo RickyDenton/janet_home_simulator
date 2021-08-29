@@ -173,7 +173,7 @@ handle_cast({dev_srv_state_update,connecting,DevSrvPid},SrvState) when SrvState#
  % Update the 'dev_state' to 'connecting'
  {noreply,SrvState#devmgrstate{dev_state = connecting}};
  
-
+ 
  
 %% --------- STUB
 handle_cast(reset,State) -> % Resets the server State

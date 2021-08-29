@@ -11,19 +11,25 @@
 %%====================================================================================================================================
 init(_) ->
 
- % Retrieve the 'type' environment variable and use it for determing the FSM module to be created
+ % Retrieve the 'type' and 'config' environment variables
  {ok,DevType} = application:get_env(type),
- FSM_Module = get_fsm_module(DevType),
+ {ok,Config} = application:get_env(config),
+
+ % Ensure the device configuration to be valid according to its type
+ ok = utils:validate_dev_config(Config,DevType),
+
+ % Determine the Erlang module to be used for instantiating the device 'dev_statem' from its Type
+ Dev_statem_module = get_statem_module(DevType),
  
- % Set the specifications of the FSM child using the FSM module
- FSM_Specs = {
-              dev_fsm,		                  % ChildID
-              {FSM_Module,start_link,[]},     % Child Start Function
- 	          permanent,                      % Child Restart Policy 
-	          2000,                           % Child Sub-tree Max Shutdown Time
-	          worker,                         % Child Type
-	          [FSM_Module]                    % Child Modules (For Release Handling Purposes)
-             },
+ % Set the child specification of the device's 'dev_statem' module
+ Dev_statem_specs = {
+                     dev_statem,		                        % ChildID
+                     {Dev_statem_module,start_link,[Config]},   % Child Start Function
+ 	                 permanent,                                 % Child Restart Policy 
+	                 2000,                                      % Child Sub-tree Max Shutdown Time
+	                 worker,                                    % Child Type
+	                 [Dev_statem_module]                        % Child Modules (For Release Handling Purposes)
+                    },
 
  % Return the supervisor flags and the list of children specifications
  {ok,
@@ -38,8 +44,8 @@ init(_) ->
    
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
    [
-    %% --- The FSM relative to the device type (jfan,jlight,jdoor,jheater or jthermostat) --- %%
-    FSM_Specs,
+    %% --- The gen_statem relative to the device type (jfan,jlight,jdoor,jheater or jthermostat) --- %%
+    Dev_statem_specs,
    
     %% ------------------- The device's communication server (dev_server) ------------------- %%
     {
@@ -54,11 +60,12 @@ init(_) ->
   }
  }.
 
-%% Returns the name of the FSM module associated with a device type (init(_) helper function)
-get_fsm_module(DevType) ->
+
+%% Returns the name of the 'dev_statem' module associated with a device type (init(_) helper function)
+get_statem_module(DevType) ->
  case DevType of
  
-  % Return the name of the FSM module associated with the device type
+  % Return the name of the 'dev_statem' module associated with the device type
   fan ->
    jfan;
   light ->

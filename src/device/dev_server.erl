@@ -234,4 +234,4 @@ dev_reg_cli(Loc_id,Dev_id,DevSrvPid) ->
 
 %% Called by its 'sup_jdev' supervisor during the JANET Device boot
 start_link() ->
- gen_server:start_link({local,?MODULE},?MODULE,[],[]).
+ gen_server:start_link({local,?MODULE},?MODULE,[],[]).  % The spawned process is also registered locally under the 'dev_server' name
