@@ -16,7 +16,7 @@
 -export([print_nodes/0,print_nodes/1]).           % Running and stopped nodes info
 -export([print_ctr_table/1,print_ctr_table/2,     % Controller Nodes interaction
          print_ctr_tree/1,ctr_command/4]).   
--export([dev_command/4]).                         % Device Nodes interaction
+-export([dev_config_change/2,dev_command/4]).     % Device Nodes interaction
 	  
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
@@ -459,10 +459,49 @@ ctr_command(Loc_id,Module,Function,ArgsList) when is_number(Loc_id), Loc_id>0 ->
  catch(gen_ctr_command(Loc_id,Module,Function,ArgsList));
  
 ctr_command(_,_,_,_) ->
- io:format("usage: ctr_command(Loc_id,Module,Function,ArgsList)~n").
+ io:format("usage: ctr_command(Loc_id,Module,Function,ArgsList)~n"),
+ {error,badarg}.
 
 
 %% ================================================== DEVICE NODES INTERACTION  ================================================== %%
+
+%% DESCRIPTION:  Changes the configuration of a running device node
+%%
+%% ARGUMENTS:    - Dev_id:   The node's device ID
+%%               - {Config}: A tuple of type-specific variables representing a
+%%                           device's configuration, with the following  being
+%%                           allowed (see the "devtypes_configurations_definitions.hrl"
+%%                           header file for more information):
+%%                            - fan:        {OnOff,FanSpeed}
+%%                            - light:      {OnOff,Brightness,ColorSetting}
+%%                            - door:       {OpenClose,LockUnlock}
+%%                            - thermostat: {OnOff,TempTarget,TempCurrent}
+%%                            - heater:     {OnOff,FanSpeed,TempTarget,TempCurrent}
+%%
+%% RETURNS:      - {ok,{UpdatedCfg,Time}}    -> The device's configuration was updated as
+%%                                              requested at time "Time" on the device node
+%%               - {error,invalid_devconfig} -> The passed {Config} arguments represent an
+%%                                              invalid configuration for the device Type
+%%               - {error,janet_not_running} -> The Janet Simulator is not running
+%%               - {error,device_not_exists} -> The specified device does not exist
+%%               - {error,node_stopped}      -> The device node is currently stopped
+%%               - {error,dev_booting}       -> The device node is still booting
+%%               - {error,request_timeout}   -> Request timeout (either on the device node or in its manager)
+%%               - {error,dev_timeout}       -> Device node timeout
+%%               - {error,badarg}            -> Invalid arguments
+%%
+%% NOTE:         If the operation is successful the updated device configuration along with its
+%%               timestamp is automatically pushed in the 'device' table in the Mnesia database
+%%               as well as forwarded to its device handler in the controller node (or in any
+%%               case buffered is the device is not currently registered with it)
+%%
+dev_config_change(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
+ catch(gen_dev_config_change(Dev_id,Config));
+ 
+dev_config_change(_,_) ->
+ io:format("usage: dev_config_change(Dev_id,Config) (Config = device-dependent)~n"),
+ {error,badarg}.
+
 
 %% DESCRIPTION:  Executes a custom command on a running device node
 %%
@@ -475,6 +514,7 @@ ctr_command(_,_,_,_) ->
 %%               - {error,janet_not_running} -> The Janet Simulator is not running
 %%               - {error,device_not_exists} -> The specified device does not exist
 %%               - {error,node_stopped}      -> The device node is currently stopped
+%%               - {error,dev_booting}       -> The device node is still booting
 %%               - {error,request_timeout}   -> Request timeout (either on the device node or in its manager)
 %%               - {error,dev_timeout}       -> Device node timeout
 %%               - {error,badarg}            -> Invalid arguments
@@ -485,7 +525,8 @@ dev_command(Dev_id,Module,Function,ArgsList) when is_number(Dev_id), Dev_id>0 ->
  catch(gen_dev_command(Dev_id,Module,Function,ArgsList));
  
 dev_command(_,_,_,_) ->
- io:format("usage: dev_command(Dev_id,Module,Function,ArgsList)~n").
+ io:format("usage: dev_command(Dev_id,Module,Function,ArgsList)~n"),
+ {error,badarg}.
 
 
 %%====================================================================================================================================
@@ -1188,6 +1229,66 @@ gen_ctr_command(Loc_id,Module,Function,ArgsList) ->
 
 
 %% ================================================== DEVICE NODES INTERACTION  ================================================== %%
+
+%% Attempts to synchronously change the configuration of a running device node by forwarding the request to 
+%% its manager, returning the result of the operation (dev_config_change(Dev_id,Config) helper function)
+gen_dev_config_change(Dev_id,Config) ->
+
+ % Ensure the JANET Simulator to be running
+ case utils:is_running(janet_simulator) of
+  false ->
+  
+   % If it is not, throw an error
+   throw({error,janet_not_running});
+  
+  true ->
+
+   % Retrieve the device's manager PID and status
+   {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
+   case DevMgrStatus of
+    "STOPPED" ->
+	
+	 % If the manager and thus the device node
+	 % is stopped, the command cannot be forwarded
+	 throw({error,node_stopped});
+	 
+	_ ->
+	
+	 % Otherwise retrieve the device's record from the 'device' table
+	 %
+	 % NOTE: The device exists for sure at this point, since otherwise the
+	 %       db:get_manager_info(device,Dev_id) function would have raised a throw
+	 {ok,DevRecord} = db:get_record(device,Dev_id),
+	 
+	 % Attempt to build the new configurationto be
+	 % applied to the device depending on its type
+	 DevCfg = utils:build_dev_config(Config,DevRecord#device.type),
+	 
+	 % Forward the configuration change command to the device node's
+	 % manager and wait for a response up to a predefined timeout
+	 CfgChangeRes = try gen_server:call(DevMgrPid,{dev_config_change,DevCfg},5000)
+     catch
+	  exit:{timeout,_} ->
+	   
+	   % Command timeout
+	   throw({error,request_timeout})
+     end,
+	 
+	 % Depending on the result of the operation
+	 case CfgChangeRes of
+	  
+	  % If the operation was successful, format the received
+	  % Timestamp as a date before returning it to the user
+	  {ok,{UpdatedCfg,Timestamp}} ->
+	   {ok,{UpdatedCfg,string:slice(calendar:system_time_to_rfc3339(Timestamp,[{time_designator,$\s}]),0,19)}};
+	   
+	  % Otherwise if an error was raised, simply return it to the user
+	  _ ->
+	   CfgChangeRes
+	 end
+   end
+ end.
+
 
 %% Attempts to synchronously execute a command on a running device node by forwarding the request to its
 %% manager, returning the result of the operation (dev_command(Loc_id,Module,Function,ArgsList) helper function)

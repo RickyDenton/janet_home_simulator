@@ -2,9 +2,9 @@
 
 -module(utils).
 
--export([is_valid_devtype/1,get_devtype_default_config/1,validate_dev_config/2,deprefix_dev_config/1]). % Devices Utility Functions
--export([resolve_nodetype_shorthand/1,prefix_node_id/2]).												% Nodes Utility Functions
--export([is_running/1,str_to_atom/1]).																    % Other Utility Functions
+-export([is_valid_devtype/1,validate_dev_config/2,build_dev_config/2,get_devtype_default_config/1,deprefix_dev_config/1]). % Devices Utility Functions
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2]).										                   	  	   % Nodes Utility Functions
+-export([is_running/1,str_to_atom/1]).																                       % Other Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -50,94 +50,189 @@ is_valid_devtype(_) ->
 validate_dev_config(Config,fan) when 
 
  % 'onoff' trait ('on'|'off')
- is_atom(Config#fancfg.onoff),
  Config#fancfg.onoff =:= on orelse Config#fancfg.onoff =:= off,
 
  % 'fanspeed' trait	(0 < fanspeed <= 100)					     
  is_number(Config#fancfg.fanspeed),
  Config#fancfg.fanspeed > 0, Config#fancfg.fanspeed =< 100 ->
  
- % Valid configuration
+ % Valid fan configuration
  ok;
 
 %% ------------------ Valid Light Configuration ------------------ %%
 validate_dev_config(Config,light) when 
 
  % 'onoff' trait ('on'|'off')
- is_atom(Config#lightcfg.onoff),
  Config#lightcfg.onoff =:= on orelse Config#lightcfg.onoff =:= off,
  
  % 'brightness' trait (0 < brightness <= 100)
  is_number(Config#lightcfg.brightness),
  Config#lightcfg.brightness > 0, Config#lightcfg.brightness =< 100 ->
  
- % Valid configuration (NOTE: The 'colorsetting' trait is NOT checked)
+ % Valid light configuration (NOTE: The 'colorsetting' trait is NOT checked)
  ok;
 
 %% ------------------- Valid Door Configuration ------------------- %%
 validate_dev_config(Config,door) when 
 
- % 'openclose' + 'lockunlock' traits ({'open' && 'unlock'} | {'close' && ('lock' || 'unlock'))
- is_atom(Config#doorcfg.openclose), is_atom(Config#doorcfg.lockunlock), 								  
+ % 'openclose' + 'lockunlock' traits ({'open' && 'unlock'} | {'close' && ('lock' || 'unlock'))		  
  (Config#doorcfg.openclose =:= open andalso Config#doorcfg.lockunlock =:= unlock) orelse 
  (Config#doorcfg.openclose =:= close andalso (Config#doorcfg.lockunlock =:= unlock orelse Config#doorcfg.lockunlock =:= lock)) ->
 
+ % Valid door configuration
  ok;									 
 
 %% ---------------- Valid Thermostat Configuration ---------------- %%
 validate_dev_config(Config,thermostat) when 
 
  % 'onoff' trait ('on'|'off')
- is_atom(Config#thermocfg.onoff),
  Config#thermocfg.onoff =:= on orelse Config#thermocfg.onoff =:= off,
  									        
- % 'temp_target' trait (0 <= temp_target <= 100)						
+ % 'temp_target' trait (0 <= temp_target <= 50)						
  is_number(Config#thermocfg.temp_target),
  Config#thermocfg.temp_target >= 0, Config#thermocfg.temp_target =< 50,
  
  % 'temp_current' trait (NOTE: the interval range is NOT checked)
  is_number(Config#thermocfg.temp_current) ->
  
- % Valid configuration
+ % Valid thermostat configuration
  ok;
 
 %% ------------------ Valid Heater Configuration ------------------ %% 
 validate_dev_config(Config,heater) when 
 
  % 'onoff' trait ('on'|'off')
- is_atom(Config#heatercfg.onoff),
  Config#heatercfg.onoff =:= on orelse Config#heatercfg.onoff =:= off,
 
  % 'fanspeed' trait	(0 < fanspeed <= 100)
  is_number(Config#heatercfg.fanspeed),
  Config#heatercfg.fanspeed > 0, Config#heatercfg.fanspeed =< 100,
  
- % 'temp_target' trait (0 <= temp_target <= 100)
+ % 'temp_target' trait (0 <= temp_target <= 50)
  is_number(Config#heatercfg.temp_target),
  Config#heatercfg.temp_target >= 0, Config#heatercfg.temp_target =< 50,
                     
  % 'temp_current' trait (NOTE: the interval range is NOT checked)                   
  is_number(Config#heatercfg.temp_current) ->
 
- % Valid configuration
+ % Valid heater configuration
  ok;
 					
-%% -------------------- Invalid Configuration -------------------- %%
-validate_dev_config(_,DevType) ->
+%% ----------- Valid Device Type, Invalid Configuration ----------- %%
+validate_dev_config(_,ValidDev) when
  
- % At this point the passed configuration is for sure
- % invalid, check if at least the passed "DevType" is
- case is_valid_devtype(DevType) of
+ ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
+ ValidDev =:= thermostat orelse ValidDev =:= heater -> 
  
-  % If a valid DevType is passed, its configuration is invalid
-  true ->
-   throw({error,invalid_devconfig});
-   
-  % If an invalid DevType was passed, no configuration can be valid
-  false ->
-   throw({error,unknown_devtype})  
- end.
+ throw({error,invalid_devconfig});
 
+%% --------------------- Invalid Device Type --------------------- %%
+validate_dev_config(_,_) ->
+ throw({error,unknown_devtype}).
+
+
+%% DESCRIPTION:  Build and returns a device configuration record of the appropriate
+%%               #devtypecfg type initialized with its configuration arguments
+%%
+%% ARGUMENTS:    - {Config}: A tuple of type-specific variables representing a
+%%                           device's configuration, with the following  being
+%%                           allowed (see the "devtypes_configurations_definitions.hrl"
+%%                           header file for more information):
+%%                            - fan:        {OnOff,FanSpeed}
+%%                            - light:      {OnOff,Brightness,ColorSetting}
+%%                            - door:       {OpenClose,LockUnlock}
+%%                            - thermostat: {OnOff,TempTarget,TempCurrent}
+%%                            - heater:     {OnOff,FanSpeed,TempTarget,TempCurrent}
+%%               - Type:     The device type associated with the configuration to build
+%%
+%% RETURNS:      - Config#devtypecfg -> The device configuration record
+%%                                      associated with the {Config} arguments
+%% 
+%% THROWS:       - {error,invalid_devconfig} -> The passed {Config} arguments represent an
+%%                                              invalid configuration for the device Type
+%%               - {error,unknown_devtype}   -> The device type is invalid
+
+%% ------------------- Valid Fan Configuration ------------------- %%
+build_dev_config({OnOff,FanSpeed},fan) when 
+
+ % 'onoff' trait ('on'|'off')
+ OnOff =:= on orelse OnOff =:= off,
+
+ % 'fanspeed' trait	(0 < fanspeed <= 100) 
+ is_number(FanSpeed), FanSpeed >0, FanSpeed =< 100 ->
+
+ % Build and return the valid fan configuration
+ #fancfg{onoff = OnOff, fanspeed = FanSpeed};
+
+%% --------------- Build Valid Light Configuration --------------- %%
+build_dev_config({OnOff,Brightness,ColorSetting},light) when 
+
+ % 'onoff' trait ('on'|'off')
+ OnOff =:= on orelse OnOff =:= off,
+ 
+ % 'brightness' trait (0 < brightness <= 100)
+ is_number(Brightness), Brightness >0, Brightness =< 100 ->
+
+ % Build and return the valid light configuration
+ %
+ % NOTE: The 'colorsetting' trait is NOT checked
+ #lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = ColorSetting};
+
+%% ---------------- Build Valid Door Configuration ---------------- %%
+build_dev_config({OpenClose,LockUnlock},door) when 
+
+ % 'openclose' + 'lockunlock' traits ({'open' && 'unlock'} | {'close' && ('lock' || 'unlock')) 								  
+ (OpenClose =:= open andalso LockUnlock =:= unlock) orelse 
+ (OpenClose =:= close andalso (LockUnlock =:= unlock orelse LockUnlock =:= lock)) ->
+
+ % Build and return the valid door configuration
+ #doorcfg{openclose = OpenClose, lockunlock = LockUnlock};
+
+%% ------------- Build Valid Thermostat Configuration ------------- %%
+build_dev_config({OnOff,TempTarget,TempCurrent},thermostat) when 
+
+ % 'onoff' trait ('on'|'off')
+ OnOff =:= on orelse OnOff =:= off,
+ 
+ % 'temp_target' trait (0 <= temp_target <= 50)	
+ is_number(TempTarget), TempTarget >=0, TempTarget =< 50,
+
+ % 'temp_current' trait (NOTE: the interval range is NOT checked)
+ is_number(TempCurrent) ->
+
+ % Build and return the valid thermostat configuration
+ #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent};
+
+%% --------------- Build Valid Heater Configuration --------------- %%
+build_dev_config({OnOff,FanSpeed,TempTarget,TempCurrent},heater) when 
+
+ % 'onoff' trait ('on'|'off')
+ OnOff =:= on orelse OnOff =:= off,
+ 
+ % 'fanspeed' trait	(0 < fanspeed <= 100) 
+ is_number(FanSpeed), FanSpeed >0, FanSpeed =< 100,
+ 
+ % 'temp_target' trait (0 <= temp_target <= 50)	
+ is_number(TempTarget), TempTarget >=0, TempTarget =< 50,
+
+ % 'temp_current' trait (NOTE: the interval range is NOT checked)
+ is_number(TempCurrent) ->
+
+ % Build and return the valid heater configuration
+ #heatercfg{onoff = OnOff, fanspeed = FanSpeed, temp_target = TempTarget, temp_current = TempCurrent};
+
+%% ----------- Valid Device Type, Invalid Configuration ----------- %%
+build_dev_config(_,ValidDev) when
+ 
+ ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
+ ValidDev =:= thermostat orelse ValidDev =:= heater -> 
+ 
+ throw({error,invalid_devconfig});
+
+%% --------------------- Invalid Device Type --------------------- %%
+build_dev_config(_,_) ->
+ throw({error,unknown_devtype}).
+ 
 
 %% DESCRIPTION:  Returns a device's default configuration according to its type
 %%

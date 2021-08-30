@@ -40,6 +40,32 @@ init({Dev_id,DevSrvPid}) ->
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
+%% SENDER:    The controller's 'ctr_restserver' [TODO]: Double-check
+%% WHEN:      -
+%% PURPOSE:   Change the state machine configuration in the handled device
+%% CONTENTS:  The requested new configuration of the device's state machine (whose validity is not checked for here)
+%% MATCHES:   (always) (when the requests comes from the JANET Controller node)
+%% ACTIONS:   Forward the configuration change command to the device's 'dev_server'
+%%            via a synchronous call and return its response to the caller 
+%% ANSWER:    The reply of the device's 'dev_server' (which corresponds to the reply of the device's 'dev_statem')
+%% NEW STATE: -
+%%
+handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when node(ReqPid) =:= node() ->
+ 
+ % Forward the configuration change command to the device's 'dev_server', waiting for its response up to a predefined timeout
+ CfgChangeRes = try gen_server:call(SrvState#devhandlerstate.dev_srv_pid,{dev_config_change,NewCfg},4800)
+ catch
+  exit:{timeout,_} ->
+  
+   % dev_server timeout
+   {error,dev_timeout}
+ end,
+ 
+ % Return the caller the result of the operation ('dev_timeout' included)
+ {reply,CfgChangeRes,SrvState};
+
+
+
 %% DEBUGGING PURPOSES [TODO]: REMOVE
 handle_call(_,{ReqPid,_},SrvState) ->
  io:format("[ctr_devhandler-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#devhandlerstate.dev_id,ReqPid]),
@@ -47,6 +73,28 @@ handle_call(_,{ReqPid,_},SrvState) ->
 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
+
+%% SENDER:    The device's 'dev_server' process
+%% WHEN:      When the device's state machine configuration changes
+%% PURPOSE:   Inform the device handler of the updated state machine configuration
+%% CONTENTS:  1) The PID of the device's 'dev_server' ("security purposes")
+%%            2) The updated configuration of the device's state machine
+%%            3) The timestamp of the updated configuration
+%% MATCHES:   (always) (the request comes from the device's 'dev_server' process)
+%% ACTIONS:   Push the updated device configuration and timestamp to the remote MongoDB database [TODO]: CHECK
+%% NEW STATE: -
+%%
+handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
+
+ % Log the received updated
+ %% [TODO]: Debugging purposes, remove when ready
+ io:format("[ctr_devhandler-~w]: Received device configuration update (Config = ~p, Timestamp = ~w)~n",[SrvState#devhandlerstate.dev_id,UpdatedCfg,Timestamp]),
+ 
+ %% [TODO]: Push to the remote MongoDB database
+ 
+ % Keep the server state
+ {noreply,SrvState};
+
 
 %% --------- STUB
 handle_cast(reset,SrvState) ->

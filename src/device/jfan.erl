@@ -3,71 +3,57 @@
 -module(jfan).
 -behaviour(gen_statem).
 
--export([start_link/1,callback_mode/0,init/1,terminate/3]).
+-export([start_link/1,callback_mode/0,init/1,handle_event/4]). % gen_statem Behaviour Callback Functions
+
+-include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %%====================================================================================================================================
 %%                                                  GEN_STATEM CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-%% ============================================================ INIT ============================================================ %%
-
-
-%% --------- STUB
--export([button/1]).
--export([locked/3,open/3]).
--define(NAME, code_lock).
-
-%% --------- STUB
+%% ============================================ CALLBACK_MODE (handle_event_function) ============================================ %%
 callback_mode() ->
-    state_functions.
-
-
-init(Config) ->
-
- {ok,MgrPid} = application:get_env(mgr_pid),
- 
- io:format("[statem_fan]: Initialized (config = ~p)~n",[Config]),
- 
- {ok, locked, MgrPid}.  % Initial State.
- 
- 
-%% --------- STUB	
-terminate(_Reason, _State, _Data) ->
-    ok.
+    handle_event_function.
 	
-%% --------- STUB	
-button(Digit) ->
-    gen_statem:cast(?NAME, {button,Digit}).
 
-%% --------- STUB
-locked(
-  cast, {button,Digit},
-  #{code := Code, remaining := Remaining} = Data) ->
-    case Remaining of
-        [Digit] ->
-	    do_unlock(),
-            {next_state, open, Data#{remaining := Code},
-             [{state_timeout,10000,lock}]};
-        [Digit|Rest] -> % Incomplete
-            {next_state, locked, Data#{remaining := Rest}};
-        _Wrong ->
-            {next_state, locked, Data#{remaining := Code}}
-    end.
+%% ============================================================ INIT ============================================================ %%
+init(Cfg) ->
+ 
+ io:format("[statem_fan]: Initialized (config = ~p)~n",[Cfg]),
 
-open(state_timeout, lock,  Data) ->
-    do_lock(),
-    {next_state, locked, Data};
-open(cast, {button,_}, Data) ->
-    {next_state, open, Data}.
-	
-%% --------- STUB
-do_lock() ->
-    io:format("Lock~n", []).
-do_unlock() ->
-    io:format("Unlock~n", []).
+ % Propagate the initial state
+ gen_server:cast({local,dev_server},{dev_config_update,{Cfg,erlang:system_time(second)}}),
+
+ {ok,Cfg#fancfg.onoff,Cfg}.  % Initial State + Data
+ 
+%% ======================================================== HANDLE_EVENT ======================================================== %% 
+
+handle_event({call,DevSrvPid},{dev_config_change,NewCfg},_,_) ->
+
+ IsValidConfig = catch(utils:validate_dev_config(NewCfg,fan)),
+ case IsValidConfig of
+ 
+  ok -> 
+   
+   io:format("[statem_fan]: New Configuration: ~p~n",[NewCfg]),
+   {next_state,NewCfg#fancfg.onoff,NewCfg#fancfg.fanspeed,[{reply,DevSrvPid,{ok,{NewCfg,erlang:system_time(second)}}}]};
+   
+  _ ->
+  
+   io:format("[statem_fan]: WRONG New Configuration: ~p~n",[NewCfg]),
+   {keep_state_and_data,[{reply,DevSrvPid,IsValidConfig}]}
+ end;
+
+% Get config
+handle_event({call,DevSrvPid},get_config,_,Cfg) ->
+ {keep_state_and_data,[{reply,DevSrvPid,{ok,{Cfg,erlang:system_time(second)}}}]}.
 
 
 
+%%====================================================================================================================================
+%%                                                         START FUNCTION                                                        
+%%==================================================================================================================================== 
 
+%% Called by its 'sup_jdev' supervisor during the JANET Device boot
 start_link(Config) ->
-    gen_statem:start_link({local,dev_statem}, ?MODULE, Config, []).
+    gen_statem:start_link({local,dev_statem}, ?MODULE, Config, []).  % The spawned process is also registered locally under the 'dev_statem' name

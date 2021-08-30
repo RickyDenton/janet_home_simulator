@@ -18,6 +18,9 @@
 		 devhandler_mon   % A reference used for monitoring the device handler assigned to the 'dev_server' in the controller node
 		}).
 
+% Maximum size of the buffer used for postponing device configuration updates towards the controller while not registered with it
+-define(Max_handler_buffer_size, 100).  
+
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
@@ -42,41 +45,111 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  % Retrieve the 'mgr_pid' environment variable
  {ok,MgrPid} = application:get_env(mgr_pid),
  
- % Retrieve the PID of the device's state
- % machine via the local naming registry
- case whereis(dev_statem) of
-  undefined ->
+ % Attempt to register the JANET device node with its device
+ % manager in the JANET simulator node by passing its PID
+ %
+ % NOTE: This registration request is performed synchronously since
+ %       the device node's execution cannot continue if it fails 
+ %
+ ok = gen_server:call(MgrPid,{dev_reg,self()},10000),
+ 
+ 
+ 
+ % Retrieve the device's state machine (supposedly) initial configuration
+ %
+ % NOTE: This operation must succeed, otherwise the
+ %       device node's execution should not continue
+ %
+ %% [TODO]: Type hack for preventing non-fan devices from crashes, remove when all devices are ready
+ %% ---------------------------------------------------------
+ {ok,Type} = application:get_env(type),
+
+ if
+  Type =:= fan ->
   
-   % The device state machine not being registered in the local naming registry is a
-   % fatal error, and dev_server, along with the entire device node, must be shut down
-   {stop,dev_statem_not_registered,booting};
-   
-  Dev_statem_pid ->
+   % Initialize the process dictionary variable used for buffering postponed configuration updates
+   % for the device handler to the initial configuration and timestamp of the device's state machine
+   {ok,{InitCfg,Timestamp}} = gen_statem:call(dev_statem,get_config,4500),
+   put(handler_buffer,[{InitCfg,Timestamp}]);
   
-   % If the PID of the device state machine was successfully retrieved, attempt
-   % to register the JANET device node with its device manager in the simulator
-   % node by passing the PIDs of the 'dev_statem' and of the 'dev_server'
-   %
-   % NOTE: This registration request is performed synchronously since
-   %       the controller node's execution cannot continue if it fails 
-   gen_server:call(MgrPid,{dev_reg,self(),Dev_statem_pid},10000),
+  %% [TODO]: Remove
+  true ->
+	put(handler_buffer,[])
+ end,
+ %% ---------------------------------------------------------
+ 
+ 
+ 
+ % Retrieve the device and location IDs from the
+ % 'dev_id' and 'loc_id' environment variables
+ {ok,Loc_id} = application:get_env(loc_id),
+ {ok,Dev_id} = application:get_env(dev_id),
 
-   % Retrieve the device and location IDs from the
-   % 'dev_id' and 'loc_id' environment variables
-   {ok,Loc_id} = application:get_env(loc_id),
-   {ok,Dev_id} = application:get_env(dev_id),
+ % Spawn the 'dev_reg_cli' client for attempting to register the device with its controller node
+ spawn_link(?MODULE,dev_reg_cli,[Loc_id,Dev_id,self()]),
 
-   % Spawn the 'dev_reg_cli' client for attempting to register the device with the controller node
-   spawn_link(?MODULE,dev_reg_cli,[Loc_id,Dev_id,self()]),
-
-   % Return the server initial state
-   {noreply,#devsrvstate{dev_state = connecting, dev_id = Dev_id, loc_id = Loc_id, mgr_pid = MgrPid, _ = none}}
- end.
+ % Return the server initial state
+ {noreply,#devsrvstate{dev_state = connecting, dev_id = Dev_id, loc_id = Loc_id, mgr_pid = MgrPid, _ = none}}.
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
-%% SENDER:    The device node's manager
+%% SENDER:    The device node's manager in the JANET Simulator node OR
+%%            the device's handler in the JANET Controller node 
+%% WHEN:      -
+%% PURPOSE:   Change the configuration of the device's state machine 
+%% CONTENTS:  The requested new configuration of the device's state machine (whose validity is not checked for here)
+%% MATCHES:   (always) (when the requests comes from the device manager in the JANET Simulator or the device handler in the JANET Controller)
+%% ACTIONS:   1) Forward the configuration change command to the device's state machine and return its response to the caller
+%%            2) If the configuration change update was successful, inform the other actor which did not perform the call
+%%               of the updated device configuration and timestamp, storing it in the 'handler_buffer' process dictionary variable
+%%               in case the call came from the JANET Simulator and the device is not registered within the controller 
+%% ANSWER:    The reply of the device's state machine
+%% NEW STATE: -
+%%
+handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when ReqPid =:= SrvState#devsrvstate.mgr_pid orelse 
+                                                                 ReqPid =:= SrvState#devsrvstate.devhandler_pid ->
+ 
+ % Forward the configuration change command to the device's state machine and collect its response
+ CfgChangeRes = try gen_statem:call(dev_statem,{dev_config_change,NewCfg},4500)
+ catch
+  exit:{timeout,_} ->
+  
+   % dev_statem timeout
+   {error,statem_timeout}
+ end,
+ 
+ % Depending on the result of the device configuration change
+ case CfgChangeRes of
+  {ok,{UpdatedCfg,Timestamp}} ->
+ 
+   % If the device configuration update was successful, depending on where the request came from
+   if
+    ReqPid =:= SrvState#devsrvstate.mgr_pid ->
+	
+     % If the request came from the device's manager, attempt to forward
+	 % the updated configuration and timestamp to the JANET Controller 
+     push_or_store_ctr_update(SrvState#devsrvstate.dev_state,SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp});
+
+ 	ReqPid =:= SrvState#devsrvstate.devhandler_pid ->
+	
+	 % If instead the request came from the device's handler, forward
+	 % the updated configuration and timestamp to the device manager 
+     gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_config_update,self(),{UpdatedCfg,Timestamp}})
+   end,
+   
+   % Respond to the caller
+   {reply,{ok,{UpdatedCfg,Timestamp}},SrvState};
+   
+  _ -> 
+  
+   % Otherwise if the device configuration update was not successful
+   % ('statem_timeout' included), just return the error to the caller
+   {reply,CfgChangeRes,SrvState}
+ end;
+ 
+ 
+%% SENDER:    The device node's manager in the JANET Simulator node
 %% WHEN:      (varies) [TODO]: Double-check
 %% PURPOSE:   Execute a command on the device node and return the result of the operation
 %% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()
@@ -91,9 +164,10 @@ handle_call({dev_command,Module,Function,ArgsList},{ReqPid,_},SrvState) when    
  {reply,apply(Module,Function,ArgsList),SrvState};  
 
 
+
 %% DEBUGGING PURPOSES [TODO]: REMOVE
 handle_call(_,{ReqPid,_},SrvState) ->
- io:format("[devsrv-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#devsrvstate.dev_id,ReqPid]),
+ io:format("[dev_srv-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#devsrvstate.dev_id,ReqPid]),
  {reply,gen_response,SrvState}.
 
 
@@ -124,9 +198,40 @@ handle_cast({reg_success,DevRegCli,Devhandler_Pid},SrvState) when SrvState#devsr
  % Inform the device manager that the device is now online
  gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_srv_state_update,online,self()}),
  
+ % Retrieve all postponed device configuration updates stored in the 'handler_buffer' process dictionary
+ % variable (clearing it in the process) and forward them to the assigned handler in the controller node
+ push_postponed_cfg_updates(erase(handler_buffer),Devhandler_Pid),
+ 
  % Update the device state to 'online' and set the 'devhandler_pid' and 'dev_handler_ref' variables
  {noreply,SrvState#devsrvstate{dev_state = online, devhandler_pid = Devhandler_Pid, devhandler_mon = Mon_Ref}}; 
  
+
+%% SENDER:    The device's 'dev_statem' process
+%% WHEN:      When the device's state machine configuration changes
+%% PURPOSE:   Propagate the updated device configuration to the device manager in
+%%            the JANET Simulator and the device handler in the JANET Controller
+%% CONTENTS:  1) The updated configuration of the device's state machine
+%%            2) The timestamp of the updated configuration
+%% MATCHES:   (always)
+%% ACTIONS:   1) Forward the updated device configuration and timestamp
+%%               to the device manager in the JANET Simulator
+%%            2) If registered within its controller, forward the updated device 
+%%               configuration and timestamp to the device handler, otherwise
+%%               store them in the 'handler_buffer' process dictionary variable 
+%% NEW STATE: -
+%%
+handle_cast({dev_config_update,{UpdatedCfg,Timestamp}},SrvState) ->
+
+ % Forward the updated device configuration and its timestamp to the device manager in the JANET Simulator node
+ gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_config_update,self(),{UpdatedCfg,Timestamp}}),
+ 
+ % If the device is registered within the controller node, forward it the updated device configuration
+ % and timestamp, otherwise store them in the 'handler_buffer' process dictionary variable 
+ push_or_store_ctr_update(SrvState#devsrvstate.dev_state,SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp}),
+
+ % Keep the server state
+ {noreply,SrvState};
+
 
 %% --------- STUB
 handle_cast(reset,State) -> % Resets the server State
@@ -226,6 +331,77 @@ dev_reg_cli(Loc_id,Dev_id,DevSrvPid) ->
    timer:sleep(1000),
    dev_reg_cli(Loc_id,Dev_id,DevSrvPid) 
  end.
+
+
+%% DESCRIPTION:  If the device node is registered within its controller, forwards it an updated device configuration
+%%               and timestamp, otherwise stores them in the 'handler_buffer' process dictionary variable
+%%
+%% ARGUMENTS:    - DevState:               The current device state (connecting|online)
+%%               - Devhandler_pid:         The PID of the device handler in the controller node, if any
+%%               - {UpdatedCfg,Timestamp}: The updated device configuration and timestamp
+%%
+%% RETURNS:      - ok -> Device state update and timestamp forwarded to the controller
+%%                       OR stored in the 'handler_buffer' process dictionary variable
+%%
+push_or_store_ctr_update(DevState,Devhandler_pid,{UpdatedCfg,Timestamp}) ->
+
+ % Check if the 'dev_server' is registered within the controller node
+ case DevState of
+  online ->
+  
+   % If it is registered, forward the updated device configuration
+   % and its timestamp to the device handler in the controller
+   gen_server:cast(Devhandler_pid,{dev_config_update,self(),{UpdatedCfg,Timestamp}});
+   
+  connecting ->
+
+   % Otherwise, retrieve the contents of the
+   % 'handler_buffer' process dictionary variable
+   HandlerBuffer = get(handler_buffer),
+   if
+    length(HandlerBuffer) =:= ?Max_handler_buffer_size ->
+	 
+	 % If the buffer has reached its maximum size, drop its
+	 % last element and append it the new configuration update
+	 [_|T] = HandlerBuffer,
+	 put(handler_buffer,T ++ [{UpdatedCfg,Timestamp}]);
+	 
+    true ->
+	
+	 % Otherwise just append it the new configuration update
+	 put(handler_buffer,HandlerBuffer ++ [{UpdatedCfg,Timestamp}])
+   end,
+
+   % Logging purposes
+   %% [TODO]: REMOVE
+   {ok,Dev_id} = application:get_env(dev_id),
+   io:format("[dev_srv-~w]: handler_buffer: ~w~n",[Dev_id,get(handler_buffer)])
+ end,
+ ok.
+
+
+%% DESCRIPTION:  Forwards all postponed device configuration updates to the device handler in the controller node
+%%
+%% ARGUMENTS:    - [{UpdatedCfg,Timestamp}]: The list of postponed device configuration updates
+%%               - Devhandler_pid:           The PID of the device handler in the controller node
+%%
+%% RETURNS:      - ok -> All postponed device configuration updates were forwarded to the device handler
+%%
+push_postponed_cfg_updates([],_) ->
+
+ % Reset the 'handler_buffer' process dictionary variable to the empty list
+ put(handler_buffer,[]),
+ 
+ % Return
+ ok;
+ 
+push_postponed_cfg_updates([{UpdatedCfg,Timestamp}|NextCfgUpdate],Devhandler_pid) ->
+
+ % Push the current configuration update
+ gen_server:cast(Devhandler_pid,{dev_config_update,self(),{UpdatedCfg,Timestamp}}),
+ 
+ % Proceed with the next configuration update
+ push_postponed_cfg_updates(NextCfgUpdate,Devhandler_pid).
 
 
 %%====================================================================================================================================

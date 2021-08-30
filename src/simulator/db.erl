@@ -9,7 +9,7 @@
 -export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read
          get_table_records/1,get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,
 		 get_loc_devs/1,get_subloc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
--export([update_dev_sub/2,update_dev_config/2,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
+-export([update_dev_sub/2,update_dev_config/3,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
 
 %% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
@@ -184,7 +184,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
 		  end,
 		  
 		  % Insert the new device in the Device table
-	      mnesia:write(#device{dev_id=Dev_id, name=DevName, sub_id={Loc_id,Subloc_id}, type=Type, config=utils:get_devtype_default_config(Type)}),
+	      mnesia:write(#device{dev_id=Dev_id, name=DevName, sub_id={Loc_id,Subloc_id}, type=Type, config=utils:get_devtype_default_config(Type), lastupdate = erlang:system_time(second)}),
 		  
 		  % Update the "DevList" in the sublocation table  
 		  UpdatedDevList = lists:append(Sublocation#sublocation.devlist,[Dev_id]),
@@ -318,7 +318,7 @@ print_table_header(location) ->
 print_table_header(sublocation) ->
  io:format("SUBLOCATION TABLE {sub_id,name}~n=================~n");
 print_table_header(device) -> 
- io:format("DEVICE TABLE {dev_id,name,sub_id,type,config}~n============~n");
+ io:format("DEVICE TABLE {dev_id,name,sub_id,type,config,lastupdate}~n============~n");
 print_table_header(suploc) -> 
  io:format("SUPLOC TABLE {loc_id,sup_pid}~n============~n");
 print_table_header(ctrmanager) -> 
@@ -530,7 +530,7 @@ print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) ->
  print_tree_sublocation(NextSubloc,Indent1,Indent2).
 
 
-%% Prints all devices in a location as a tree (print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) helper function) 
+%% Prints all devices in a list as a tree (print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) helper function) 
 print_tree_device([],_) ->
  ok;
 print_tree_device([Dev|NextDev],Indent) ->
@@ -549,7 +549,9 @@ print_tree_device([Dev|NextDev],Indent) ->
  end,
  
  % Print information on the device
- io:format("~s{~w,~s,~w,~w,~p} - ~s~n",[Indent,Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]),Dev#device.sub_id,Dev#device.type,utils:deprefix_dev_config(Dev#device.config),DevMgrStatus]),
+ io:format("~s{~w,~s,~w,~w,~p,~s} - ~s~n",[Indent, Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]), Dev#device.sub_id, Dev#device.type, utils:deprefix_dev_config(Dev#device.config),
+										   string:slice(calendar:system_time_to_rfc3339(Dev#device.lastupdate,[{time_designator,$\s}]),0,19), DevMgrStatus]),
+ % Parse the next device in the list
  print_tree_device(NextDev,Indent).
 
 
@@ -973,44 +975,36 @@ update_dev_sub(_,_) ->
 
 %% DESCRIPTION:  Updates a device's configuration
 %%
-%% ARGUMENTS:    - Dev_id: The ID of the device to update the configuration, which must exist and be >0
-%%               - Config: The updated device configuration
+%% ARGUMENTS:    - Dev_id:    The ID of the device to update the configuration, which must exist and be >0
+%%               - Config:    The updated device configuration
+%%               - Timestamp: The timestamp of the updated device configuration (>0)
 %%
 %% RETURNS:      - {atomic,ok}                 -> Device configuration successfully updated
 %%               - {aborted,device_not_exists} -> The device 'Dev_id' does not exist
 %%               - {aborted,invalid_devconfig} -> The updated device configuration is not valid
 %%               - {error,badarg}              -> Invalid arguments
 %%
-update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
+update_dev_config(Dev_id,Config,Timestamp) when is_number(Dev_id), Dev_id>0, is_number(Timestamp), Timestamp>0 ->
  F = fun() ->
  
       % Check the device to exist
 	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
 	   [Device] ->
 	   
-	    % If it exists, check if the new and old configurations coincide
-		if 
-		 Device#device.config =:= Config ->
-		 
-          % If they do, simply return
-		  ok;
-
-         true ->
-		  
-		  % Otherwise, ensure the configuration to be valid
-		  case catch(utils:validate_dev_config(Config,Device#device.type)) of
-		   ok ->
+	    % If it does, ensure the updated configuration to be valid
+		case catch(utils:validate_dev_config(Config,Device#device.type)) of
+		 ok ->
 		     
-			% If the configuration is valid, update it
-		    UpdatedDevice = Device#device{config=Config},
-		    mnesia:write(UpdatedDevice);
+	      % If it is, push it in the 'device' table along with its timestamp
+		  UpdatedDevice = Device#device{config = Config, lastupdate = Timestamp},
+		  mnesia:write(UpdatedDevice);
 			
-		   {error,invalid_devconfig} ->
+		 {error,invalid_devconfig} ->
 		   
-		    % Otherwise if it is not valid, abort the transaction
-			mnesia:abort(invalid_devconfig)
-		  end
-	    end;
+		  % Otherwise, if it is not valid (which SHOULD NOT happen), report the error and abort the transaction
+		  io:format("[update_dev_config]: <WARNING> An invalid device configuration was passed (Config = ~p, DevType = ~p)~n",[Config,Device#device.type]),
+		  mnesia:abort(invalid_devconfig)
+		end;		
 		
 	   [] ->
 	   
@@ -1020,7 +1014,7 @@ update_dev_config(Dev_id,Config) when is_number(Dev_id), Dev_id>0 ->
      end,
  mnesia:transaction(F);	 
 	 
-update_dev_config(_,_) ->
+update_dev_config(_,_,_) ->
  {error,badarg}.
 
 

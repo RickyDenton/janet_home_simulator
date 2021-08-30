@@ -43,7 +43,7 @@ handle_continue(init,{booting,none}) ->
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
-%% SENDER:    The controller node's manager
+%% SENDER:    The controller node's manager in the JANET Simulator node
 %% WHEN:      (varies) [TODO]: Double-check
 %% PURPOSE:   Execute a command on the controller node and return the result of the operation
 %% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()

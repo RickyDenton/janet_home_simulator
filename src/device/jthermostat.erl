@@ -17,7 +17,7 @@ init(Config) ->
 
  {ok,MgrPid} = application:get_env(mgr_pid),
  
- io:format("[statem_fan]: Initialized (config = ~p)~n",[Config]),
+ io:format("[statem_thermostat]: Initialized (config = ~p)~n",[Config]),
  
  {ok, locked, MgrPid}.  % Initial State.
  
