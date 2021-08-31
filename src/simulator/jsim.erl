@@ -477,6 +477,8 @@ ctr_command(_,_,_,_) ->
 %%                            - door:       {OpenClose,LockUnlock}
 %%                            - thermostat: {OnOff,TempTarget,TempCurrent}
 %%                            - heater:     {OnOff,FanSpeed,TempTarget,TempCurrent}
+%%                           The '$keep' wildcard can also be used in any field for the
+%%                           preserving its current value in the current device configuration
 %%
 %% RETURNS:      - {ok,{UpdatedCfg,Time}}    -> The device's configuration was updated as
 %%                                              requested at time "Time" on the device node
@@ -1262,7 +1264,7 @@ gen_dev_config_change(Dev_id,Config) ->
 	 
 	 % Attempt to build the new configurationto be
 	 % applied to the device depending on its type
-	 DevCfg = utils:build_dev_config(Config,DevRecord#device.type),
+	 DevCfg = utils:build_dev_config_wildcard(Config,DevRecord#device.type),
 	 
 	 % Forward the configuration change command to the device node's
 	 % manager and wait for a response up to a predefined timeout

@@ -16,7 +16,7 @@ init(_) ->
  {ok,Config} = application:get_env(config),
 
  % Ensure the device configuration to be valid according to its type
- ok = utils:validate_dev_config(Config,DevType),
+ ok = utils:is_valid_devconfig(Config,DevType),
 
  % Determine the Erlang module to be used for instantiating the device 'dev_statem' from its Type
  Dev_statem_module = get_statem_module(DevType),

@@ -992,7 +992,7 @@ update_dev_config(Dev_id,Config,Timestamp) when is_number(Dev_id), Dev_id>0, is_
 	   [Device] ->
 	   
 	    % If it does, ensure the updated configuration to be valid
-		case catch(utils:validate_dev_config(Config,Device#device.type)) of
+		case catch(utils:is_valid_devconfig(Config,Device#device.type)) of
 		 ok ->
 		     
 	      % If it is, push it in the 'device' table along with its timestamp

@@ -2,9 +2,10 @@
 
 -module(utils).
 
--export([is_valid_devtype/1,validate_dev_config/2,build_dev_config/2,get_devtype_default_config/1,deprefix_dev_config/1]). % Devices Utility Functions
--export([resolve_nodetype_shorthand/1,prefix_node_id/2]).										                   	  	   % Nodes Utility Functions
--export([is_running/1,str_to_atom/1]).																                       % Other Utility Functions
+-export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,check_merge_devconfigs/3,  % Devices Utility Functions
+         get_devtype_default_config/1,deprefix_dev_config/1,next_sim_time/2]). 
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                                % Nodes Utility Functions
+-export([is_running/1,str_to_atom/1]).							                                        % Other Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -47,7 +48,7 @@ is_valid_devtype(_) ->
 %%               - {error,unknown_devtype}   -> The device type is invalid
 
 %% ------------------- Valid Fan Configuration ------------------- %%
-validate_dev_config(Config,fan) when 
+is_valid_devconfig(Config,fan) when 
 
  % 'onoff' trait ('on'|'off')
  Config#fancfg.onoff =:= on orelse Config#fancfg.onoff =:= off,
@@ -60,7 +61,7 @@ validate_dev_config(Config,fan) when
  ok;
 
 %% ------------------ Valid Light Configuration ------------------ %%
-validate_dev_config(Config,light) when 
+is_valid_devconfig(Config,light) when 
 
  % 'onoff' trait ('on'|'off')
  Config#lightcfg.onoff =:= on orelse Config#lightcfg.onoff =:= off,
@@ -73,7 +74,7 @@ validate_dev_config(Config,light) when
  ok;
 
 %% ------------------- Valid Door Configuration ------------------- %%
-validate_dev_config(Config,door) when 
+is_valid_devconfig(Config,door) when 
 
  % 'openclose' + 'lockunlock' traits ({'open' && 'unlock'} | {'close' && ('lock' || 'unlock'))		  
  (Config#doorcfg.openclose =:= open andalso Config#doorcfg.lockunlock =:= unlock) orelse 
@@ -83,7 +84,7 @@ validate_dev_config(Config,door) when
  ok;									 
 
 %% ---------------- Valid Thermostat Configuration ---------------- %%
-validate_dev_config(Config,thermostat) when 
+is_valid_devconfig(Config,thermostat) when 
 
  % 'onoff' trait ('on'|'off')
  Config#thermocfg.onoff =:= on orelse Config#thermocfg.onoff =:= off,
@@ -99,7 +100,7 @@ validate_dev_config(Config,thermostat) when
  ok;
 
 %% ------------------ Valid Heater Configuration ------------------ %% 
-validate_dev_config(Config,heater) when 
+is_valid_devconfig(Config,heater) when 
 
  % 'onoff' trait ('on'|'off')
  Config#heatercfg.onoff =:= on orelse Config#heatercfg.onoff =:= off,
@@ -119,7 +120,7 @@ validate_dev_config(Config,heater) when
  ok;
 					
 %% ----------- Valid Device Type, Invalid Configuration ----------- %%
-validate_dev_config(_,ValidDev) when
+is_valid_devconfig(_,ValidDev) when
  
  ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
  ValidDev =:= thermostat orelse ValidDev =:= heater -> 
@@ -127,7 +128,7 @@ validate_dev_config(_,ValidDev) when
  throw({error,invalid_devconfig});
 
 %% --------------------- Invalid Device Type --------------------- %%
-validate_dev_config(_,_) ->
+is_valid_devconfig(_,_) ->
  throw({error,unknown_devtype}).
 
 
@@ -143,6 +144,12 @@ validate_dev_config(_,_) ->
 %%                            - door:       {OpenClose,LockUnlock}
 %%                            - thermostat: {OnOff,TempTarget,TempCurrent}
 %%                            - heater:     {OnOff,FanSpeed,TempTarget,TempCurrent}
+%%                           The '$keep' wildcard can also be used in any field for the
+%%                           purposes of preserving its value when applying this
+%%                           configuration with another of the same #cfgdevtype
+%%                           (namely, when the configuration returned by this function
+%%                           is used for updating a device's configuration)
+%%                           
 %%               - Type:     The device type associated with the configuration to build
 %%
 %% RETURNS:      - Config#devtypecfg -> The device configuration record
@@ -153,25 +160,25 @@ validate_dev_config(_,_) ->
 %%               - {error,unknown_devtype}   -> The device type is invalid
 
 %% ------------------- Valid Fan Configuration ------------------- %%
-build_dev_config({OnOff,FanSpeed},fan) when 
+build_dev_config_wildcard({OnOff,FanSpeed},fan) when 
 
  % 'onoff' trait ('on'|'off')
- OnOff =:= on orelse OnOff =:= off,
+ OnOff =:= '$keep' orelse (OnOff =:= on orelse OnOff =:= off),
 
  % 'fanspeed' trait	(0 < fanspeed <= 100) 
- is_number(FanSpeed), FanSpeed >0, FanSpeed =< 100 ->
+ FanSpeed =:= '$keep' orelse (is_number(FanSpeed) andalso FanSpeed >0 andalso FanSpeed =< 100) ->
 
  % Build and return the valid fan configuration
  #fancfg{onoff = OnOff, fanspeed = FanSpeed};
 
 %% --------------- Build Valid Light Configuration --------------- %%
-build_dev_config({OnOff,Brightness,ColorSetting},light) when 
+build_dev_config_wildcard({OnOff,Brightness,ColorSetting},light) when 
 
  % 'onoff' trait ('on'|'off')
- OnOff =:= on orelse OnOff =:= off,
+ OnOff =:= '$keep' orelse (OnOff =:= on orelse OnOff =:= off),
  
  % 'brightness' trait (0 < brightness <= 100)
- is_number(Brightness), Brightness >0, Brightness =< 100 ->
+ Brightness =:= '$keep' orelse (is_number(Brightness) andalso Brightness >0 andalso Brightness =< 100) ->
 
  % Build and return the valid light configuration
  %
@@ -179,50 +186,51 @@ build_dev_config({OnOff,Brightness,ColorSetting},light) when
  #lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = ColorSetting};
 
 %% ---------------- Build Valid Door Configuration ---------------- %%
-build_dev_config({OpenClose,LockUnlock},door) when 
+build_dev_config_wildcard({OpenClose,LockUnlock},door) when 
 
  % 'openclose' + 'lockunlock' traits ({'open' && 'unlock'} | {'close' && ('lock' || 'unlock')) 								  
- (OpenClose =:= open andalso LockUnlock =:= unlock) orelse 
- (OpenClose =:= close andalso (LockUnlock =:= unlock orelse LockUnlock =:= lock)) ->
+ (OpenClose =:= open orelse OpenClose =:= close orelse OpenClose =:= '$keep')     andalso
+ (LockUnlock =:= lock orelse LockUnlock =:= unlock orelse LockUnlock =:= '$keep') andalso
+ not (OpenClose =:= open andalso LockUnlock =:= lock) ->
 
  % Build and return the valid door configuration
  #doorcfg{openclose = OpenClose, lockunlock = LockUnlock};
 
 %% ------------- Build Valid Thermostat Configuration ------------- %%
-build_dev_config({OnOff,TempTarget,TempCurrent},thermostat) when 
+build_dev_config_wildcard({OnOff,TempTarget,TempCurrent},thermostat) when 
 
  % 'onoff' trait ('on'|'off')
- OnOff =:= on orelse OnOff =:= off,
+ OnOff =:= '$keep' orelse (OnOff =:= on orelse OnOff =:= off),
  
  % 'temp_target' trait (0 <= temp_target <= 50)	
- is_number(TempTarget), TempTarget >=0, TempTarget =< 50,
+ TempTarget =:= '$keep' orelse (is_number(TempTarget) andalso TempTarget >=0 andalso TempTarget =< 50),
 
  % 'temp_current' trait (NOTE: the interval range is NOT checked)
- is_number(TempCurrent) ->
+ TempCurrent =:= '$keep' orelse is_number(TempCurrent) ->
 
  % Build and return the valid thermostat configuration
  #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent};
 
 %% --------------- Build Valid Heater Configuration --------------- %%
-build_dev_config({OnOff,FanSpeed,TempTarget,TempCurrent},heater) when 
+build_dev_config_wildcard({OnOff,FanSpeed,TempTarget,TempCurrent},heater) when 
 
  % 'onoff' trait ('on'|'off')
- OnOff =:= on orelse OnOff =:= off,
+ OnOff =:= '$keep' orelse (OnOff =:= on orelse OnOff =:= off),
  
  % 'fanspeed' trait	(0 < fanspeed <= 100) 
- is_number(FanSpeed), FanSpeed >0, FanSpeed =< 100,
+ FanSpeed =:= '$keep' orelse (is_number(FanSpeed) andalso FanSpeed >0 andalso FanSpeed =< 100),
  
  % 'temp_target' trait (0 <= temp_target <= 50)	
- is_number(TempTarget), TempTarget >=0, TempTarget =< 50,
+ TempTarget =:= '$keep' orelse (is_number(TempTarget) andalso TempTarget >=0 andalso TempTarget =< 50),
 
  % 'temp_current' trait (NOTE: the interval range is NOT checked)
- is_number(TempCurrent) ->
+ TempCurrent =:= '$keep' orelse is_number(TempCurrent) ->
 
  % Build and return the valid heater configuration
  #heatercfg{onoff = OnOff, fanspeed = FanSpeed, temp_target = TempTarget, temp_current = TempCurrent};
 
 %% ----------- Valid Device Type, Invalid Configuration ----------- %%
-build_dev_config(_,ValidDev) when
+build_dev_config_wildcard(_,ValidDev) when
  
  ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
  ValidDev =:= thermostat orelse ValidDev =:= heater -> 
@@ -230,7 +238,60 @@ build_dev_config(_,ValidDev) when
  throw({error,invalid_devconfig});
 
 %% --------------------- Invalid Device Type --------------------- %%
-build_dev_config(_,_) ->
+build_dev_config_wildcard(_,_) ->
+ throw({error,unknown_devtype}).
+ 
+ 
+%% DESCRIPTION:  Merges a device current configuration with an updated configuration considering
+%%               '$keep' wildcards in the latter, returning the resulting new device configuration
+%%
+%% ARGUMENTS:    - {CurrCfg}:    A tuple of type-specific variables representing the current device's configuration
+%%               - {UpdatedCfg}: A tuple of type-specific variables representing the updated device's
+%%                               configuration to be merged with the current considering '$keep' wildcards
+%%               - Type:         The device's type (fan|light|door|thermostat|heater)
+%%
+%%               Please refer to the "devtypes_configurations_definitions.hrl"
+%%               header file for the definitions of allowed device configurations
+%%
+%% RETURNS:      - {ok,NewCfg} -> The resulting valid configuration to be applied to the device
+%% 
+%% THROWS:       - {error,invalid_devconfig} -> The passed {Config} arguments represent an
+%%                                              invalid configuration for the device Type
+%%               - {error,unknown_devtype}   -> The device type is invalid
+%%
+check_merge_devconfigs(CurrCfg,UpdateCfg,Type) when element(1,CurrCfg) =:= element(1,UpdateCfg) ->
+ 
+ % Build the new device configuration by retaining only the fields in "CurrCfg" whose corresponding field in "UpdateCfg" is set to '$keep'
+ NewCfg = try list_to_tuple(lists:zipwith(fun(X,Y) -> if Y =:= '$keep' -> X; true -> Y end end, tuple_to_list(CurrCfg), tuple_to_list(UpdateCfg)))
+ catch
+  error:_ ->
+  
+  % An invalid configuration was passed
+   throw({error,invalid_devconfig});
+  
+  exit:_ ->
+  
+   % An invalid configuration was passed
+   throw({error,invalid_devconfig})
+ end,
+ 
+ % Validate and return the new configuration
+ %
+ % NOTE: If the new configuration is not valid or a invalid device Type
+ %       was passed the is_valid_devconfig() function will raise a throw
+ %
+ {is_valid_devconfig(NewCfg,Type),NewCfg};
+ 
+%% ----------- Valid Device Type, Invalid Configuration ----------- %% 
+check_merge_devconfigs(_,_,ValidDev) when
+ 
+ ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
+ ValidDev =:= thermostat orelse ValidDev =:= heater -> 
+
+ throw({error,invalid_devconfig});
+
+%% --------------------- Invalid Device Type --------------------- %% 
+check_merge_devconfigs(_,_,_) ->
  throw({error,unknown_devtype}).
  
 
@@ -361,7 +422,22 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
  
  % Call the function clause associated with the NodeType
  prefix_node_id(NodeType,Node_id).
- 
+
+
+%% DESCRIPTION:  Returns the time in ms after which a new simulated activity will occur in a 'dev_statem'
+%%               as a random value taken from a normal distribution of its "Mean" and "Var" arguments
+%%
+%% ARGUMENTS:    - Mean: The mean of the normal distribution to be used for generating the random value
+%%               - Var:  of the normal distribution to be used for generating the random value
+%%
+%% RETURNS:      - Next_sim_time_ms -> The time after which a new simulated activity will occur in a
+%%                                     'dev_statem' (lower-capped to 100ms to prevent negative values)
+%%
+next_sim_time(Mean,Var) ->
+ Res = max(100,trunc(rand:normal(Mean,Var))),
+ io:format("[next_sim_time]: Returning ~w~n",[Res]),
+ Res.
+
  
 %%====================================================================================================================================
 %%                                                     OTHER UTILITY FUNCTIONS

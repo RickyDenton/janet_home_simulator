@@ -84,8 +84,6 @@ handle_continue(init,SrvState) ->
  
 %% ========================================================= HANDLE_CALL ========================================================= %% 
 
-%% ----------------------------------------------------------- BOOTING ----------------------------------------------------------- %%
-
 %% SENDER:    The device's 'dev_server' process
 %% WHEN:      During the 'dev_server' initialization (handle_continue(init,_))
 %% PURPOSE:   Device registration request
