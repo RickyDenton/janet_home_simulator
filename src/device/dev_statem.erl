@@ -1,9 +1,9 @@
-%% This module represents the state machine of a simulated fan in the JANET Device application %%
+%% This module represents the simulated state machine of a device in the JANET Device application %%
 
--module(jfan).
+-module(dev_statem).
 -behaviour(gen_statem).
 
--export([start_link/1,callback_mode/0,init/1,handle_event/4]). % gen_statem Behaviour Callback Functions
+-export([start_link/2,callback_mode/0,init/1,handle_event/4]). % gen_statem Behaviour Callback Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -45,15 +45,15 @@ callback_mode() ->
 	
 
 %% ============================================================ INIT ============================================================ %%
-init(Config) ->
+init({Config,Type}) ->
 
  % Logging purposes
  %% [TODO]: Remove when ready 
- io:format("[statem_fan]: Initialized (config = ~p)~n",[Config]),
+ io:format("[statem_~w]: Initialized (config = ~p)~n",[Type,Config]),
 
  {ok,                                                                                % Inform the 'gen_statem' engine that the 'dev_statem' has successfully initialized
   Config,                                                                            % The initial state of the 'dev_statem'
-  erlang:system_time(second),                                                        % Safe initialization of the "LastUpdate" variable (that will be properly initialized 
+  {erlang:system_time(second),Type},                                                 % Safe initialization of the "LastUpdate" variable (that will be properly initialized  [TODO]: + Type
   [                                                                                  % in the "gen_config" call sent by the 'dev_server' at its initialization)
    {{timeout,inactivity_update_timer},?Inactivity_update_timeout,none},              % Inactivity Update Timer
    {{timeout,simulated_activity_timer},utils:next_sim_time(?Sim_mean,?Sim_var),none} % Simulated Activity Timer
@@ -66,7 +66,7 @@ init(Config) ->
 
 %% INACTIVITY UPDATE TIMER
 %%
-handle_event({timeout,inactivity_update_timer},_,Config,LastUpdate) ->
+handle_event({timeout,inactivity_update_timer},_,Config,{LastUpdate,Type}) ->
 
  % Get the current time
  Now = erlang:system_time(second),
@@ -79,7 +79,7 @@ handle_event({timeout,inactivity_update_timer},_,Config,LastUpdate) ->
 	
 	% Reinitialize the 'inactivity_update_timer'
 	% and update the "LastUpdate" variable
-	{keep_state,Now,[{{timeout,inactivity_update_timer},?Inactivity_update_timeout,none}]};
+	{keep_state,{Now,Type},[{{timeout,inactivity_update_timer},?Inactivity_update_timeout,none}]};
  
    true ->
    
@@ -91,7 +91,7 @@ handle_event({timeout,inactivity_update_timer},_,Config,LastUpdate) ->
   
 %% SIMULATED ACTIVITY TIMER
 %%
-handle_event({timeout,simulated_activity_timer},_,_,LastUpdate) ->
+handle_event({timeout,simulated_activity_timer},_,_,{LastUpdate,_}) ->
 
  % Get the current time
  Now = erlang:system_time(second),
@@ -118,10 +118,10 @@ handle_event({timeout,simulated_activity_timer},_,_,LastUpdate) ->
  
 %% DEV_CONFIG_CHANGE
 %%   
-handle_event({call,DevSrvPid},{dev_config_change,UpdateCfg},Config,_) ->
+handle_event({call,DevSrvPid},{dev_config_change,UpdateCfg},Config,{_,Type}) ->
 
  % Derive and validate the new configuration to be applied from the current and the updated configuration 
- case catch(utils:check_merge_devconfigs(Config,UpdateCfg,fan)) of
+ case catch(utils:check_merge_devconfigs(Config,UpdateCfg,Type)) of
  
   % If the new configuration is valid
   {ok,NewConfig} -> 
@@ -130,14 +130,14 @@ handle_event({call,DevSrvPid},{dev_config_change,UpdateCfg},Config,_) ->
    Now = erlang:system_time(second),
 
    % Update the 'dev_statem' state and "LastUpdate" variables and return them to the 'dev_server'
-   {next_state,NewConfig,Now,[{reply,DevSrvPid,{ok,{NewConfig,Now}}}]};
+   {next_state,NewConfig,{Now,Type},[{reply,DevSrvPid,{ok,{NewConfig,Now}}}]};
 
   % Otherwise, if the new configuration is invalid
   {error,invalid_devconfig} ->
   
    % Logging purposes
    %% [TODO]: Remove
-   io:format("[statem_fan]: WRONG New Configuration: ~p~n",[UpdateCfg]),
+   io:format("[statem_~w]: WRONG New Configuration: ~p~n",[UpdateCfg,Type]),
    
    % Keep the 'dev_statem' state and LastUpdate variables and inform
    % the 'dev_server' that the passed configuration is invalid   
@@ -147,13 +147,13 @@ handle_event({call,DevSrvPid},{dev_config_change,UpdateCfg},Config,_) ->
 
 %% GET_CONFIG
 %%   
-handle_event({call,DevSrvPid},get_config,Config,_) ->
+handle_event({call,DevSrvPid},get_config,Config,{_,Type}) ->
 
  % Get the current time
  Now = erlang:system_time(second),
  
  % Update the "LastUpdate" variable and return it along with the state to the 'dev_server'
- {keep_state,Now,[{reply,DevSrvPid,{ok,{Config,Now}}}]}.
+ {keep_state,{Now,Type},[{reply,DevSrvPid,{ok,{Config,Now}}}]}.
 
 
 %%====================================================================================================================================
@@ -161,5 +161,5 @@ handle_event({call,DevSrvPid},get_config,Config,_) ->
 %%==================================================================================================================================== 
 
 %% Called by its 'sup_jdev' supervisor during the JANET Device boot
-start_link(Config) ->
-    gen_statem:start_link({local,dev_statem}, ?MODULE, Config, []).  % The spawned process is also registered locally under the 'dev_statem' name
+start_link(Config,Type) ->
+    gen_statem:start_link({local,dev_statem}, ?MODULE, {Config,Type}, []).  % The spawned process is also registered locally under the 'dev_statem' name

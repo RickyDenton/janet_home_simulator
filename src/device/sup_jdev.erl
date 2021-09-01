@@ -18,19 +18,6 @@ init(_) ->
  % Ensure the device configuration to be valid according to its type
  ok = utils:is_valid_devconfig(Config,DevType),
 
- % Determine the Erlang module to be used for instantiating the device 'dev_statem' from its Type
- Dev_statem_module = get_statem_module(DevType),
- 
- % Set the child specification of the device's 'dev_statem' module
- Dev_statem_specs = {
-                     dev_statem,		                        % ChildID
-                     {Dev_statem_module,start_link,[Config]},   % Child Start Function
- 	                 permanent,                                 % Child Restart Policy 
-	                 2000,                                      % Child Sub-tree Max Shutdown Time
-	                 worker,                                    % Child Type
-	                 [Dev_statem_module]                        % Child Modules (For Release Handling Purposes)
-                    },
-
  % Return the supervisor flags and the list of children specifications
  {ok,
   {
@@ -44,8 +31,15 @@ init(_) ->
    
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
    [
-    %% --- The gen_statem relative to the device type (jfan,jlight,jdoor,jheater or jthermostat) --- %%
-    Dev_statem_specs,
+    %% ----------------------- The device's state machine (dev_statem) ----------------------- %%
+    {
+     dev_statem,		                        % ChildID
+     {dev_statem,start_link,[Config,DevType]},  % Child Start Function
+ 	 permanent,                                 % Child Restart Policy 
+	 2000,                                      % Child Sub-tree Max Shutdown Time
+	 worker,                                    % Child Type
+	 [dev_statem]                               % Child Modules (For Release Handling Purposes)
+    },
    
     %% ------------------- The device's communication server (dev_server) ------------------- %%
     {
@@ -59,28 +53,6 @@ init(_) ->
    ] 
   }
  }.
-
-
-%% Returns the name of the 'dev_statem' module associated with a device type (init(_) helper function)
-get_statem_module(DevType) ->
- case DevType of
- 
-  % Return the name of the 'dev_statem' module associated with the device type
-  fan ->
-   jfan;
-  light ->
-   jlight;
-  door ->
-   jdoor;
-  heater ->
-   jheater;
-  thermostat ->
-   jthermostat;
-   
-  % If unknown device type, raise a throw exception (this must not happen at this point)
-  _ ->
-   throw(unknown_device)
- end.   
 
 
 %%====================================================================================================================================
