@@ -21,7 +21,7 @@
 
 % Mean of the normal distribution used for defining the time after
 % which the 'dev_statem' attempts simulated state changes (ms)
--define(Sim_mean,10 * 1000).    % 30
+-define(Sim_mean,5 * 1000).    % 30
 
 % Mean of the normal distribution used for defining the time after
 % which the 'dev_statem' attempts simulated state changes (ms)
@@ -201,6 +201,16 @@ simulate_activity(State,fan) ->
  OnOff = simulate_onoff_trait(State,fan),
  FanSpeed = simulate_fanspeed_trait(next_onoff(State#fancfg.onoff,OnOff),State#fancfg.fanspeed),
  #fancfg{onoff = OnOff, fanspeed = FanSpeed};
+ 
+simulate_activity(State,light) ->
+ OnOff = simulate_onoff_trait(State,light),
+ Brightness = simulate_brightness_trait(next_onoff(State#lightcfg.onoff,OnOff),State#lightcfg.brightness),
+ ColorSetting = simulate_colorsetting_trait(next_onoff(State#lightcfg.onoff,OnOff)),
+ #lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = ColorSetting};
+ 
+simulate_activity(State,door) ->
+ {OpenClose,LockUnlock} = simulate_door_traits(State),
+ #doorcfg{openclose = OpenClose, lockunlock = LockUnlock};
 
 simulate_activity(_,_) ->
  %% [TODO]
@@ -210,7 +220,7 @@ simulate_activity(_,_) ->
  
  
 %% This refers to Type = fan ([TODO]: Normalize)
-simulate_onoff_trait(_,_) ->
+simulate_onoff_trait(_,fan) ->
 
  % Retrieve the current hour
  {Hour,_,_} = erlang:time(),
@@ -247,8 +257,48 @@ simulate_onoff_trait(_,_) ->
 	Rand < 1 ->
 	 on
    end
- end.
+ end;
 
+%% This refers to Type = light ([TODO]: Normalize)
+simulate_onoff_trait(_,light) ->
+
+ % Retrieve the current hour
+ {Hour,_,_} = erlang:time(),
+ 
+ % Generate a uniformely distributed
+ % random number between 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ io:format("onoff trait rand = ~w~n",[Rand]),
+ 
+ if
+  % Light hours
+  Hour >= 8 andalso Hour =< 18  ->
+  
+   % 60% off, 20% keep, 20% on
+   if 
+    Rand =< 0.6 ->
+	 off;
+	Rand =< 0.8 ->
+	 '$keep';
+	Rand < 1 ->
+	 on
+   end;
+   
+  % Dark hours
+  Hour < 8 orelse Hour > 18 ->
+
+   % 60% on, 20% keep, 20% off
+   if 
+    Rand =< 0.6 ->
+	 on;
+	Rand =< 0.8 ->
+	 '$keep';
+	Rand < 1 ->
+	 off
+   end
+ end.
+ 
 
 %% This refers to Type = fan ([TODO]: Normalize)
 
@@ -299,10 +349,188 @@ simulate_fanspeed_trait(on,CurrFanSpeed) ->
  end.
 
 
+% If the simulated action results in turning off the 
+% light, it has no sense to change its brightness
+simulate_brightness_trait(off,_) ->
+ io:format("brightness trait off->keep~n"),
+ '$keep';
+ 
+simulate_brightness_trait(on,CurrBrightness) -> 
+ % Retrieve the current hour
+ {Hour,_,_} = erlang:time(),
+ 
+ % Generate a uniformely distributed
+ % random number between 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ io:format("brightness trait rand = ~w~n",[Rand]),
+ 
+ if
+  % Light hours
+  Hour >= 8 andalso Hour =< 18  ->
+  
+   % 60% decrease, 20% keep, 20% increase of 10, 20 or 30
+   % units % (uniformely distributed, and consider capping)
+   if 
+    Rand =< 0.6 ->
+	 max(10,CurrBrightness - (rand:uniform(3)*10));
+	Rand =< 0.8 ->
+	 '$keep';
+	Rand < 1 ->
+	 min(100,CurrBrightness + (rand:uniform(3)*10))
+   end;
+   
+  % Dark hours
+  Hour < 8 orelse Hour > 18 ->
+
+   % 60% increase, 20% keep, 20% decrease of 10, 20 or 30
+   % units % (uniformely distributed, and consider capping)
+   if 
+    Rand =< 0.6 ->
+	 min(100,CurrBrightness + (rand:uniform(3)*10));
+	Rand =< 0.8 ->
+	 '$keep';
+	Rand < 1 ->
+	 max(10,CurrBrightness - (rand:uniform(3)*10))
+   end
+ end.
 
 
+simulate_colorsetting_trait(off) ->
+ io:format("colorsetting trait off->keep~n"),
+ '$keep';
+simulate_colorsetting_trait(on) ->
 
+ % Generate a uniformely distributed
+ % random number between 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ io:format("colorsetting trait rand = ~w~n",[Rand]),
+ 
+ % 60% keep, 40% random new color selected through a random number from 1 to 10
+ if 
+  Rand =< 0.6 ->
+   '$keep';
+  Rand < 1 ->
+   case rand:uniform(10) of
+    1 -> "White";
+	2 -> "Red";
+	3 -> "Yellow";
+	4 -> "Blue";
+	5 -> "Purple";
+	6 -> "Green";
+	7 -> "Orange";
+	8 -> "Brown";
+	9 -> "Pink";
+	10 -> "Teal"
+   end
+ end.
+ 
+ 
+ 
+ 
+ 
+ 
+simulate_door_traits(State) ->
 
+ % Retrieve the current hour
+ {Hour,_,_} = erlang:time(),
+ 
+ % Generate a uniformely distributed
+ % random number between 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ io:format("door traits rand = ~w~n",[Rand]),
+ 
+ if
+ 
+  % "Movement Hours"
+  (Hour >= 6 andalso Hour =< 9) orelse
+  (Hour >= 12 andalso Hour =<14) orelse
+  (Hour >= 18 andalso Hour =<21) ->
+  
+   case {State#doorcfg.openclose,State#doorcfg.lockunlock} of
+
+    {open,unlock} ->
+   
+     % 40% {open,unlock} (keep), 60% {close,unlock} 
+     if
+ 	  Rand =< 0.4 ->
+	   {open,unlock};
+	  Rand < 1 ->
+	   {close,unlock}
+	 end;
+	
+    {close,unlock} ->
+   
+      % 40% {close,unlock} (keep), 40% {open,unlock}, 20% {close,lock}
+      if
+	   Rand =< 0.4 ->
+	    {close,unlock};
+	   Rand =< 0.8 ->
+	    {open,unlock};
+	   Rand < 1 ->
+	    {close,lock}
+	  end;
+
+    {close,lock} ->
+   
+     % 60% {close,lock} (keep), 40% {close,unlock}
+     if
+	  Rand =< 0.6 ->
+	   {close,lock};
+	  Rand < 1 ->
+	   {close,unlock}
+	 end
+   end;	
+	  
+  % "Working Hours"
+  true ->
+  
+   case {State#doorcfg.openclose,State#doorcfg.lockunlock} of
+
+    {open,unlock} ->
+   
+     % 40% {open,unlock} (keep), 60% {close,unlock} 
+     if
+ 	  Rand =< 0.4 ->
+	   {open,unlock};
+	  Rand < 1 ->
+	   {close,unlock}
+	 end;
+	
+    {close,unlock} ->
+   
+      % 20% {close,unlock} (keep), 20% {open,unlock}, 60% {close,lock}
+      if
+	   Rand =< 0.2 ->
+	    {close,unlock};
+	   Rand =< 0.4 ->
+	    {open,unlock};
+	   Rand < 1 ->
+	    {close,lock}
+	  end;
+
+    {close,lock} ->
+   
+     % 60% {close,lock} (keep), 40% {close,unlock}
+     if
+	  Rand =< 0.6 ->
+	   {close,lock};
+	  Rand < 1 ->
+	   {close,unlock}
+	 end
+   end
+ end.
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
 next_onoff(CurrOnOff,'$keep') ->
  CurrOnOff; 
 next_onoff(_,CandidateOnOff) ->

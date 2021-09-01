@@ -65,7 +65,7 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  {ok,Type} = application:get_env(type),
 
  if
-  Type =:= fan ->
+  Type =:= fan orelse Type =:= light orelse Type =:= door ->
   
    % Initialize the process dictionary variable used for buffering postponed configuration updates
    % for the device handler to the initial configuration and timestamp of the device's state machine
