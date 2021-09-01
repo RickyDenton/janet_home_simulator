@@ -2,10 +2,10 @@
 
 -module(utils).
 
--export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,check_merge_devconfigs/3,  % Devices Utility Functions
-         get_devtype_default_config/1,deprefix_dev_config/1,next_sim_time/2]). 
--export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                                % Nodes Utility Functions
--export([is_running/1,str_to_atom/1]).							                                        % Other Utility Functions
+-export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
+         check_merge_devconfigs/3,get_devtype_default_config/1,deprefix_dev_config/1]). 
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                  % Nodes Utility Functions
+-export([is_running/1,str_to_atom/1]).							                          % Other Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -422,22 +422,7 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
  
  % Call the function clause associated with the NodeType
  prefix_node_id(NodeType,Node_id).
-
-
-%% DESCRIPTION:  Returns the time in ms after which a new simulated activity will occur in a 'dev_statem'
-%%               as a random value taken from a normal distribution of its "Mean" and "Var" arguments
-%%
-%% ARGUMENTS:    - Mean: The mean of the normal distribution to be used for generating the random value
-%%               - Var:  of the normal distribution to be used for generating the random value
-%%
-%% RETURNS:      - Next_sim_time_ms -> The time after which a new simulated activity will occur in a
-%%                                     'dev_statem' (lower-capped to 100ms to prevent negative values)
-%%
-next_sim_time(Mean,Var) ->
- Res = max(100,trunc(rand:normal(Mean,Var))),
- io:format("[next_sim_time]: Returning ~w~n",[Res]),
- Res.
-
+ 
  
 %%====================================================================================================================================
 %%                                                     OTHER UTILITY FUNCTIONS
