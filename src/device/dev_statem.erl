@@ -11,25 +11,25 @@
 
 % The inactivity time after which the 'dev_statem' automatically forwards
 % its state to the 'dev_server' via the Inactivity Update Timer (ms)
--define(Inactivity_update_timeout,60 * 1000).
+-define(Inactivity_update_timeout,60 * 1000).  % Default: 60 * 1000
 
 %% ------------------------- Simulated Activity Constants ------------------------- %%
 
 % Minimum inactivity time afterr which the 'dev_statem' may attempt
 % to simulate a state change via the Simulated Activity Timer (ms)
--define(Min_sim_inactivity,1 * 1000). % 25
+-define(Min_sim_inactivity,25 * 1000).         % Default: 25 * 1000
 
 % Mean and Variance of the normal distribution using for determining the next time at which
 % the 'dev_statem' attempts to simulate a state change via the Simulated Activity Timer (ms)
--define(Sim_mean,5 * 1000).    % 30
--define(Sim_var, 200 * 1000).   % 200000
+-define(Sim_mean,30 * 1000).                   % Default: 30 * 1000
+-define(Sim_var, 200000 * 1000).               % Default: 200000 * 1000
 
 %% -- Ambient Temperature Evolution Constants (thermostat and conditioner only) -- %%
 
 % Mean and Variance of the normal distribution used for determining the next time at 
 % which the 'dev_statem' attempts to evolve its 'temp_current' ambient temperature (ms)
--define(Amb_base_mean,5 * 1000).    % 30
--define(Amb_base_var, 20 * 1000).   % 200000
+-define(Amb_base_mean,30 * 1000).              % Default: 30 * 1000
+-define(Amb_base_var, 200000 * 1000).          % Default: 200000 * 1000
 
 %% ------------------- State Machine State and Data Definitions ------------------- %%
 
