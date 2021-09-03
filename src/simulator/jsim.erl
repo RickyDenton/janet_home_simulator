@@ -472,11 +472,11 @@ ctr_command(_,_,_,_) ->
 %%                           device's configuration, with the following  being
 %%                           allowed (see the "devtypes_configurations_definitions.hrl"
 %%                           header file for more information):
-%%                            - fan:        {OnOff,FanSpeed}
-%%                            - light:      {OnOff,Brightness,ColorSetting}
-%%                            - door:       {OpenClose,LockUnlock}
-%%                            - thermostat: {OnOff,TempTarget,TempCurrent}
-%%                            - heater:     {OnOff,FanSpeed,TempTarget,TempCurrent}
+%%                            - fan:         {OnOff,FanSpeed}
+%%                            - light:       {OnOff,Brightness,ColorSetting}
+%%                            - door:        {OpenClose,LockUnlock}
+%%                            - thermostat:  {OnOff,TempTarget,TempCurrent}
+%%                            - conditioner: {OnOff,TempTarget,TempCurrent,FanSpeed}
 %%                           The '$keep' wildcard can also be used in any field for the
 %%                           preserving its current value in the current device configuration
 %%

@@ -24,7 +24,7 @@
 -define(Sim_mean,5 * 1000).    % 30
 -define(Sim_var, 200 * 1000).   % 200000
 
-%% ----- Ambient Temperature Evolution Constants (thermostat and heater only) ----- %%
+%% -- Ambient Temperature Evolution Constants (thermostat and conditioner only) -- %%
 
 % Mean and Variance of the normal distribution used for determining the next time at 
 % which the 'dev_statem' attempts to evolve its 'temp_current' ambient temperature (ms)
@@ -39,7 +39,7 @@
 -record(statemdata,    
         {
 		 lastupdate,  % The last time the state of the 'dev_statem' was sent to the 'dev_server'
-		 type         % The 'dev_statem' device type (fan|light|door|thermostat|heater)
+		 type         % The 'dev_statem' device type (fan|light|door|thermostat|conditioner)
 		}).
 
 
@@ -61,12 +61,12 @@ init({Config,Type}) ->
  %
  % 1) The Inactivity Update Timer
  % 2) The Simulated Activity Timer
- % 3) The Ambient Temperature Update Timer (thermostat and heater ONLY)
+ % 3) The Ambient Temperature Update Timer (thermostat and conditioner ONLY)
  %
  if
 
-  % Thermostat and Heater timers
-  Type =:= thermostat orelse Type =:= heater ->
+  % Thermostat and Conditioner timers
+  Type =:= thermostat orelse Type =:= conditioner ->
    StatemTimers = [ 
                    {{timeout,inactivity_update_timer},?Inactivity_update_timeout,none},
                    {{timeout,simulated_activity_timer},next_sim_time(),none},
@@ -208,7 +208,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
 
 %% AMBIENT TEMPERATURE UPDATE TIMER
 %% --------------------------------
-%% PURPOSE:   Autonomously update the 'temp_current' ambient temperature sensor of a 'thermostat' or 'heater' device
+%% PURPOSE:   Autonomously update the 'temp_current' ambient temperature of a 'thermostat' or 'conditioner' device
 %% ACTIONS:   1) Determine the equilibrium temperature, which is given by the 'temp_target' if the 
 %%               device is ON or by a constant dependent on the hour of day if the device is OFF
 %%            2) Determine the difference between the equilibrium and the current 'temp_current' temperature
@@ -230,8 +230,8 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
  if
   Data#statemdata.type =:= thermostat ->
    TempCurrent = State#thermocfg.temp_current;
-  Data#statemdata.type =:= heater ->
-   TempCurrent = State#heatercfg.temp_current
+  Data#statemdata.type =:= conditioner ->
+   TempCurrent = State#condcfg.temp_current
  end,
    
  % Compute the difference between the equilibrium and the current temperature
@@ -253,8 +253,8 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
    if
     Data#statemdata.type =:= thermostat ->
      NewState = State#thermocfg{temp_current = NewTempCurrent};
-    Data#statemdata.type =:= heater ->
-     NewState = State#heatercfg{temp_current = NewTempCurrent}
+    Data#statemdata.type =:= conditioner ->
+     NewState = State#condcfg{temp_current = NewTempCurrent}
    end,
   
    % Get the current OS time in seconds (UNIX time)
@@ -353,7 +353,7 @@ handle_event({call,DevSrvPid},get_config,State,Data) ->
 %% DESCRIPTION:  Simulates a candidate state for the 'dev_statem' according to its current State and Type
 %%
 %% ARGUMENTS:    - State#devtypecfg: The 'dev_statem' current state
-%%               - Type:             The 'dev_statem' device type (fan|light|door|thermostat|heater)
+%%               - Type:             The 'dev_statem' device type (fan|light|door|thermostat|conditioner)
 %%
 %% RETURNS:      - CandidateState#devtypecfg -> The candidate state for the 'dev_statem'
 %%
@@ -427,29 +427,29 @@ simulate_activity(State,thermostat) ->
  % NOTE: The 'temp_current' trait must not be simulated since it evolves asynchronously via the "Ambient Temperature Update Timer" 
  #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep'};
 
-%% HEATER
-%% ------
-simulate_activity(State,heater) ->
+%% CONDITIONER
+%% -----------
+simulate_activity(State,conditioner) ->
 
  % Generate a random candidate value for the 'onoff' trait, which is affected by:
- %  - Whether the heater is currently on or off
- %  - Whether the heater is currently at the equilibrium temperature
- OnOff = simulate_ambient_dev_onoff_trait(State#heatercfg.onoff, State#heatercfg.temp_target - State#heatercfg.temp_current),
+ %  - Whether the conditioner is currently on or off
+ %  - Whether the conditioner is currently at the equilibrium temperature
+ OnOff = simulate_ambient_dev_onoff_trait(State#condcfg.onoff, State#condcfg.temp_target - State#condcfg.temp_current),
  
  % Generate a random candidate value for the 'temp_target' trait, which is affected by:
- %  - Whether in the candidate state the heater is on or off
- %  - Whether the heater is currently at the equilibrium temperature
- TempTarget = simulate_ambient_dev_target_temp_trait(new_value(State#heatercfg.onoff,OnOff),State#heatercfg.temp_target - State#heatercfg.temp_current),
+ %  - Whether in the candidate state the conditioner is on or off
+ %  - Whether the conditioner is currently at the equilibrium temperature
+ TempTarget = simulate_ambient_dev_target_temp_trait(new_value(State#condcfg.onoff,OnOff),State#condcfg.temp_target - State#condcfg.temp_current),
  
  % Generate a random candidate value for the 'fanspeed' trait, which is affected by:
- %  - Whether in the candidate state the heater is on or off
+ %  - Whether in the candidate state the conditioner is on or off
  %  - The absolute distance between the candidate equilibrium and the current temperature
- FanSpeed = simulate_heater_fanspeed_trait(new_value(State#heatercfg.onoff,OnOff),abs(new_value(State#heatercfg.temp_target,TempTarget) - State#heatercfg.temp_current)),
+ FanSpeed = simulate_conditioner_fanspeed_trait(new_value(State#condcfg.onoff,OnOff),abs(new_value(State#condcfg.temp_target,TempTarget) - State#condcfg.temp_current)),
  
  % Return the candidate state
  %
  % NOTE: The 'temp_current' trait must not be simulated since it evolves asynchronously via the "Ambient Temperature Update Timer" 
- #heatercfg{onoff = OnOff, fanspeed = FanSpeed, temp_target = TempTarget, temp_current = '$keep'}.
+ #condcfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep', fanspeed = FanSpeed}.
   
 
 %% Returns the new value of a simulated trait obtained by merging its current with its candidate value (simulate_activity(State,_) helper function)
@@ -818,10 +818,11 @@ simulate_door_traits(State) ->
  end. 
  
  
-%% --------------------------- SIMULATED AMBIENT DEVICES TRAITS HELPER FUNCTIONS (Thermostat + Heater) --------------------------- %% 
  
-%% Simulates the 'onoff' trait of a 'thermostat' or a 'heater' device
-%% (simulate_activity(State,thermostat),simulate_activity(State,heater), helper function)
+%% ------------------------ SIMULATED AMBIENT DEVICES TRAITS HELPER FUNCTIONS (Thermostat + Conditioner) ------------------------ %% 
+ 
+%% Simulates the 'onoff' trait of a 'thermostat' or a 'conditioner' device
+%% (simulate_activity(State,thermostat),simulate_activity(State,conditioner), helper function)
 simulate_ambient_dev_onoff_trait(off,_) ->
 
  % If in the candidate state the device is off, as a simplification the 'onoff' trait is
@@ -852,8 +853,8 @@ simulate_ambient_dev_onoff_trait(on,_) ->
  on.
 
 
-%% Simulates the 'temp_target' trait of a 'thermostat' or a 'heater' device
-%% (simulate_activity(State,thermostat),simulate_activity(State,heater), helper function) 
+%% Simulates the 'temp_target' trait of a 'thermostat' or a 'conditioner' device
+%% (simulate_activity(State,thermostat),simulate_activity(State,conditioner), helper function) 
 simulate_ambient_dev_target_temp_trait(off,_) ->
 
  % If in the candidate state the device is off, it has no sense to change its 'temp_target' trait
@@ -884,13 +885,13 @@ simulate_ambient_dev_target_temp_trait(on,_) ->
  '$keep'.
 
  
-%% Simulates the 'fanspeed' trait of a 'thermostat' or a 'heater' device (simulate_activity(State,heater) helper function) 
-simulate_heater_fanspeed_trait(off,_) ->
+%% Simulates the 'fanspeed' trait of a 'conditioner' device (simulate_activity(State,conditioner) helper function) 
+simulate_conditioner_fanspeed_trait(off,_) ->
 
  % If in the candidate state the device is off, it has no sense to change its 'fanspeed' trait
  '$keep';
  
-simulate_heater_fanspeed_trait(on,TempDistEq) -> 
+simulate_conditioner_fanspeed_trait(on,TempDistEq) -> 
  
  % Generate a random candidate value for the 'fanspeed' trait the higher the further the distance between the
  % equilibrium and the current temperature (conceptually contributing to the reason why ambient temperature updates
@@ -1014,9 +1015,9 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
  
  
 %% DESCRIPTION:  Returns the time in "ms" after which schedule a new instance of the
-%%               Ambient Temperature Update Timer in a 'thermostat' or 'heater' device
+%%               Ambient Temperature Update Timer in a 'thermostat' or 'conditioner' device
 %%
-%% ARGUMENTS:    - State: The current state of the 'thermostat' or 'heater' device
+%% ARGUMENTS:    - State: The current state of the 'thermostat' or 'conditioner' device
 %%
 %% RETURNS:      - Next_amb_time_ms -> The time in "ms" after which schedule a new instance of the
 %%                                     Ambient Temperature Update Timer (lower-capped to 3000ms)
@@ -1060,13 +1061,13 @@ temp_diff_from_eq(State) when is_record(State, thermocfg), State#thermocfg.onoff
 temp_diff_from_eq(State) when is_record(State, thermocfg), State#thermocfg.onoff =:= off ->
  get_native_equilibrium() - State#thermocfg.temp_current;  
 
-% Heater ON (TempEq = 'temp_target')
-temp_diff_from_eq(State) when is_record(State, heatercfg), State#heatercfg.onoff =:= on ->
- State#heatercfg.temp_target - State#heatercfg.temp_current;
+% Conditioner ON (TempEq = 'temp_target')
+temp_diff_from_eq(State) when is_record(State, condcfg), State#condcfg.onoff =:= on ->
+ State#condcfg.temp_target - State#condcfg.temp_current;
  
-% Heater OFF (TempEq = native equilibrium)
-temp_diff_from_eq(State) when is_record(State, heatercfg), State#heatercfg.onoff =:= off ->
- get_native_equilibrium() - State#heatercfg.temp_current. 
+% Conditioner OFF (TempEq = native equilibrium)
+temp_diff_from_eq(State) when is_record(State, condcfg), State#condcfg.onoff =:= off ->
+ get_native_equilibrium() - State#condcfg.temp_current. 
 
 
 %% DESCRIPTION:  Returns the ambient native equilibrium temperature associated with

@@ -28,7 +28,7 @@ is_valid_devtype(DevType) when
  DevType =:= light orelse
  DevType =:= door orelse
  DevType =:= thermostat orelse
- DevType =:= heater ->
+ DevType =:= conditioner ->
 
  true;
 
@@ -99,31 +99,31 @@ is_valid_devconfig(Config,thermostat) when
  % Valid thermostat configuration
  ok;
 
-%% ------------------ Valid Heater Configuration ------------------ %% 
-is_valid_devconfig(Config,heater) when 
+%% --------------- Valid Conditioner Configuration --------------- %% 
+is_valid_devconfig(Config,conditioner) when 
 
  % 'onoff' trait ('on'|'off')
- Config#heatercfg.onoff =:= on orelse Config#heatercfg.onoff =:= off,
+ Config#condcfg.onoff =:= on orelse Config#condcfg.onoff =:= off,
 
- % 'fanspeed' trait	(0 < fanspeed <= 100)
- is_number(Config#heatercfg.fanspeed),
- Config#heatercfg.fanspeed > 0, Config#heatercfg.fanspeed =< 100,
- 
  % 'temp_target' trait (0 <= temp_target <= 50)
- is_number(Config#heatercfg.temp_target),
- Config#heatercfg.temp_target >= 0, Config#heatercfg.temp_target =< 50,
+ is_number(Config#condcfg.temp_target),
+ Config#condcfg.temp_target >= 0, Config#condcfg.temp_target =< 50,
                     
  % 'temp_current' trait (NOTE: the interval range is NOT checked)                   
- is_number(Config#heatercfg.temp_current) ->
+ is_number(Config#condcfg.temp_current),
 
- % Valid heater configuration
+ % 'fanspeed' trait	(0 < fanspeed <= 100)
+ is_number(Config#condcfg.fanspeed),
+ Config#condcfg.fanspeed > 0, Config#condcfg.fanspeed =< 100 ->
+
+ % Valid conditioner configuration
  ok;
 					
 %% ----------- Valid Device Type, Invalid Configuration ----------- %%
 is_valid_devconfig(_,ValidDev) when
  
  ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
- ValidDev =:= thermostat orelse ValidDev =:= heater -> 
+ ValidDev =:= thermostat orelse ValidDev =:= conditioner -> 
  
  throw({error,invalid_devconfig});
 
@@ -139,11 +139,11 @@ is_valid_devconfig(_,_) ->
 %%                           device's configuration, with the following  being
 %%                           allowed (see the "devtypes_configurations_definitions.hrl"
 %%                           header file for more information):
-%%                            - fan:        {OnOff,FanSpeed}
-%%                            - light:      {OnOff,Brightness,ColorSetting}
-%%                            - door:       {OpenClose,LockUnlock}
-%%                            - thermostat: {OnOff,TempTarget,TempCurrent}
-%%                            - heater:     {OnOff,FanSpeed,TempTarget,TempCurrent}
+%%                            - fan:         {OnOff,FanSpeed}
+%%                            - light:       {OnOff,Brightness,ColorSetting}
+%%                            - door:        {OpenClose,LockUnlock}
+%%                            - thermostat:  {OnOff,TempTarget,TempCurrent}
+%%                            - conditioner: {OnOff,TempTarget,TempCurrent,FanSpeed}
 %%                           The '$keep' wildcard can also be used in any field for the
 %%                           purposes of preserving its value when applying this
 %%                           configuration with another of the same #cfgdevtype
@@ -211,29 +211,29 @@ build_dev_config_wildcard({OnOff,TempTarget,TempCurrent},thermostat) when
  % Build and return the valid thermostat configuration
  #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent};
 
-%% --------------- Build Valid Heater Configuration --------------- %%
-build_dev_config_wildcard({OnOff,FanSpeed,TempTarget,TempCurrent},heater) when 
+%% ------------ Build Valid Conditioner Configuration ------------ %%
+build_dev_config_wildcard({OnOff,TempTarget,TempCurrent,FanSpeed},conditioner) when 
 
  % 'onoff' trait ('on'|'off')
  OnOff =:= '$keep' orelse (OnOff =:= on orelse OnOff =:= off),
- 
- % 'fanspeed' trait	(0 < fanspeed <= 100) 
- FanSpeed =:= '$keep' orelse (is_number(FanSpeed) andalso FanSpeed >0 andalso FanSpeed =< 100),
  
  % 'temp_target' trait (0 <= temp_target <= 50)	
  TempTarget =:= '$keep' orelse (is_number(TempTarget) andalso TempTarget >=0 andalso TempTarget =< 50),
 
  % 'temp_current' trait (NOTE: the interval range is NOT checked)
- TempCurrent =:= '$keep' orelse is_number(TempCurrent) ->
+ TempCurrent =:= '$keep' orelse is_number(TempCurrent),
 
- % Build and return the valid heater configuration
- #heatercfg{onoff = OnOff, fanspeed = FanSpeed, temp_target = TempTarget, temp_current = TempCurrent};
+ % 'fanspeed' trait	(0 < fanspeed <= 100) 
+ FanSpeed =:= '$keep' orelse (is_number(FanSpeed) andalso FanSpeed >0 andalso FanSpeed =< 100) ->
+
+ % Build and return the valid conditioner configuration
+ #condcfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent, fanspeed = FanSpeed};
 
 %% ----------- Valid Device Type, Invalid Configuration ----------- %%
 build_dev_config_wildcard(_,ValidDev) when
  
  ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
- ValidDev =:= thermostat orelse ValidDev =:= heater -> 
+ ValidDev =:= thermostat orelse ValidDev =:= conditioner -> 
  
  throw({error,invalid_devconfig});
 
@@ -248,7 +248,7 @@ build_dev_config_wildcard(_,_) ->
 %% ARGUMENTS:    - {CurrCfg}:    A tuple of type-specific variables representing the current device's configuration
 %%               - {UpdatedCfg}: A tuple of type-specific variables representing the updated device's
 %%                               configuration to be merged with the current considering '$keep' wildcards
-%%               - Type:         The device's type (fan|light|door|thermostat|heater)
+%%               - Type:         The device's type (fan|light|door|thermostat|conditioner)
 %%
 %%               Please refer to the "devtypes_configurations_definitions.hrl"
 %%               header file for the definitions of allowed device configurations
@@ -286,7 +286,7 @@ check_merge_devconfigs(CurrCfg,UpdateCfg,Type) when element(1,CurrCfg) =:= eleme
 check_merge_devconfigs(_,_,ValidDev) when
  
  ValidDev =:= fan orelse ValidDev =:= light orelse ValidDev =:= door orelse 
- ValidDev =:= thermostat orelse ValidDev =:= heater -> 
+ ValidDev =:= thermostat orelse ValidDev =:= conditioner -> 
 
  throw({error,invalid_devconfig});
 
@@ -319,9 +319,9 @@ get_devtype_default_config(door) ->
 get_devtype_default_config(thermostat) ->
  #thermocfg{onoff = off, temp_target = 21, temp_current = 21};
 
-% Heater
-get_devtype_default_config(heater) ->
- #heatercfg{onoff = off, fanspeed = 50, temp_target = 21, temp_current = 21};
+% Conditioner
+get_devtype_default_config(conditioner) ->
+ #condcfg{onoff = off, temp_target = 21, temp_current = 21, fanspeed = 50};
 
 % Unknown device
 get_devtype_default_config(_) ->
@@ -358,9 +358,9 @@ deprefix_dev_config(Config) ->
   thermocfg ->
    {Config#thermocfg.onoff,Config#thermocfg.temp_target,Config#thermocfg.temp_current};  
 
-  % Heater
-  heatercfg ->
-   {Config#heatercfg.onoff,Config#heatercfg.fanspeed,Config#heatercfg.temp_target,Config#heatercfg.temp_current};
+  % Conditioner
+  condcfg ->
+   {Config#condcfg.onoff,Config#condcfg.temp_target,Config#condcfg.temp_current,Config#condcfg.fanspeed};
    
   % Unknown Devtype
   _ ->
