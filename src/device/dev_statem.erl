@@ -9,23 +9,27 @@
 
 %% ------------------------- Inactivity Update Constants ------------------------- %%
 
-% The inactivity time after which the state machine automatically forwards
-% its state to the the 'dev_server' via  the 'inactivity_update_timeout' (ms)
+% The inactivity time after which the 'dev_statem' automatically forwards
+% its state to the 'dev_server' via the Inactivity Update Timer (ms)
 -define(Inactivity_update_timeout,60 * 1000).
 
 %% ------------------------- Simulated Activity Constants ------------------------- %%
 
-% Minimum inactivity time after which the 'dev_statem' can change state
-% autonomously with the purpose of simulating real-world user interaction (ms)
--define(Min_sim_inactivity,1 * 1000). %30
+% Minimum inactivity time afterr which the 'dev_statem' may attempt
+% to simulate a state change via the Simulated Activity Timer (ms)
+-define(Min_sim_inactivity,1 * 1000). % 25
 
-% Mean of the normal distribution used for defining the time after
-% which the 'dev_statem' attempts simulated state changes (ms)
+% Mean and Variance of the normal distribution using for determining the next time at which
+% the 'dev_statem' attempts to simulate a state change via the Simulated Activity Timer (ms)
 -define(Sim_mean,5 * 1000).    % 30
-
-% Mean of the normal distribution used for defining the time after
-% which the 'dev_statem' attempts simulated state changes (ms)
 -define(Sim_var, 200 * 1000).   % 200000
+
+%% ----- Ambient Temperature Evolution Constants (thermostat and heater only) ----- %%
+
+% Mean and Variance of the normal distribution used for determining the next time at 
+% which the 'dev_statem' attempts to evolve its 'temp_current' ambient temperature (ms)
+-define(Amb_base_mean,5 * 1000).    % 30
+-define(Amb_base_var, 20 * 1000).   % 200000
 
 %% ------------------- State Machine State and Data Definitions ------------------- %%
 
@@ -34,8 +38,8 @@
 %% Data
 -record(statemdata,    
         {
-		 lastupdate,  % The last time the state of the 'dev_statem'
-		 type         % The device's type
+		 lastupdate,  % The last time the state of the 'dev_statem' was sent to the 'dev_server'
+		 type         % The 'dev_statem' device type (fan|light|door|thermostat|heater)
 		}).
 
 
@@ -52,114 +56,258 @@ callback_mode() ->
 
 %% ============================================================ INIT ============================================================ %%
 init({Config,Type}) ->
+ 
+ % Define the list of timers used by the 'dev_statem', which include:
+ %
+ % 1) The Inactivity Update Timer
+ % 2) The Simulated Activity Timer
+ % 3) The Ambient Temperature Update Timer (thermostat and heater ONLY)
+ %
+ if
 
- % Logging purposes
- %% [TODO]: Remove when ready 
- io:format("[statem_~w]: Initialized (config = ~p)~n",[Type,Config]),
-
- {ok,                                                                                % Inform the 'gen_statem' engine that the 'dev_statem' has successfully initialized
-  Config,                                                                            % Initial State of the 'dev_statem'
-  #statemdata{lastupdate = erlang:system_time(second), type = Type},                 % Initial Data of the 'dev_statem' (note that the "LastUpdate" variable will be more properly 
-  [                                                                                  %  initialized in the "get_config" call performed by the 'dev_server' during its initialization)
-   {{timeout,inactivity_update_timer},?Inactivity_update_timeout,none},              % Inactivity Update Timer
-   {{timeout,simulated_activity_timer},next_sim_time(?Sim_mean,?Sim_var),none} % Simulated Activity Timer
-  ]
+  % Thermostat and Heater timers
+  Type =:= thermostat orelse Type =:= heater ->
+   StatemTimers = [ 
+                   {{timeout,inactivity_update_timer},?Inactivity_update_timeout,none},
+                   {{timeout,simulated_activity_timer},next_sim_time(),none},
+                   {{timeout,ambient_temperature_update_timer},next_amb_time(Config),none}
+	              ];
+				  
+  % All other device types timers
+  true ->			
+   StatemTimers = [ 
+                   {{timeout,inactivity_update_timer},?Inactivity_update_timeout,none},
+                   {{timeout,simulated_activity_timer},next_sim_time(),none}
+	              ]
+ end,
+ 
+ % Return the initialization tuple to the 'gen_statem' engine:
+ {
+  ok,                                                                 % Indicates to the engine that the 'dev_statem' can start
+  Config,                                                             % The initial State of the 'dev_statem'
+  #statemdata{lastupdate = erlang:system_time(second), type = Type},  % The initial Data of the 'dev_statem'
+                                                                      % NOTE: The 'lastupdate' variable will be more properly set in the
+																	  %       'get_config' call performed by the 'dev_server' at its initialization
+  StatemTimers                                                        % The list of timers to be initialized
  }.
+
  
 %% ======================================================== HANDLE_EVENT ======================================================== %% 
 
-%% ------------------------------------------------------ GENERIC TIMEOUTS ------------------------------------------------------ %%
+%% ----------------------------------------------- GENERIC TIMERS (NAMED TIMERS) ----------------------------------------------- %%
 
 %% INACTIVITY UPDATE TIMER
+%% -----------------------
+%% PURPOSE:   Check if the state of the 'dev_statem' should be sent to the 'dev_server' due to inactivity
+%% ACTIONS:   1.1) If less than "?Inactivity_update_timeout" have passed since the 'dev_statem' sent its
+%%                 state to the 'dev_server', reinitialize the inactivity update timer so to trigger
+%%                 "?Inactivity_update_timeout" milliseconds from the last update
+%%            1.2) If "?Inactivity_update_timeout" or more milliseconds have passed since the 'dev_statem'
+%%                 sent its state to the 'dev_server', send it now along with the current time, and reinitialize
+%%                 the Inactivity Update Timer so to trigger "?Inactivity_update_timeout" milliseconds from now
+%% NEW STATE: -
+%% NEW DATA:  1.1- -
+%%            2.2- Update "LastUpdate" to Now
 %%
 handle_event({timeout,inactivity_update_timer},_,State,Data) ->
 
- % Get the current time
+ % Get the current OS time in seconds (UNIX time)
  Now = erlang:system_time(second),
+ 
  if
    (Now - Data#statemdata.lastupdate)*1000 >= ?Inactivity_update_timeout ->
 	
-    % If at least "?Inactivity_update_timeout" seconds have passed since
-    % the 'dev_statem' sent its state to the 'dev_server', send it now  
+    % If "?Inactivity_update_timeout" or more milliseconds have passed since the 'dev_statem'
+    % sent its state to the 'dev_server', send it now along with the current time
     gen_server:cast(dev_server,{dev_config_update,{State,Now}}),
 	
-	% Reinitialize the 'inactivity_update_timer'
-	% and update the "LastUpdate" data variable
+	% Reinitialize the Inactivity Update Timer so to trigger "?Inactivity_update_timeout"
+	% milliseconds from now and update the "LastUpdate" data variable to the current time
 	{keep_state,Data#statemdata{lastupdate = Now},[{{timeout,inactivity_update_timer},?Inactivity_update_timeout,none}]};
  
    true ->
    
-    % Otherwise, restart the 'inactivity_update_timer' so to trigger
-    % at "?Inactivity_update_timeout" seconds after the LastUpdate
+    % Otherwise, if less than "?Inactivity_update_timeout" have passed since the 'dev_statem' sent its state to the 'dev_server',
+	% reinitialize the inactivity update timer so to trigger "?Inactivity_update_timeout" milliseconds from the last update 
     {keep_state_and_data,[{{timeout,inactivity_update_timer},?Inactivity_update_timeout-((Now - Data#statemdata.lastupdate)*1000),none}]}
  end;
-  
+ 
   
 %% SIMULATED ACTIVITY TIMER
-%%
+%% ------------------------
+%% PURPOSE:   Attempt if applicable to autonomously change the state of the 'dev_statem'
+%%            with the purpose of simulating physical user interaction with the device
+%% ACTIONS:   1) Ensure that at least "?Min_sim_inactivity" milliseconds have passed from the last time the
+%%               'dev_statem' sent its state to the 'dev_server', and if so attempt to simulate a state change.
+%%            2) Reinitialize the Simulated Activity Timer so to trigger at a random time obtained
+%%               via a normal distribution defined by the "?Sim_mean" and "?Sim_var" constants
+%% NEW STATE: The new simulated state, if applicable
+%% NEW DATA:  If the state changed, update "LastUpdate" to "Now"
+%%  
 handle_event({timeout,simulated_activity_timer},_,State,Data) ->
 
- % Get the current time
+ % Get the current OS time in seconds (UNIX time)
  Now = erlang:system_time(second),
+ 
  if
    (Now - Data#statemdata.lastupdate)*1000 < ?Min_sim_inactivity ->
 	
-    % If less that "?Min_sim_inactivity" seconds have passed since the 'dev_statem' sent
-	% its state to the 'dev_server' do not simulate activities and simply restart the timer
-	{keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(?Sim_mean,?Sim_var),none}]};
+    % If less that "?Min_sim_inactivity" milliseconds have passed since the 'dev_statem' sent its state to the
+	% 'dev_server', do not attempt to simulate a state change and simply restart the Simulated Activity Timer
+	{keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]};
  
    true ->
    
-    % Otherwise, simulate user activity by generating a simulated candidate state
+    % Otherwise, simulate an appropriate new state for the 'dev_statem'
 	CandidateState = simulate_activity(State,Data#statemdata.type),
 
-    io:format("[statem_~w]: Garabba (State = ~p, CandidateState = ~p)~n",[Data#statemdata.type,State,CandidateState]),
+    % Logging purposes
+	%% [TODO]: Remove
+    io:format("[statem_~w]: State = ~p, CandidateState = ~p~n",[Data#statemdata.type,State,CandidateState]),
 
-	% Merge the generated candidate with the current state
-	% and check the validiting of the result new state
+    % Merge the simulated with the current state and check the validity of the resulting new state
 	case catch(utils:check_merge_devconfigs(State,CandidateState,Data#statemdata.type)) of
      {ok,NewState} ->     
 
-      % If the new simulated state is valid, ensure that it is different from the current
+      % If the new simulated state is valid, ensure it to be different from the current
       if 
 	   NewState =/= State ->
    
         % If it is different, send it along with the current time to the 'dev_server'
 	    gen_server:cast(dev_server,{dev_config_update,{NewState,Now}}),
 
-        % Update the 'dev_statem' state and "LastUpdate"
-	    % variables and reinitialize the simulated activity timer
-        {next_state,NewState,Data#statemdata{lastupdate = Now},[{{timeout,simulated_activity_timer},next_sim_time(?Sim_mean,?Sim_var),none}]};
+        % Update the 'dev_statem' State and "LastUpdate" variables and reinitialize the Simulated Activity Timer
+        {next_state,NewState,Data#statemdata{lastupdate = Now},[{{timeout,simulated_activity_timer},next_sim_time(),none}]};
 
        true ->
 	   
-	    % If instead there would be no state change, just restart the simulated activity timer
+	    % If instead the current and simulated states are the same, just restart the Simulated Activity Timer
+		
+		% Logging purposes
+		%% [TODO]: Remove
 	    io:format("[statem_~w]: SAME simulated new Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
-	    {keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(?Sim_mean,?Sim_var),none}]}
+	    
+		{keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]}
 	  end;
 	  
      {error,invalid_devconfig} ->
       
-	   % If instead the new simulated state is not valid, keep the current one and restart the simulated activity timer 
+	   % If instead the new simulated state is not valid, keep the current one and restart the Simulated Activity Timer
+	   %
+	   % NOTE: This is more of a failsafe, and should NOT happen during the execution
+       %
+       
+	   % Logging purposes
+	   %% [TODO]: Remove
        io:format("[statem_~w]: INVALID simulated new Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
-	   {keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(?Sim_mean,?Sim_var),none}]}
+	   
+	   {keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]}
     end
  end;
 
+
+%% AMBIENT TEMPERATURE UPDATE TIMER
+%% --------------------------------
+%% PURPOSE:   Autonomously update the 'temp_current' ambient temperature sensor of a 'thermostat' or 'heater' device
+%% ACTIONS:   1) Determine the equilibrium temperature, which is given by the 'temp_target' if the 
+%%               device is ON or by a constant dependent on the hour of day if the device is OFF
+%%            2) Determine the difference between the equilibrium and the current 'temp_current' temperature
+%%            3) Randomly determine a new 'temp_current', which is more probable to
+%%               drift towards the equilibrium temperature the greater their difference
+%%            4) If the new and current 'temp_current' values differ, update the 'dev_statem'
+%%               state and send it along with the current time to the 'dev_server'
+%%            5) Reinitialize the Ambient Temperature Timer so to trigger at a random time obtained via a normal
+%%               distribution whose defining constants "?Amb_base_mean" and "?Amb_base_var" are reduced by a
+%%               factor proportional to the new difference between the equilibrium and the current temperature
+%%               (so to shorten on average the interval between ambient temperature updates the greater the
+%%               distance from the equilibrium point) 
+%% NEW STATE: If it differs from the current, the updated 'temp_current'
+%% NEW DATA:  If 'temp_current' was changed, update "LastUpdate" to "Now"
+%%  
+handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
+
+ % Retrieve the 'temp_current' value depending on the device type
+ if
+  Data#statemdata.type =:= thermostat ->
+   TempCurrent = State#thermocfg.temp_current;
+  Data#statemdata.type =:= heater ->
+   TempCurrent = State#heatercfg.temp_current
+ end,
+   
+ % Compute the difference between the equilibrium and the current temperature
+ TempDiff = temp_diff_from_eq(State),
+
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("dev_amb_traits = {~w,~w} (TempCurrent,TempDiff)~n",[TempCurrent,TempDiff]),
+
+ % Randomly determine a new "temp_current" for the device, which may drift from its current value of at most
+ % 1 degree (limit whose purpose is to allow the 'dev_statem' to report every ambient temperature update)
+ NewTempCurrent = update_tempcurrent_trait(TempCurrent,TempDiff),
+
+ if
+  NewTempCurrent =/= TempCurrent ->
+  
+   % If the new and current 'temp_current' values differ, update
+   % the state of the 'dev_statem' depending on the device type 
+   if
+    Data#statemdata.type =:= thermostat ->
+     NewState = State#thermocfg{temp_current = NewTempCurrent};
+    Data#statemdata.type =:= heater ->
+     NewState = State#heatercfg{temp_current = NewTempCurrent}
+   end,
+  
+   % Get the current OS time in seconds (UNIX time)
+   Now = erlang:system_time(second),
+  
+   % Send the new state along with the current time to the 'dev_server'
+   gen_server:cast(dev_server,{dev_config_update,{NewState,Now}}),
+
+   % Logging purposes
+   %% [TODO]: Remove
+   io:format("[statem_~w]: NEW simulated TempCurrent: ~w~n",[Data#statemdata.type,NewTempCurrent]),
+  
+   % Update the 'dev_statem' State and "LastUpdate" variables and reinitialize
+   % the Ambient Temperature Timer as explained in the notes above
+   {next_state,NewState,Data#statemdata{lastupdate = Now},[{{timeout,ambient_temperature_update_timer},next_amb_time(NewState),none}]};
+   
+  true ->
+  
+   % If instead the new and current 'temp_current' values are the same, just
+   % restart the Ambient Temperature Timer as explained in the notes above
+   
+   % Logging purposes
+   %% [TODO]: Remove
+   io:format("[statem_~w]: SAME simulated new TempCurrent: ~w~n",[Data#statemdata.type,NewTempCurrent]),
+   
+   {keep_state_and_data,[{{timeout,ambient_temperature_update_timer},next_amb_time(State),none}]}
+ end;
  
-%% ------------------------------------------------------- CALL CALLBACKS ------------------------------------------------------- %%
  
+%% -------------------------------------------------- EXTERNAL CALLS CALLBACKS -------------------------------------------------- %%
+
 %% DEV_CONFIG_CHANGE
+%% -----------------
+%% SENDER:    The device's 'dev_server'
+%% WHEN:      A configuration/state change request is forwarded to the device
+%% PURPOSE:   Attempt to change the 'dev_statem' configuration/state
+%% CONTENTS:  The Candidate State requested to the device
+%% MATCHES:   (always)
+%% ACTIONS:   1) Merge the candidate with the current state and check the validity of the resulting new state
+%%            2.1) If the new state is valid, return it to the 'dev_server' along with the
+%%                 current time, and update the 'dev_statem' State and "LastUpdate" variables
+%%            2.2) If the new state is NOT valid, return the error to the
+%%                 'dev_server' and preserve the 'dev_statem' State and Data 
 %%   
 handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
 
- % Derive and validate the new state the current and the candidate state
+ % Merge the simulated with the current state and check the validity of the resulting new state
  case catch(utils:check_merge_devconfigs(State,CandidateState,Data#statemdata.type)) of
  
   % If the new state is valid
   {ok,NewState} -> 
    
-   % Get the current time
+   % Get the current OS time in seconds (UNIX time)
    Now = erlang:system_time(second),
 
    % Update the 'dev_statem' state and "LastUpdate" variables and return them to the 'dev_server'
@@ -172,20 +320,27 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
    %% [TODO]: Remove
    io:format("[statem_~w]: WRONG New Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
    
-   % Keep the state and data as they are and inform the
-   % 'dev_server' that the passed configuration is invalid   
+   % Preserve the 'dev_statem' State and Data and return the error to the 'dev_server'
    {keep_state_and_data,[{reply,DevSrvPid,{error,invalid_devconfig}}]}
  end;
 
 
-%% GET_CONFIG
+%% DEV_CONFIG_CHANGE
+%% -----------------
+%% SENDER:    The device's 'dev_server'
+%% WHEN:      During the 'dev_server' initialization
+%% PURPOSE:   Retrieve the initial state and time of the 'dev_statem'
+%% CONTENTS:  -
+%% MATCHES:   (always)
+%% ACTIONS:   Update the "LastUpdate" data variable and return
+%%            it along with the State to the 'dev_server'
 %%   
 handle_event({call,DevSrvPid},get_config,State,Data) ->
 
- % Get the current time
+ % Get the current OS time in seconds (UNIX time)
  Now = erlang:system_time(second),
  
- % Update the "LastUpdate" variable and return it along with the state to the 'dev_server'
+ % Update the "LastUpdate" data variable and return it along with the State to the 'dev_server'
  {keep_state,Data#statemdata{lastupdate = Now},[{reply,DevSrvPid,{ok,{State,Now}}}]}.
 
 
@@ -193,139 +348,214 @@ handle_event({call,DevSrvPid},get_config,State,Data) ->
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
 
+%% ============================================= SIMULATED ACTIVITY HELPER FUNCTIONS ============================================= %% 
 
- 
+%% DESCRIPTION:  Simulates a candidate state for the 'dev_statem' according to its current State and Type
+%%
+%% ARGUMENTS:    - State#devtypecfg: The 'dev_statem' current state
+%%               - Type:             The 'dev_statem' device type (fan|light|door|thermostat|heater)
+%%
+%% RETURNS:      - CandidateState#devtypecfg -> The candidate state for the 'dev_statem'
+%%
 
-
+%% FAN
+%% ---
 simulate_activity(State,fan) ->
- OnOff = simulate_onoff_trait(State,fan),
- FanSpeed = simulate_fanspeed_trait(next_onoff(State#fancfg.onoff,OnOff),State#fancfg.fanspeed),
+
+ % Generate a random candidate value for the 'onoff' trait, which is affected by:
+ %  - Whether the current system hour is classified as "hot" (10-19) or "cold" (20-9) 
+ OnOff = simulate_fan_onoff_trait(),
+
+ % Generate a random candidate value for the 'fanspeed' trait, which is affected by:
+ %  - Whether in the candidate state the fan will be on or off
+ %  - Whether the current system hour is classified as "hot" (10-19) or "cold" (20-9) 
+ %  - The current fanspeed, with the new one being limited to its value +- 30%
+ FanSpeed = simulate_fan_fanspeed_trait(new_value(State#fancfg.onoff,OnOff), State#fancfg.fanspeed),
+ 
+ % Return the candidate state
  #fancfg{onoff = OnOff, fanspeed = FanSpeed};
  
+%% LIGHT
+%% -----
 simulate_activity(State,light) ->
- OnOff = simulate_onoff_trait(State,light),
- Brightness = simulate_brightness_trait(next_onoff(State#lightcfg.onoff,OnOff),State#lightcfg.brightness),
- ColorSetting = simulate_colorsetting_trait(next_onoff(State#lightcfg.onoff,OnOff)),
+
+ % Generate a random candidate value for the 'onoff' trait, which is affected by:
+ %  - Whether the current system hour is classified as "bright" (8-18) or "dark" (19-7)
+ OnOff = simulate_light_onoff_trait(),
+ 
+ % Generate a random candidate value for the 'brightness' trait, which is affected by:
+ %  - Whether in the candidate state the light is on or off
+ %  - Whether the current system hour is classified as "bright" (8-18) or "dark" (19-7)
+ %  - The current brightness, with the new one being limited to its value +- 30%
+ Brightness = simulate_light_brightness_trait(new_value(State#lightcfg.onoff,OnOff), State#lightcfg.brightness),
+ 
+ % Generate a random candidate value for the 'colorsetting' trait, which is affected by:
+ %  - Whether in the candidate state the light is on or off
+ ColorSetting = simulate_light_colorsetting_trait(new_value(State#lightcfg.onoff,OnOff)),
+ 
+ % Return the candidate state
  #lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = ColorSetting};
  
+%% DOOR
+%% ----
 simulate_activity(State,door) ->
+
+ % Generate a random candidate for the 'openclose' and 'lockunlock' traits, which are affected by:
+ %  - Their current values, so to switch at most one state in the door's state machine cycle ({open,unlock} <-> {close,unlock} <-> {close,lock})
+ %  - Whether the current system hour is classified as "Movement" (6-9,12-14,18-21) or "Working" (22-5,10-11,15-17)
  {OpenClose,LockUnlock} = simulate_door_traits(State),
+ 
+ % Return the candidate state
  #doorcfg{openclose = OpenClose, lockunlock = LockUnlock};
 
-simulate_activity(_,_) ->
- %% [TODO]
- ok.
- 
- 
- 
- 
-%% This refers to Type = fan ([TODO]: Normalize)
-simulate_onoff_trait(_,fan) ->
+%% THERMOSTAT
+%% ----------
+simulate_activity(State,thermostat) ->
 
- % Retrieve the current hour
+ % Generate a random candidate value for the 'onoff' trait, which is affected by:
+ %  - Whether the thermostat is currently on or off
+ %  - Whether the thermostat is currently at the equilibrium temperature
+ OnOff = simulate_ambient_dev_onoff_trait(State#thermocfg.onoff, State#thermocfg.temp_target - State#thermocfg.temp_current),
+ 
+ % Generate a random candidate value for the 'temp_target' trait, which is affected by:
+ %  - Whether in the candidate state the thermostat is on or off
+ %  - Whether the thermostat is currently at the equilibrium temperature
+ TempTarget = simulate_ambient_dev_target_temp_trait(new_value(State#thermocfg.onoff,OnOff),State#thermocfg.temp_target - State#thermocfg.temp_current),
+ 
+ % Return the candidate state
+ %
+ % NOTE: The 'temp_current' trait must not be simulated since it evolves asynchronously via the "Ambient Temperature Update Timer" 
+ #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep'};
+
+%% HEATER
+%% ------
+simulate_activity(State,heater) ->
+
+ % Generate a random candidate value for the 'onoff' trait, which is affected by:
+ %  - Whether the heater is currently on or off
+ %  - Whether the heater is currently at the equilibrium temperature
+ OnOff = simulate_ambient_dev_onoff_trait(State#heatercfg.onoff, State#heatercfg.temp_target - State#heatercfg.temp_current),
+ 
+ % Generate a random candidate value for the 'temp_target' trait, which is affected by:
+ %  - Whether in the candidate state the heater is on or off
+ %  - Whether the heater is currently at the equilibrium temperature
+ TempTarget = simulate_ambient_dev_target_temp_trait(new_value(State#heatercfg.onoff,OnOff),State#heatercfg.temp_target - State#heatercfg.temp_current),
+ 
+ % Generate a random candidate value for the 'fanspeed' trait, which is affected by:
+ %  - Whether in the candidate state the heater is on or off
+ %  - The absolute distance between the candidate equilibrium and the current temperature
+ FanSpeed = simulate_heater_fanspeed_trait(new_value(State#heatercfg.onoff,OnOff),abs(new_value(State#heatercfg.temp_target,TempTarget) - State#heatercfg.temp_current)),
+ 
+ % Return the candidate state
+ %
+ % NOTE: The 'temp_current' trait must not be simulated since it evolves asynchronously via the "Ambient Temperature Update Timer" 
+ #heatercfg{onoff = OnOff, fanspeed = FanSpeed, temp_target = TempTarget, temp_current = '$keep'}.
+  
+
+%% Returns the new value of a simulated trait obtained by merging its current with its candidate value (simulate_activity(State,_) helper function)
+new_value(CurrValue,'$keep') ->
+ CurrValue; 
+new_value(_,CandValue) ->
+ CandValue.
+
+     
+%% DESCRIPTION:  Returns the time in "ms" after which schedule a new instance of the Simulated Activity Timer
+%%
+%% ARGUMENTS:    none (the mean and variance of the normal distribution used for generating
+%%                    the time after which schedule a new instance of the Simulated Activity
+%%                    Timer are defined via the "?Sim_mean" and "?Sim_var" macros)
+%%
+%% RETURNS:      - Next_sim_time_ms -> The time in "ms" after which schedule a new instance 
+%%                                     of the Simulated Activity Timer (lower-capped to 200ms)
+%%
+next_sim_time() ->
+
+ Res = max(200,trunc(rand:normal(?Sim_mean,?Sim_var))),
+ 
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("Next sim_time: ~wms~n",[Res]),
+ 
+ Res.
+
+ 
+%% -------------------------------------------- SIMULATED FAN TRAITS HELPER FUNCTIONS -------------------------------------------- %%  
+ 
+%% Simulates the 'onoff' trait of a 'fan' device (simulate_activity(State,fan) helper function)
+simulate_fan_onoff_trait() ->
+
+ % Retrieve the current system hour (0-23)
  {Hour,_,_} = erlang:time(),
  
- % Generate a uniformely distributed
- % random number between 0.0 <= Rand < 1.0
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- io:format("onoff trait rand = ~w~n",[Rand]),
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("fan 'onoff' trait Rand = ~w~n",[Rand]),
  
+ % Generate a random candidate value for the 'onoff' trait, which is affected by:
+ %  - Whether the current system hour is classified as "hot" (10-19) or "cold" (20-9) 
  if
-  % Hot hours
+ 
+  % ------------ "Hot" hours (10-19) ------------ %
   Hour >= 10 andalso Hour =< 19  ->
   
-   % 50% on, 20% keep, 30% off
+   % 40% on, 35% keep, 25% off
    if 
-    Rand =< 0.5 ->
+    Rand =< 0.4 ->
 	 on;
-	Rand =< 0.7 ->
+	Rand =< 0.75 ->
 	 '$keep';
 	Rand < 1 ->
 	 off
    end;
    
-  % Cold hours
+  % ------------ "Cold" hours (20-9) ------------ %
   Hour < 10 orelse Hour > 19 ->
 
-   % 50% off, 20% keep, 30% on
+   % 40% off, 35% keep, 25% on
    if 
-    Rand =< 0.5 ->
+    Rand =< 0.4 ->
 	 off;
-	Rand =< 0.7 ->
+	Rand =< 0.75 ->
 	 '$keep';
 	Rand < 1 ->
 	 on
-   end
- end;
-
-%% This refers to Type = light ([TODO]: Normalize)
-simulate_onoff_trait(_,light) ->
-
- % Retrieve the current hour
- {Hour,_,_} = erlang:time(),
- 
- % Generate a uniformely distributed
- % random number between 0.0 <= Rand < 1.0
- Rand = rand:uniform(),
- 
- io:format("onoff trait rand = ~w~n",[Rand]),
- 
- if
-  % Light hours
-  Hour >= 8 andalso Hour =< 18  ->
-  
-   % 60% off, 20% keep, 20% on
-   if 
-    Rand =< 0.6 ->
-	 off;
-	Rand =< 0.8 ->
-	 '$keep';
-	Rand < 1 ->
-	 on
-   end;
-   
-  % Dark hours
-  Hour < 8 orelse Hour > 18 ->
-
-   % 60% on, 20% keep, 20% off
-   if 
-    Rand =< 0.6 ->
-	 on;
-	Rand =< 0.8 ->
-	 '$keep';
-	Rand < 1 ->
-	 off
    end
  end.
- 
 
-%% This refers to Type = fan ([TODO]: Normalize)
 
-% If the simulated action results in turning off the 
-% device, it has no sense to change its fanspeed
-simulate_fanspeed_trait(off,_) ->
- io:format("fanspeed trait off->keep~n"),
+%% Simulates the 'fanspeed' trait of a 'fan' device (simulate_activity(State,fan) helper function)
+simulate_fan_fanspeed_trait(off,_) ->
+
+ % If in the candidate state the fan is off, it has no sense to change its 'fanspeed' trait
  '$keep';
  
-simulate_fanspeed_trait(on,CurrFanSpeed) -> 
- % Retrieve the current hour
+simulate_fan_fanspeed_trait(on,CurrFanSpeed) ->
+
+ % Retrieve the current system hour (0-23)
  {Hour,_,_} = erlang:time(),
  
- % Generate a uniformely distributed
- % random number between 0.0 <= Rand < 1.0
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- io:format("fanspeed trait rand = ~w~n",[Rand]),
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("fan 'fanspeed' trait Rand = ~w~n",[Rand]),
  
+ % Generate a random candidate value for the 'fanspeed' trait, which is affected by:
+ %  - Whether the current system hour is classified as "hot" (10-19) or "cold" (20-9) 
+ %  - The current fanspeed, with the new one being limited to its value +- 30% (which is
+ %    uniformily distributed between 10%, 20% and 30% and considers the [10-100] value cappings)
  if
-  % Hot hours
+ 
+  % ------------ "Hot" hours (10-19) ------------ %
   Hour >= 10 andalso Hour =< 19  ->
   
-   % 50% increase, 20% keep, 30% decrease of 10, 20 or 30
-   % units % (uniformely distributed, and consider capping)
+   % 40% increase, 30% keep, 30% decrease
    if 
-    Rand =< 0.5 ->
+    Rand =< 0.4 ->
 	 min(100,CurrFanSpeed + (rand:uniform(3)*10));
 	Rand =< 0.7 ->
 	 '$keep';
@@ -333,13 +563,12 @@ simulate_fanspeed_trait(on,CurrFanSpeed) ->
 	 max(10,CurrFanSpeed - (rand:uniform(3)*10))
    end;
    
-  % Cold hours
+  % ------------ "Cold" hours (20-9) ------------ %
   Hour < 10 orelse Hour > 19 ->
 
-   % 50% decrease, 20% keep, 30% increase of 10, 20 or 30
-   % units % (uniformely distributed, and consider capping)
+   % 40% decrease, 30% keep, 30% increase
    if 
-    Rand =< 0.5 ->
+    Rand =< 0.4 ->
 	 max(10,CurrFanSpeed - (rand:uniform(3)*10));
 	Rand =< 0.7 ->
 	 '$keep';
@@ -349,30 +578,83 @@ simulate_fanspeed_trait(on,CurrFanSpeed) ->
  end.
 
 
-% If the simulated action results in turning off the 
-% light, it has no sense to change its brightness
-simulate_brightness_trait(off,_) ->
- io:format("brightness trait off->keep~n"),
- '$keep';
- 
-simulate_brightness_trait(on,CurrBrightness) -> 
- % Retrieve the current hour
+%% ------------------------------------------- SIMULATED LIGHT TRAITS HELPER FUNCTIONS ------------------------------------------- %% 
+
+%% Simulates the 'onoff' trait of a 'light' device (simulate_activity(State,light) helper function)
+simulate_light_onoff_trait() ->
+
+ % Retrieve the current system hour (0-23)
  {Hour,_,_} = erlang:time(),
  
- % Generate a uniformely distributed
- % random number between 0.0 <= Rand < 1.0
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- io:format("brightness trait rand = ~w~n",[Rand]),
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("light 'onoff' trait Rand = ~w~n",[Rand]),
  
+ % Generate a random candidate value for the 'onoff' trait, which is affected by:
+ %  - Whether the current system hour is classified as "bright" (8-18) or "dark" (19-7)
  if
-  % Light hours
+
+  % ----------- "Bright" hours (8-18) ----------- %
   Hour >= 8 andalso Hour =< 18  ->
   
-   % 60% decrease, 20% keep, 20% increase of 10, 20 or 30
-   % units % (uniformely distributed, and consider capping)
+   % 40% off, 40% keep, 20% on
    if 
-    Rand =< 0.6 ->
+    Rand =< 0.4 ->
+	 off;
+	Rand =< 0.8 ->
+	 '$keep';
+	Rand < 1 ->
+	 on
+   end;
+  
+  % ------------ "Dark" hours (19-7) ------------ %
+  Hour < 8 orelse Hour > 18 ->
+
+   % 40% on, 40% keep, 20% off
+   if 
+    Rand =< 0.4 ->
+	 on;
+	Rand =< 0.8 ->
+	 '$keep';
+	Rand < 1 ->
+	 off
+   end
+ end.
+ 
+
+%% Simulates the 'brightness' trait of a 'light' device (simulate_activity(State,light) helper function)
+simulate_light_brightness_trait(off,_) ->
+
+ % If in the candidate state the light is off, it has no sense to change its 'brightness' trait
+ '$keep';
+ 
+simulate_light_brightness_trait(on,CurrBrightness) -> 
+
+ % Retrieve the current system hour (0-23)
+ {Hour,_,_} = erlang:time(),
+ 
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("light 'brightness' trait Rand = ~w~n",[Rand]),
+ 
+ % Generate a random candidate value for the 'brightness' trait, which is affected by:
+ %  - Whether the current system hour is classified as "bright" (8-18) or "dark" (19-7)
+ %  - The current brightness, with the new one being limited to its value +- 30% (which is
+ %    uniformily distributed between 10%, 20% and 30% and considers the [10-100] value cappings)
+ if
+ 
+  % ----------- "Bright" hours (8-18) ----------- %
+  Hour >= 8 andalso Hour =< 18  ->
+  
+   % 40% decrease, 40% keep, 20% increase
+   if 
+    Rand =< 0.4 ->
 	 max(10,CurrBrightness - (rand:uniform(3)*10));
 	Rand =< 0.8 ->
 	 '$keep';
@@ -380,13 +662,12 @@ simulate_brightness_trait(on,CurrBrightness) ->
 	 min(100,CurrBrightness + (rand:uniform(3)*10))
    end;
    
-  % Dark hours
+  % ------------ "Dark" hours (19-7) ------------ %
   Hour < 8 orelse Hour > 18 ->
 
-   % 60% increase, 20% keep, 20% decrease of 10, 20 or 30
-   % units % (uniformely distributed, and consider capping)
+   % 40% increase, 40% keep, 20% decrease
    if 
-    Rand =< 0.6 ->
+    Rand =< 0.4 ->
 	 min(100,CurrBrightness + (rand:uniform(3)*10));
 	Rand =< 0.8 ->
 	 '$keep';
@@ -396,21 +677,29 @@ simulate_brightness_trait(on,CurrBrightness) ->
  end.
 
 
-simulate_colorsetting_trait(off) ->
- io:format("colorsetting trait off->keep~n"),
- '$keep';
-simulate_colorsetting_trait(on) ->
+%% Simulates the 'colorsetting' trait of a 'light' device (simulate_activity(State,light) helper function) 
+simulate_light_colorsetting_trait(off) ->
 
- % Generate a uniformely distributed
- % random number between 0.0 <= Rand < 1.0
+ % If in the candidate state the light is off, it has no sense to change its 'colorsetting' trait
+ '$keep';
+ 
+simulate_light_colorsetting_trait(on) ->
+
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- io:format("colorsetting trait rand = ~w~n",[Rand]),
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("light 'colorsetting' trait Rand = ~w~n",[Rand]),
  
- % 60% keep, 40% random new color selected through a random number from 1 to 10
- if 
-  Rand =< 0.6 ->
+ % Generate a random candidate value for the 'colorsetting' trait
+ if
+
+  % 80% -> Keep the current color 
+  Rand =< 0.8 ->
    '$keep';
+   
+  % 20% -> Randomly select one from a list of 10 colors
   Rand < 1 ->
    case rand:uniform(10) of
     1 -> "White";
@@ -424,38 +713,42 @@ simulate_colorsetting_trait(on) ->
 	9 -> "Pink";
 	10 -> "Teal"
    end
- end.
+ end. 
  
  
+%% ------------------------------------------- SIMULATED DOOR TRAITS HELPER FUNCTIONS ------------------------------------------- %%
  
- 
- 
- 
+%% Simulates the 'openclose' and 'lockunlock' traits of a 'door' device (simulate_activity(State,door) helper function) 
 simulate_door_traits(State) ->
 
- % Retrieve the current hour
+ % Retrieve the current system hour (0-23)
  {Hour,_,_} = erlang:time(),
  
- % Generate a uniformely distributed
- % random number between 0.0 <= Rand < 1.0
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- io:format("door traits rand = ~w~n",[Rand]),
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("door traits Rand = ~w~n",[Rand]),
  
+ % Generate a random candidate for the 'openclose' and 'lockunlock' traits, which are affected by:
+ %  - Their current values, so to switch at most one state in the door's state machine cycle ({open,unlock} <-> {close,unlock} <-> {close,lock})
+ %  - Whether the current system hour is classified as "Movement" (6-9,12-14,18-21) or "Working" (22-5,10-11,15-17)
  if
  
-  % "Movement Hours"
+  % ----- "Movement" hours (6-9,12-14,18-21) ----- %
   (Hour >= 6 andalso Hour =< 9) orelse
   (Hour >= 12 andalso Hour =<14) orelse
   (Hour >= 18 andalso Hour =<21) ->
   
+   % Depending on the current door state
    case {State#doorcfg.openclose,State#doorcfg.lockunlock} of
 
     {open,unlock} ->
    
-     % 40% {open,unlock} (keep), 60% {close,unlock} 
+     % 50% keep, 50% {close,unlock} 
      if
- 	  Rand =< 0.4 ->
+ 	  Rand =< 0.5 ->
 	   {open,unlock};
 	  Rand < 1 ->
 	   {close,unlock}
@@ -463,7 +756,7 @@ simulate_door_traits(State) ->
 	
     {close,unlock} ->
    
-      % 40% {close,unlock} (keep), 40% {open,unlock}, 20% {close,lock}
+      % 40% keep, 40% {open,unlock}, 20% {close,lock}
       if
 	   Rand =< 0.4 ->
 	    {close,unlock};
@@ -475,25 +768,26 @@ simulate_door_traits(State) ->
 
     {close,lock} ->
    
-     % 60% {close,lock} (keep), 40% {close,unlock}
+     % 80% keep, 20% {close,unlock}
      if
-	  Rand =< 0.6 ->
+	  Rand =< 0.8 ->
 	   {close,lock};
 	  Rand < 1 ->
 	   {close,unlock}
 	 end
    end;	
-	  
-  % "Working Hours"
+	    
+  % ----- "Working" hours (22-5,10-11,15-17) ----- %
   true ->
   
+   % Depending on the current door state
    case {State#doorcfg.openclose,State#doorcfg.lockunlock} of
 
     {open,unlock} ->
    
-     % 40% {open,unlock} (keep), 60% {close,unlock} 
+     % 20% keep, 80% {close,unlock}
      if
- 	  Rand =< 0.4 ->
+ 	  Rand =< 0.2 ->
 	   {open,unlock};
 	  Rand < 1 ->
 	   {close,unlock}
@@ -501,11 +795,11 @@ simulate_door_traits(State) ->
 	
     {close,unlock} ->
    
-      % 20% {close,unlock} (keep), 20% {open,unlock}, 60% {close,lock}
+      % 30% keep, 30% {open,unlock}, 40% {close,lock}
       if
-	   Rand =< 0.2 ->
+	   Rand =< 0.3 ->
 	    {close,unlock};
-	   Rand =< 0.4 ->
+	   Rand =< 0.3 ->
 	    {open,unlock};
 	   Rand < 1 ->
 	    {close,lock}
@@ -513,45 +807,286 @@ simulate_door_traits(State) ->
 
     {close,lock} ->
    
-     % 60% {close,lock} (keep), 40% {close,unlock}
+     % 80% keep, 20% {close,unlock}
      if
-	  Rand =< 0.6 ->
+	  Rand =< 0.8 ->
 	   {close,lock};
 	  Rand < 1 ->
 	   {close,unlock}
 	 end
    end
+ end. 
+ 
+ 
+%% --------------------------- SIMULATED AMBIENT DEVICES TRAITS HELPER FUNCTIONS (Thermostat + Heater) --------------------------- %% 
+ 
+%% Simulates the 'onoff' trait of a 'thermostat' or a 'heater' device
+%% (simulate_activity(State,thermostat),simulate_activity(State,heater), helper function)
+simulate_ambient_dev_onoff_trait(off,_) ->
+
+ % If in the candidate state the device is off, as a simplification the 'onoff' trait is
+ % simulated as if the device were a FAN, and so depending on whether the current system
+ % hour is classified as "hot" (10-19) or "cold" (20-9) 
+ simulate_fan_onoff_trait(); 
+ 
+simulate_ambient_dev_onoff_trait(on,0) ->
+   
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+   
+ % Generate a random candidate value for the 'onoff' trait considering that the device
+ % is on and that the ambient temperature has reached is equilibrium point, where:
+ %  - 40% -> Turn the device off
+ %  - 60% -> Keep the device on
+ if
+  Rand =< 0.4 ->
+   off;
+  Rand < 1 ->
+   on
+ end;
+
+simulate_ambient_dev_onoff_trait(on,_) ->
+
+ % If the device is on and the ambient temperature has
+ % not yet reached its equilibrium point, keep it on
+ on.
+
+
+%% Simulates the 'temp_target' trait of a 'thermostat' or a 'heater' device
+%% (simulate_activity(State,thermostat),simulate_activity(State,heater), helper function) 
+simulate_ambient_dev_target_temp_trait(off,_) ->
+
+ % If in the candidate state the device is off, it has no sense to change its 'temp_target' trait
+ '$keep';
+
+simulate_ambient_dev_target_temp_trait(on,0) ->
+
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ % Generate a new random candidate value for the 'temp_target' given that the
+ % device has reached the equilibrium ('temp_target' = 'temp_current') as follows:
+ %
+ % 70% -> Keep
+ % 30% -> Set to a random "comfortable" temperature obtained via a normal distribution
+ %        centered on 21 degrees (and considering the [0-50] value cappings)
+ if
+  Rand =< 0.7 ->
+   '$keep';
+  Rand < 1 ->
+   min(50,max(0,trunc(rand:normal(21,21))))
+ end;
+ 
+simulate_ambient_dev_target_temp_trait(on,_) ->
+
+ % If in the candidate state the device has not yet reached
+ % its 'temp_target' equilibrium point, keep it as it is
+ '$keep'.
+
+ 
+%% Simulates the 'fanspeed' trait of a 'thermostat' or a 'heater' device (simulate_activity(State,heater) helper function) 
+simulate_heater_fanspeed_trait(off,_) ->
+
+ % If in the candidate state the device is off, it has no sense to change its 'fanspeed' trait
+ '$keep';
+ 
+simulate_heater_fanspeed_trait(on,TempDistEq) -> 
+ 
+ % Generate a random candidate value for the 'fanspeed' trait the higher the further the distance between the
+ % equilibrium and the current temperature (conceptually contributing to the reason why ambient temperature updates
+ % are more frequent the further such distance).
+ % More precisely the candidate 'fanspeed' trait is selected as the distance from equilibrium temperature * 10 with an
+ % added noise uniformily distributed in the range (-20,10,0,+10,+20) (and considering the [10-100] value cappings) 
+ max(10,min(100,(TempDistEq*10) + (rand:uniform(5)*10) - 30)).
+
+
+%% ========================================= AMBIENT TEMPERATURE UPDATE HELPER FUNCTIONS ========================================= %% 
+
+%% DESCRIPTION:  Generates a new random value for the 'temp_current' trait of an ambient device,
+%%               which may drift from its current value of at most 1 degree (limit whose purpose
+%%               is to allow the 'dev_statem' to report every ambient temperature update)
+%%
+%% ARGUMENTS:    - TempCurrent: The current value of the device 'temp_current' trait
+%%               - TempDiff:    The difference between the device 'temp_current' and the equilibrium point
+%%
+%% RETURNS:      New_TempDiff -> The new value of the device's 'temp_current' trait,
+%%                               (which differs from the old of at most 1 degree)
+%% 
+update_tempcurrent_trait(TempCurrent,TempDiff) ->
+ 
+ % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
+ Rand = rand:uniform(),
+ 
+ % Logging purposes
+ %% [TODO]: Remove
+ io:format("'temp_current' update Rand = ~w (TempCurrent = ~w, TempDiff = ~w)~n",[Rand,TempCurrent,TempDiff]),
+
+ % Generate a new random value for the 'temp_current' trait drifting at most 1 degree
+ % from the current and that is affected by its difference from the equilibrium point
+ if 
+ 
+  % -------- DistFromEq >= 10 -------- %
+  abs(TempDiff) >= 10 ->
+  
+   % Drift towards the equilibrium (no randomicity)
+   TempCurrent + utils:sign(TempDiff); 
+  
+  % ------ 6 =< DistFromEq < 10 ------ %
+  abs(TempDiff) >= 6 ->
+  
+   % 80% drift towards equilibrium, 20% keep
+   if
+    Rand =< 0.8 ->
+	 TempCurrent + utils:sign(TempDiff);
+	Rand < 1 ->
+	 TempCurrent
+   end;
+  
+  % ------ 4 =< DistFromEq < 6 ------ %  
+  abs(TempDiff) >= 4 ->
+  
+   % 60% drift towards equilibrium, 40% keep
+   if
+    Rand =< 0.6 ->
+	 TempCurrent + utils:sign(TempDiff);
+	Rand < 1 ->
+	 TempCurrent
+   end;  
+ 
+  % ------ 2 =< DistFromEq < 4 ------ %
+  abs(TempDiff) >= 2 ->
+  
+   % 40% drift towards equilibrium, 60% keep
+   if
+    Rand =< 0.4 ->
+	 TempCurrent + utils:sign(TempDiff);
+	Rand < 1 ->
+	 TempCurrent
+   end; 
+   
+  % -------- DistFromEq =:= 1 -------- %
+  abs(TempDiff) =:= 1 ->
+  
+   % 20% drift towards equilibrium, 80% keep
+   if
+    Rand =< 0.2 ->
+	 TempCurrent + utils:sign(TempDiff);
+	Rand < 1 ->
+	 TempCurrent
+   end;    
+   
+  % --------- AT EQUILIBRIUM --------- % 
+  TempDiff =:= 0 ->
+  
+   % Retrieve the native equilibrium temperature assocaited with the current system hour
+   TempEqNative = get_native_equilibrium(),
+   if
+   
+    % If the current temperature differs from the native equilibrium temperature (which means
+	% that the device is 'on' and its 'temp_current' value is equal to its 'temp_target' value)
+	% consider a chance for the temperature of drifting towards the native equilibrium
+    TempCurrent =/= TempEqNative ->
+	
+     % 20% drift towards native equilibrium, 80% keep equilibrium
+     if
+      Rand =< 0.2 ->
+	   TempCurrent + utils:sign(TempEqNative - TempCurrent);
+	  Rand < 1 ->
+	   TempCurrent
+     end;
+	
+	% If instead the device is at its native equilibrium temperature (which means that is 'off'
+	% or its 'temp_target' value is equal to the native equilibrium), consider a chance for the
+	% temperature of drifting in either direction	
+	true ->
+	
+	 % 10% +1 from equilibrium, 10% -1 from equilibrium, 80% keep native equilibrium
+	 if
+	  Rand =< 0.1 ->
+	   TempCurrent + 1;
+	  Rand =< 0.2 ->
+       TempCurrent - 1;
+      Rand < 1 ->
+       TempCurrent
+     end	   
+   end
  end.
-
  
  
- 
- 
- 
- 
- 
- 
-next_onoff(CurrOnOff,'$keep') ->
- CurrOnOff; 
-next_onoff(_,CandidateOnOff) ->
- CandidateOnOff.
-
-
-
-
-%% DESCRIPTION:  Returns the time in ms after which a new simulated activity will occur in a 'dev_statem'
-%%               as a random value taken from a normal distribution of its "Mean" and "Var" arguments
+%% DESCRIPTION:  Returns the time in "ms" after which schedule a new instance of the
+%%               Ambient Temperature Update Timer in a 'thermostat' or 'heater' device
 %%
-%% ARGUMENTS:    - Mean: The mean of the normal distribution to be used for generating the random value
-%%               - Var:  of the normal distribution to be used for generating the random value
+%% ARGUMENTS:    - State: The current state of the 'thermostat' or 'heater' device
 %%
-%% RETURNS:      - Next_sim_time_ms -> The time after which a new simulated activity will occur in a
-%%                                     'dev_statem' (lower-capped to 100ms to prevent negative values)
+%% RETURNS:      - Next_amb_time_ms -> The time in "ms" after which schedule a new instance of the
+%%                                     Ambient Temperature Update Timer (lower-capped to 3000ms)
 %%
-next_sim_time(Mean,Var) ->
- max(100,trunc(rand:normal(Mean,Var))).
+%% NOTE:         The mean and variance of the normal distribution used for generating the
+%%               time after which schedule a new instance of the Ambient Temperature Update
+%%               Timer are defined via the "?Amb_base_mean" and "?Amb_base_var" macros)  
+%%
+next_amb_time(State) ->
+
+  % Retrive the distance between the equilibrium and the current temperature in the device
+  TempDistEq = abs(temp_diff_from_eq(State)),
+
+  % Return the time in "ms" after which schedule a new instance of the Ambient Temperature Update Timer as
+  % a normally distributed random value, whose base mean and variance are reduced by two factors the greater
+  % the higher the distance between the equilibrium and the current temperature in the device (modelling the
+  % fact that the higher the distance from equilibrium, the faster the evolution of the ambient temperature)
+  Res = max(3000,trunc(rand:normal(?Amb_base_mean-(1500 * TempDistEq),?Amb_base_var/max(1,TempDistEq)))),
+  
+  % Logging purposes
+  %% [TODO]: Remove
+  io:format("Next_amb_time: ~wms~n",[Res]),  
+  Res. 
+ 
+               
+%% DESCRIPTION:  Returns the difference between the current and the equilibrium
+%%               temperature in an ambient temperature device, with the latter consisting:
+%%                - If the device is 'on', in its 'temp_current' trait
+%%                - If the device is 'off', in the native equilibrium temperature
+%%
+%% ARGUMENTS:    - State: The State/Config of the ambient temperature device
+%%
+%% RETURNS:      - TempDiff -> The difference between the equilibrium and the current
+%%                             temperature in the device (an integer >,< or =:= 0)
+%%
+% Thermostat ON (TempEq = 'temp_target')
+temp_diff_from_eq(State) when is_record(State, thermocfg), State#thermocfg.onoff =:= on ->
+ State#thermocfg.temp_target - State#thermocfg.temp_current;
+ 
+% Thermostat OFF (TempEq = native equilibrium)
+temp_diff_from_eq(State) when is_record(State, thermocfg), State#thermocfg.onoff =:= off ->
+ get_native_equilibrium() - State#thermocfg.temp_current;  
+
+% Heater ON (TempEq = 'temp_target')
+temp_diff_from_eq(State) when is_record(State, heatercfg), State#heatercfg.onoff =:= on ->
+ State#heatercfg.temp_target - State#heatercfg.temp_current;
+ 
+% Heater OFF (TempEq = native equilibrium)
+temp_diff_from_eq(State) when is_record(State, heatercfg), State#heatercfg.onoff =:= off ->
+ get_native_equilibrium() - State#heatercfg.temp_current. 
 
 
+%% DESCRIPTION:  Returns the ambient native equilibrium temperature associated with
+%%               the current system hour (where a temperate climate is considered)
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - TempEqNative -> The ambient native equilibrium temperature
+%%                                 associated with the current system hour
+%% 
+get_native_equilibrium() ->
+ 
+ % Retrieve the current system hour (0-23)
+ {Hour,_,_} = erlang:time(),
+ 
+ % Return the ambient native equilibrium temperature
+ % associated with the current system hour via a LUT
+ %
+ %        Hour:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+ element(Hour+1,{16,15,14,12,10,11,12,13,14,15,17,19,22,24,25,26,25,24,23,22,21,20,19,17}).
 
 
 %%====================================================================================================================================

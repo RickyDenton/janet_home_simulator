@@ -5,7 +5,7 @@
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
          check_merge_devconfigs/3,get_devtype_default_config/1,deprefix_dev_config/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                  % Nodes Utility Functions
--export([is_running/1,str_to_atom/1]).							                          % Other Utility Functions
+-export([is_running/1,str_to_atom/1,sign/1]).							                  % Other Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -485,4 +485,16 @@ resolve_appname_shorthand(AppShorthand) ->
 %%               [TODO]: Also used by 'dev_server's when attempting to register with their controller nodes
 %%
 str_to_atom(Str) ->
- list_to_atom(lists:flatten(io_lib:format("~s",[Str]))). 
+ list_to_atom(lists:flatten(io_lib:format("~s",[Str]))).
+
+
+%% DESCRIPTION:  A simple sign function
+%%
+%% ARGUMENTS:    - X: A number
+%%
+%% RETURNS:      - sign(X) (1 if X =:= 0) 
+%%
+sign(X) when is_number(X), X >= 0 ->
+ 1; 
+sign(X) when is_number(X), X < 0 ->
+ -1.

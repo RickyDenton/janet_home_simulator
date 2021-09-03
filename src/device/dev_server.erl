@@ -53,32 +53,16 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  %
  ok = gen_server:call(MgrPid,{dev_reg,self()},10000),
  
- 
- 
  % Retrieve the device's state machine (supposedly) initial configuration
+ % and initialize the 'handler_buffer' process dictionary variable to its
+ % value, so that an immediate state update will be sent to the device's
+ % handler as soon as the device registers within its controller
  %
  % NOTE: This operation must succeed, otherwise the
  %       device node's execution should not continue
  %
- %% [TODO]: Type hack for preventing non-fan devices from crashes, remove when all devices are ready
- %% ---------------------------------------------------------
- {ok,Type} = application:get_env(type),
-
- if
-  Type =:= fan orelse Type =:= light orelse Type =:= door ->
-  
-   % Initialize the process dictionary variable used for buffering postponed configuration updates
-   % for the device handler to the initial configuration and timestamp of the device's state machine
-   {ok,{InitCfg,Timestamp}} = gen_statem:call(dev_statem,get_config,4500),
-   put(handler_buffer,[{InitCfg,Timestamp}]);
-  
-  %% [TODO]: Remove
-  true ->
-	put(handler_buffer,[])
- end,
- %% ---------------------------------------------------------
- 
- 
+ {ok,{InitCfg,Timestamp}} = gen_statem:call(dev_statem,get_config,4500),
+ put(handler_buffer,[{InitCfg,Timestamp}]),
  
  % Retrieve the device and location IDs from the
  % 'dev_id' and 'loc_id' environment variables
