@@ -124,7 +124,7 @@ handle_call({dev_reg,DevSrvPid},{DevSrvPid,_},SrvState) when SrvState#devmgrstat
 %%               2.3) If the configuration update was successful, update the
 %%                    device's configuration in the Mnesia device table, where
 %%                    3.1) If the transaction was successful, return the caller the 'dev_server' response
-%%                    3.2) if the transaction was NOT, return its aborted Reason to the caller
+%%                    3.2) if the transaction was NOT successful, return its aborted Reason to the caller
 %% ANSWER:    See above
 %% NEW STATE: -
 %%
@@ -154,14 +154,14 @@ handle_call({dev_config_change,NewCfg},{CommPid,_},SrvState) when SrvState#devmg
    %% [NOTE]: This probably is not necessary, but it never knows
    case db:update_dev_config(SrvState#devmgrstate.dev_id,UpdatedCfg,Timestamp) of
 	 
-    {aborted,Reason} ->
+    {error,Reason} ->
        
-	 % If Mnesia aborted the transaction, return the error to the user
-     {reply,{mnesia_aborted,Reason},SrvState};
+	 % If there was an error in updating the device configuration and timestamp, return it
+     {reply,{mnesia_error,Reason},SrvState};
 		
-	{atomic,ok} ->
+	ok ->
 	  
-	 % Otherwise return to the user the updated device's configuration and timestamp
+	 % Otherwise return the user the updated device's configuration and timestamp
 	 {reply,{ok,{UpdatedCfg,Timestamp}},SrvState}
   
    end

@@ -31,12 +31,14 @@
 %%               - User:   The username of the location's owner (optional)
 %%               - Port:   The port by which the location's controller listens for REST requests, which must not be already taken and be >=30000
 %%
-%% RETURNS:      - {atomic, ok}                    -> The location was successfully added
+%% RETURNS:      - {ok,ok}                         -> The location was successfully added and its controller node was started
+%%               - ok                              -> The location was successfully added (but the controller node
+%%                                                    was not started since the JANET Simulator is not running)
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
 %%               - {error,badarg}                  -> Invalid arguments
 %%
-add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port>=30000 ->
+add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port >= 30000 ->
  F = fun() ->
  
       % Check if the location already exists
@@ -87,10 +89,16 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
    % of the spawning of the 'sup_loc' supervisor
    {ok,SpawnRes};
    
-  {TransactionResult,_} ->
-  
-   % Otherwise, just return the transaction result
-   TransactionResult
+  {{atomic,ok},false} ->
+	
+   % If the transaction was successful but the JANET
+   % simulator is not running, return just "ok"
+   ok;
+	 
+  {{aborted,Reason},_} ->
+	
+   % If an error occured in the transaction, return it
+   {error,Reason}
  end;
  
 add_location(_,_,_,_) ->
@@ -102,7 +110,7 @@ add_location(_,_,_,_) ->
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation, which must not already exist and be >0
 %%               - Name:               The name of the sublocation (optional)
 %%
-%% RETURNS:      - {atomic, ok}                       -> The sublocation was successfully added
+%% RETURNS:      - ok                                 -> The sublocation was successfully added
 %%               - {error,location_not_exists}        -> The location 'Loc_id' does not exist
 %%               - {error,sublocation_already_exists} -> A sublocation with such 'sub_id' already exists
 %%               - {error,badarg}                     -> Invalid arguments
@@ -137,15 +145,7 @@ add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_nu
 	    mnesia:abort(location_not_exists)
       end
      end,
-	 
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   %% [TODO]: Inform controller of the new sublocation
-   Result;   
-  _ ->
-   Result
- end;
+ do_transaction(F);  %% [TODO]: If the transaction is successful, inform controller of the new sublocation
 
 add_sublocation(_,_) ->
  {error,badarg}.
@@ -158,7 +158,9 @@ add_sublocation(_,_) ->
 %%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
 %%               - Type:               The device's type, which must belong to the set of valid device types
 %%
-%% RETURNS:      - {atomic, ok}                   -> The device was successfully added
+%% RETURNS:      - {ok,ok}                        -> The device was successfully added and its device node was started
+%%               - ok                             -> The device was successfully added (but the device node
+%%                                                   was not started since the JANET Simulator is not running)
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
@@ -212,15 +214,21 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
    case {mnesia:transaction(F),utils:is_running(janet_simulator)} of
     {{atomic,ok},true} ->
   
-     % If the transaction was successfully and the JANET simulator is running,
+     % If the transaction was successful and the JANET simulator is running,
 	 % attempt to spawn the device manager under its 'sup_loc' location supervisor,
 	 % returning the result of the transaction and of the spawn operation
      {ok,catch(spawn_devmanager(Dev_id,Loc_id))};
    
-    {TransactionResult,_} ->
-  
-     % Otherwise, just return the transaction result
-     TransactionResult
+    {{atomic,ok},false} ->
+	
+	 % If the transaction was successful but the JANET
+	 % simulator is not running, return just "ok"
+     ok;
+	 
+	{{aborted,Reason},_} ->
+	
+	 % If an error occured in the transaction, return it
+     {error,Reason}
    end
  end;
  
@@ -296,7 +304,7 @@ print_table(Tabletype) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
    
   % Otherwise print the table header and contents
@@ -347,10 +355,13 @@ print_table_records_list([Record|NextRecord]) ->
 %%               - (location,Loc_id):    Prints the tree of sublocations and devices in a specific location
 %%               - (sublocation,Sub_id): Prints the tree of devices in a specific sublocation
 %%
-%% RETURNS:      - ok                    -> Required contents were printed
-%%               - user_not_exists:      -> The specified user doesn't exist (print_tree(user,Username))
-%%               - {error,unknown_table} -> Unknown table (print_tree(Tabletype,id))
-%%               - {error,unsupported}:  -> Operation not supported (print_tree(device,Id))
+%% RETURNS:      - ok                     -> Required contents were printed
+%%               - user_not_exists        -> The specified user doesn't exist    (print_tree(user,Username))
+%%               - location_not_exists    -> Location "Loc_id" does not exist    (print_tree(location,Loc_id))
+%%               - sublocation_not_exists -> Sublocation "Sub_id" does not exist (print_tree(sublocation,Sub_id)
+%%               - {error,unknown_table}  -> Unknown table                       (print_tree(Tabletype,id))
+%%               - {error,unsupported}    -> Operation not supported             (print_tree(device,Id))
+%%               - {error,badarg}         -> Invalid arguments
 %%
 print_tree(all) ->
  
@@ -370,7 +381,7 @@ print_tree(all) ->
  end;
 
 print_tree(_) ->
- {error, badarg}.
+ {error,badarg}.
 
 print_tree() ->
  print_tree(all).
@@ -402,7 +413,7 @@ print_tree(Tabletype,Id) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
   
   % The device table is not supported in this case
@@ -417,7 +428,7 @@ print_tree(Tabletype,Id) when is_atom(Tabletype) ->
    
    	% If it not exists, return an error
     [] ->
-	 {error,location_not_exists};
+	 location_not_exists;
 	 
     % If it exists, print its sublocations and devices as a tree
     _Location ->
@@ -434,7 +445,7 @@ print_tree(Tabletype,Id) when is_atom(Tabletype) ->
    
    	% If it not exists, return an error
 	[] ->
-	 {error,sublocation_not_exists};
+	 sublocation_not_exists;
    
     % If it exists, print its devices as a tree
     _Sublocation ->
@@ -445,7 +456,7 @@ print_tree(Tabletype,Id) when is_atom(Tabletype) ->
  end;
  
 print_tree(_,_) ->
- {error, badarg}.
+ {error,badarg}.
 
 %% Prints all locations, sublocations and devices belonging to a list of users as a tree (print_tree(user,Username),print_tree(All) helper function) 
 print_tree_user([]) ->
@@ -560,8 +571,8 @@ print_tree_device([Dev|NextDev],Indent) ->
 %% ARGUMENTS:    - Tabletype: The table where to search the record, also considering shorthand forms
 %%               - Key:       The record key (>=0)
 %%
-%% RETURNS:      - {ok,Record}           -> The record with key "Key" in table "Tabletype"
-%%               - {error,not_found}     -> The record with key "Key" was not found in table "Tabletype"
+%% RETURNS:      - {ok,Record}             -> The record with key "Key" in table "Tabletype"
+%%               - {error,not_found}       -> The record with key "Key" was not found in table "Tabletype"
 %%               - {error,unknown_table} -> Unknown table
 %%               - {error,badarg}        -> Invalid arguments
 %%
@@ -573,7 +584,7 @@ get_record(Tabletype,Key) when is_atom(Tabletype), is_number(Key), Key>=0 ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
   
   % Otherwise, search for the record by Key
@@ -610,7 +621,7 @@ get_table_records(Tabletype) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
   
   % Otherwise return all the table's records
@@ -627,9 +638,9 @@ get_table_records(_) ->
 %% ARGUMENTS:    - (),(all):  Retrieve the keys of all database tables
 %%               - Tabletype: The table which to retrieve the keys, also considering shorthand forms
 %%
-%% RETURNS:      - [TableKeys]           -> The list of keys in table Tabletype (possibly empty) (get_table_keys(Tabletype) syntax)
-%%                 {[TablesKeys]}        -> The list of keys in all database tables (possibly empty (get_table_keys(|all) syntax)
-%%               - {error,unknown_table} -> Unknown table (get_table_keys(Tabletype) syntax)
+%% RETURNS:      - [TableKeys]           -> The list of keys in table Tabletype (possibly empty)    (get_table_keys(Tabletype))
+%%               - {[TablesKeys]}        -> The list of keys in all database tables (possibly empty (get_table_keys(|all))
+%%               - {error,unknown_table} -> Unknown table                                           (get_table_keys(Tabletype))
 %%               - {error,badarg}        -> Invalid arguments
 %%
 get_table_keys(all) ->
@@ -647,13 +658,12 @@ get_table_keys(Tabletype) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
   
   % Otherwise retrieve and return the table keys
   _ ->
-   {atomic,Keys} = mnesia:transaction(fun() -> mnesia:all_keys(Table) end),
-   Keys
+    do_transaction(fun() -> mnesia:all_keys(Table) end)
  end;
 
 get_table_keys(_) ->
@@ -704,9 +714,9 @@ get_records_num() ->
 %%
 %% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and be >0
 %%
-%% RETURNS:      - {atomic,[LocDevIdList]}       -> The list of 'dev_id's of devices in the location
-%%               - {aborted,location_not_exists} -> The location 'Loc_id' does not exist
-%%               - {error,badarg}                -> Invalid arguments
+%% RETURNS:      - [LocDevIdList]              -> The list of 'dev_id's of devices in the location
+%%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
+%%               - {error,badarg}              -> Invalid arguments
 %% 
 get_loc_devs(Loc_id) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
@@ -728,8 +738,7 @@ get_loc_devs(Loc_id) when is_number(Loc_id), Loc_id>0 ->
 		mnesia:abort(location_not_exists)
 	  end
 	 end,
-	  
- mnesia:transaction(F);
+ do_transaction(F);
 
 get_loc_devs(_) ->
  {error,badarg}.
@@ -740,7 +749,7 @@ get_loc_devs(_) ->
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation which to retrieve the
 %%                                     list of devices, which must exist and be {>0,>=0}
 %%
-%% RETURNS:      - {atomic,[SubLocDevIdList]}     -> The list of 'dev_id's of devices in the sublocation
+%% RETURNS:      - [SubLocDevIdList]              -> The list of 'dev_id's of devices in the sublocation
 %%               - {error,sublocation_not_exists} -> The sublocation {Loc_id,Subloc_id} does not exist
 %%               - {error,badarg}                 -> Invalid arguments
 %% 
@@ -761,9 +770,8 @@ get_subloc_devs({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(
 		SublocationRecord#sublocation.devlist
 	  end
 	 end,
-		
- mnesia:transaction(F);
-
+ do_transaction(F);
+ 
 get_subloc_devs(_) ->
  {error,badarg}.
  
@@ -784,7 +792,7 @@ get_subloc_devs(_) ->
 %%                                                          associated record in the 'ctrmanager' table was not found (consistency error)
 %%               - {error,{internal,devmanager_missing}} -> The device associated with the specified device node exists, but its
 %%                                                          associated record in the 'devmanager' table was not found (consistency error)
-get_manager_info(controller,Loc_id) ->
+get_manager_info(controller,Loc_id) when is_number(Loc_id), Loc_id>0 ->
 
  % Attempt to retrieve the record associated with the controller's manager in the 'ctrmanager' table
  case db:get_record(ctrmanager,Loc_id) of
@@ -817,7 +825,7 @@ get_manager_info(controller,Loc_id) ->
    {Loc_id,CtrMgrRecord#ctrmanager.mgr_pid,CtrMgrRecord#ctrmanager.status}
  end;
 
-get_manager_info(device,Dev_id) ->
+get_manager_info(device,Dev_id) when is_number(Dev_id), Dev_id>0 ->
 
  % Attempt to retrieve the record associated with the device's manager in the 'devmanager' table
  case db:get_record(devmanager,Dev_id) of
@@ -847,7 +855,7 @@ get_manager_info(device,Dev_id) ->
    {DevMgrRecord#devmanager.loc_id,DevMgrRecord#devmanager.mgr_pid,DevMgrRecord#devmanager.status}
  end;
   
-get_manager_info(NodeTypeShortHand,Node_id) ->
+get_manager_info(NodeTypeShortHand,Node_id)  when is_number(Node_id), Node_id>0 ->
 
  % Determine the node type, also taking shorthand forms into account
  NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
@@ -907,12 +915,12 @@ get_suploc_pid(Loc_id) ->
 %% ARGUMENTS:    - Dev_id:             The ID of the device to change sublocation, which must exist and be >0
 %%               - {Loc_id,Subloc_id}: The 'sub_id' of the sublocation where to put the device, which must exist and be {>0,>=0}
 %%
-%% RETURNS:      - {atomic,ok}                    -> Device sublocation successfully updated
+%% RETURNS:      - ok                             -> Device sublocation successfully updated
 %%               - {error,device_not_exists}      -> The device 'Dev_id' does not exist
 %%               - {error,sublocation_not_exists} -> The sublocation 'sub_id' does not exist
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-%% NOTE:         This function doesn't check whether the new and the old device sublocations belong to the same location
+%% NOTE:         This function currently doesn't check whether the new and the old device sublocations belong to the same location
 %%
 update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
@@ -959,15 +967,7 @@ update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_n
 	    mnesia:abort(device_not_exists)
       end
      end,
-	 
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   %% [TODO]: Inform controller of the change of sublocation for the device
-   Result;   
-  _ ->
-   Result
- end;
+ do_transaction(F);	  %% [TODO]: Inform controller of the change of sublocation for the device
 	 
 update_dev_sub(_,_) ->
  {error,badarg}.
@@ -979,10 +979,10 @@ update_dev_sub(_,_) ->
 %%               - Config:    The updated device configuration
 %%               - Timestamp: The timestamp of the updated device configuration (>0)
 %%
-%% RETURNS:      - {atomic,ok}                 -> Device configuration successfully updated
-%%               - {aborted,device_not_exists} -> The device 'Dev_id' does not exist
-%%               - {aborted,invalid_devconfig} -> The updated device configuration is not valid
-%%               - {error,badarg}              -> Invalid arguments
+%% RETURNS:      - ok                        -> Device configuration successfully updated
+%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {error,invalid_devconfig} -> The updated device configuration is not valid
+%%               - {error,badarg}            -> Invalid arguments
 %%
 update_dev_config(Dev_id,Config,Timestamp) when is_number(Dev_id), Dev_id>0, is_number(Timestamp), Timestamp>0 ->
  F = fun() ->
@@ -1012,7 +1012,7 @@ update_dev_config(Dev_id,Config,Timestamp) when is_number(Dev_id), Dev_id>0, is_
 	    mnesia:abort(device_not_exists)
       end
      end,
- mnesia:transaction(F);	 
+ do_transaction(F);
 	 
 update_dev_config(_,_,_) ->
  {error,badarg}.
@@ -1023,7 +1023,7 @@ update_dev_config(_,_,_) ->
 %% ARGUMENTS:    - Loc_id: The ID of the location to update the name, which must exist and be >0
 %%               - Name:   The updated location name
 %%
-%% RETURNS:      - {atomic,ok}                 -> Location name successfully updated
+%% RETURNS:      - ok                          -> Location name successfully updated
 %%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
 %%               - {error,badarg}              -> Invalid arguments
 %%
@@ -1049,7 +1049,7 @@ update_loc_name(Loc_id,Name) when is_number(Loc_id), Loc_id>0 ->
 	    mnesia:abort(location_not_exists)
       end
      end,
- mnesia:transaction(F);	 
+ do_transaction(F);
 
 update_loc_name(_,_) ->
  {error,badarg}.
@@ -1061,7 +1061,7 @@ update_loc_name(_,_) ->
 %%                                     the name, which must exist and be {>0,>0}
 %%               - Name:               The updated sublocation name
 %%
-%% RETURNS:      - {atomic,ok}                    -> Sublocation name successfully updated
+%% RETURNS:      - ok                             -> Sublocation name successfully updated
 %%               - {error,sublocation_not_exists} -> The sublocation 'Sub_id' does not exist
 %%               - {error,badarg}                 -> Invalid arguments
 %%
@@ -1089,7 +1089,7 @@ update_subloc_name({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is
 	    mnesia:abort(sublocation_not_exists)
       end
      end,
- mnesia:transaction(F);	 
+ do_transaction(F);
 
 update_subloc_name(_,_) ->
  {error,badarg}.
@@ -1100,7 +1100,7 @@ update_subloc_name(_,_) ->
 %% ARGUMENTS:    - Dev_id: The dev_id of the device to update the name, which must exist and be >0
 %%               - Name:   The updated device name
 %%
-%% RETURNS:      - {atomic,ok}               -> Device name successfully updated
+%% RETURNS:      - ok                        -> Device name successfully updated
 %%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
 %%               - {error,badarg}            -> Invalid arguments
 %%
@@ -1126,7 +1126,7 @@ update_dev_name(Dev_id,Name) when is_number(Dev_id), Dev_id>0 ->
 	    mnesia:abort(device_not_exists)
       end
      end,
- mnesia:transaction(F);	 
+ do_transaction(F);
 
 update_dev_name(_,_) ->
  {error,badarg}.
@@ -1138,11 +1138,14 @@ update_dev_name(_,_) ->
 %%
 %% ARGUMENTS:    - Loc_id: The ID of the location to delete from the database
 %%
-%% RETURNS:      - {atomic,ok}                 -> Location, sublocations and devices successfully deleted
+%% RETURNS:      - {ok,ok}                     -> The location and all its sublocations and devices were
+%%                                                successfully deleted, and the associated nodes were stopped
+%%               - ok                          -> The location and all its sublocations and devices were successfully
+%%                                                deleted (not their nodes since the JANET Simulator is not running)
 %%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
 %%               - {error,badarg}              -> Invalid arguments
 %%
-%% NOTE:         Use with caution, for deleted locations,sublocations and device CANNOT be recovered
+%% NOTE:         Use with caution, for deleted locations, sublocations and devices CANNOT be recovered
 %%
 delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
@@ -1175,10 +1178,16 @@ delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
    % and 'devmanager' tables, returning the result of the transaction and of such deletion
    {ok,catch(delete_suploc(Loc_id))};
    
-  {TransactionResult,_} ->
-  
-   % Otherwise, just return the transaction result
-   TransactionResult
+  {{atomic,ok},false} ->
+	
+   % If the transaction was successful but the JANET
+   % simulator is not running, return just "ok"
+   ok;
+	 
+  {{aborted,Reason},_} ->
+	
+   % If an error occured in the transaction, return it
+   {error,Reason}
  end;
 
 delete_location(_) ->
@@ -1240,7 +1249,8 @@ delete_suploc(Loc_id) ->
 %%
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation to delete, with both elements >0
 %%
-%% RETURNS:      - {atomic,ok}                    -> Sublocation successfully deleted
+%% RETURNS:      - ok                             -> The sublocation was successfully deleted and its devices
+%%                                                   were moved to the location's default sublocation {Loc_id,0}
 %%               - {error,sublocation_not_exists} -> The sublocation 'Sub_id' does not exist
 %%               - {error,badarg}                 -> Invalid arguments
 %%
@@ -1270,15 +1280,8 @@ delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_numb
 	    mnesia:abort(sublocation_not_exists)
       end
      end,
- Result = mnesia:transaction(F),
- case Result of
-  {atomic, ok} ->
-   %% [TODO]: Inform the controller that the sublocation no longer exists and so to change the devices to the default sublocation
-   Result;   
-  _ ->
-   Result	 
- end;
- 
+ do_transaction(F);  %% [TODO]: Inform the controller that the sublocation no longer exists and so to change the devices to the default sublocation
+
 delete_sublocation(_) ->
  {error,badarg}.
 
@@ -1286,17 +1289,27 @@ delete_sublocation(_) ->
 move_devlist_to_default_subloc([],_) ->
  ok;
 move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
+
+ % Retrieve the device record
  [Device] = mnesia:wread({device,Dev_id}),
+ 
+ % Change the device to the default sublocation
  UpdatedDevice = Device#device{sub_id={Loc_id,0}},
+ 
+ % Update the device record
  mnesia:write(UpdatedDevice),
+ 
+ % Proceed with the next device
  move_devlist_to_default_subloc(NextDev_id,Loc_id).
 
 
-%% DESCRIPTION:  Deletes a device from the database, also shutting down its associated node
+%% DESCRIPTION:  Deletes a device from the database, also terminating its node if it is running
 %%
 %% ARGUMENTS:    - Dev_id: The dev_id of the device to delete, which must exist and be >0
 %%
-%% RETURNS:      - {atomic,ok}               -> Device successfully deleted from the database
+%% RETURNS:      - {ok,ok}                   -> The device was deleted from the database and its device node was terminated
+%%               - ok                        -> The device was deleted from the database (its node was
+%%                                              not terminated since the JANET Simulator is not running)
 %%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
 %%               - {error,badarg}            -> Invalid arguments
 %%
@@ -1320,7 +1333,7 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
 	    mnesia:abort(device_not_exists)
       end
      end,
-	 
+
  case {mnesia:transaction(F),utils:is_running(janet_simulator)} of
   {{atomic,ok},true} ->
   
@@ -1329,10 +1342,16 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
    % the 'devmanager' table, returning the result of the transaction and of such deletion
    {ok,catch(delete_devmanager(Dev_id))};
    
-  {TransactionResult,_} ->
-  
-   % Otherwise, just return the transaction result
-   TransactionResult
+  {{atomic,ok},false} ->
+	
+   % If the transaction was successful but the JANET
+   % simulator is not running, return just "ok"
+   ok;
+	 
+  {{aborted,Reason},_} ->
+	
+   % If an error occured in the transaction, return it
+   {error,Reason}
  end;
 
 delete_device(_) ->
@@ -1742,7 +1761,29 @@ get_all_users() ->
  
  % Remove duplicates and return the list of users
  lists:usort(UnfilteredUserList).
+
+
+%% DESCRIPTION:  Attempts a transaction defined in a database function
+%%
+%% ARGUMENTS:    - F -> The fun() associated with the transaction
+%%
+%% RETURNS:      - Result         -> The result of the transaction, if successful            ({atomic,Result})
+%%               - {error,Reason} -> The error occured in the transaction, if it was aborted ({aborted,Reason})
+%%
+do_transaction(F) ->
  
+ % Attempt the transaction
+ case mnesia:transaction(F) of
+ 
+  % If an error occured during the transaction, return it
+  {aborted,Reason} ->
+   {error,Reason};
+   
+  % Otherwise return the transaction's result
+  {atomic,Result} ->
+   Result
+ end.
+
 
 %% DESCRIPTION:  Returns the table name atom associated with its argument, also considering shorthand forms
 %%
@@ -1757,9 +1798,9 @@ get_all_users() ->
 %%                            - devmanager,devmgr,devicemgr     -> devmanager
 %%                              devicemanager
 %%
-%% RETURNS:      - Tableatom      -> The table atom name associated with Tabletype
-%%               - unknown        -> If no table name could be associated with Tabletype
-%%               - {error,badarg} -> Invalid arguments
+%% RETURNS:      - Tableatom             -> The table atom name associated with Tabletype
+%%               - {error,unknown_table} -> If no table name could be associated with Tabletype
+%%               - {error,badarg}        -> Invalid arguments
 %%
 resolve_tabletype_shorthand(Tabletype) when is_atom(Tabletype) ->
  if
@@ -1781,7 +1822,7 @@ resolve_tabletype_shorthand(Tabletype) when is_atom(Tabletype) ->
   
   % Unknown Tabletype  
   true ->
-   unknown
+   {error,unknown_table}
  end;
  
 resolve_tabletype_shorthand(_) ->

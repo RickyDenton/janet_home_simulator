@@ -606,15 +606,15 @@ get_subloc_devs_throw({Loc_id,Subloc_id}) ->
  case db:get_subloc_devs({Loc_id,Subloc_id}) of
 
     % Empty sublocation
-    {atomic,[]} ->
+    [] ->
 	 throw(subloc_empty);
 	 
     % If the sublocation does not exist, return an error
-    {aborted,sublocation_not_exists} ->
+    {error,sublocation_not_exists} ->
      throw({error,sublocation_not_exists});
 	 
 	% If the list of devices was successfully retrieved
-    {atomic,DevIdList} ->
+    DevIdList ->
      DevIdList
  end.
 
@@ -644,7 +644,7 @@ change_loc_status(Loc_id,Mode) ->
    %
    % NOTE: Differently from "change_subloc_status()" and its "get_subloc_devs_throw()" function in
    %       this case an empty list can be returned, meaning that the location contains no devices  
-   {atomic,DevIdList} = db:get_loc_devs(Loc_id),
+   DevIdList = db:get_loc_devs(Loc_id),
    
    % Attempt to change the statuses of all device managers in the location, obtaining in return:
    %
@@ -787,7 +787,7 @@ change_locs_statuses([Loc_id|Next_LocId],MgrsErrors,Mode) ->
  %
  % NOTE: Differently from "change_subloc_status()" and its "get_subloc_devs_throw()" function in
  %       this case an empty list can be returned, meaning that the location contains no devices  
- {atomic,DevIdList} = db:get_loc_devs(Loc_id), 
+ DevIdList = db:get_loc_devs(Loc_id), 
    
  % Attempt to change the statuses of all device managers in the location, obtaining in return:
  %

@@ -105,7 +105,7 @@ print_table(Tabletype) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
    
   % Otherwise print the table header and contents
@@ -245,7 +245,7 @@ get_table_records(Tabletype) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
   
   % Otherwise return all the table's records
@@ -275,7 +275,7 @@ get_record(Tabletype,Key) when is_atom(Tabletype) ->
  case Table of
  
   % If unknown table, return an error
-  unknown ->
+  {error,unknown_table} ->
    {error,unknown_table};
   
   % Otherwise, search for the record by Key
@@ -303,9 +303,9 @@ get_record(_,_) ->
 %%                             - sub,subloc,sublocation,ctr_sub,ctr_subloc,ctr_sublocation -> ctr_sublocation
 %%                             - dev,device,ctr_dev,ctr_device                             -> ctr_device
 %%
-%% RETURNS:      - Tableatom      -> The table atom name associated with Tabletype
-%%               - unknown        -> If no table name could be associated with Tabletype
-%%               - {error,badarg} -> Invalid arguments
+%% RETURNS:      - Tableatom             -> The table atom name associated with Tabletype
+%%               - {error,unknown_table} -> If no table name could be associated with Tabletype
+%%               - {error,badarg}        -> Invalid arguments
 %%
 resolve_tabletype_shorthand(Tabletype) when is_atom(Tabletype) ->
  if
@@ -318,7 +318,7 @@ resolve_tabletype_shorthand(Tabletype) when is_atom(Tabletype) ->
 
   % Unknown Tabletype  
   true ->
-   unknown
+   {error,unknown_table}
  end;
  
 resolve_tabletype_shorthand(_) ->

@@ -21,7 +21,7 @@
 loc_devs_init(Loc_id,Sup_pid) ->
 
  % Retrieve the list of dev_ids of devices in the location
- {atomic,LocDevIdList} = db:get_loc_devs(Loc_id),
+ LocDevIdList = db:get_loc_devs(Loc_id),
 
  % Initialize the location devices' managers
  init_devs_mgrs(LocDevIdList,Loc_id,Sup_pid). 
