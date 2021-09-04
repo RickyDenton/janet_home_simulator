@@ -385,8 +385,9 @@ print_nodes(_) ->
 %% ARGUMENTS:    - (Loc_id), (Loc_id,all): Print all Mnesia RAM Tables in the controller node of location "Loc_id"
 %%               - (Loc_id,TableType):     Prints the TableType Mnesia RAM table in the controller node of location "Loc_id",
 %%                                         with the following table types being allowed, also considering shorthand forms
-%%                                          - deva,devall,alloc,devalloc      -> devalloc
-%%                                          - devr,devreg,devregi,devregister -> devregister
+%%
+%%                                          - sub,subloc,sublocation,ctr_sub,ctr_subloc,ctr_sublocation -> ctr_sublocation
+%%                                          - dev,device,ctr_dev,ctr_device                             -> ctr_device
 %%
 %% RETURNS:      - ok                          -> The specified tables were printed
 %%               - {error,janet_not_running}   -> The Janet Simulator is not running
@@ -415,7 +416,7 @@ print_ctr_table(_,_) ->
  {error,badarg}. 
 
 
-%% DESCRIPTION:  Prints the devices sublocations allocation in a running controller node as a tree
+%% DESCRIPTION:  Prints all sublocations and their devices in a controller node as a tree
 %%
 %% ARGUMENTS:    - Loc_id: The location ID of the controller node
 %%

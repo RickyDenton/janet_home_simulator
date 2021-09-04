@@ -6,10 +6,10 @@
   {description,"JANET Erlang Controller"},	         % Application Description
   {vsn,"0.0.1"},							         % Application Version
   {modules,[jctr,sup_jctr,sup_devhandlers,           % Application-specific Modules
-            ctr_regserver,ctr_devhandler,
+            ctr_pairserver,ctr_devhandler,
 			ctr_restserver,ctr_simserver,
 			ctr_db]},                 
-  {registered,[sup_devs,ctr_regserver,               % Application Registered Names
+  {registered,[sup_devs,ctr_pairserver,              % Application Registered Names
                ctr_simserver]},             
   {applications,[mnesia,stdlib,kernel]},             % Application Dependencies
   {mod,{jctr,[]}}                                    % Application Callback Module and Arguments([] = 'normal')

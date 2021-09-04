@@ -31,7 +31,7 @@ init(_) ->
 	 [ctr_restserver]                   % Child Modules (For Release Handling Purposes)
     },
   
-   %% -------- The supervisor of registered device handlers (sup_devhandlers) -------- %%
+    %% -------------- The device handlers supervisor (sup_devhandlers) -------------- %%
     {
      sup_devhandlers,                   % ChildID
      {sup_devhandlers,start_link,[]},   % Child Start Function
@@ -41,14 +41,14 @@ init(_) ->
 	 [sup_devhandlers]                  % Child Modules (For Release Handling Purposes)
     },
    
-    %% -------------- The devices' registration server (ctr_regserver) -------------- %%
+    %% ---------------- The devices' pairing server (ctr_pairserver) ---------------- %%
 	{
-     ctr_regserver,		                % ChildID
-     {ctr_regserver,start_link,[]},     % Child Start Function
+     ctr_pairserver,		            % ChildID
+     {ctr_pairserver,start_link,[]},    % Child Start Function
  	 permanent,                         % Child Restart Policy
 	 1000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
-	 [ctr_regserver]                    % Child Modules (For Release Handling Purposes)
+	 [ctr_pairserver]                   % Child Modules (For Release Handling Purposes)
     },
 	
 	%% -------------- The controller simulation server (ctr_simserver) -------------- %%

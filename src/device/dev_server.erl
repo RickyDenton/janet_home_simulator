@@ -1,11 +1,11 @@
-%% This module represents the server in the JANET device application used for interfacing
-%% interfacing both with the JANET Simulator and its location's JANET Controller node
+%% This module represents the communication server in the JANET device application, which interfaces both
+%% with its 'dev_manager' on the JANET Simulator node and its 'ctr_devhandler' on its JANET Controller node
 
 -module(dev_server).
 -behaviour(gen_server).
 
 -export([start_link/0,init/1,handle_call/3,handle_cast/2,handle_continue/2,handle_info/2]).  % gen_server Behaviour Callback Functions
--export([dev_reg_cli/3]).                                                                    % 'dev_server' controller registration client
+-export([ctr_pairer/3]).                                                                     % The 'dev_server' controller pairing client
 
 %% This record represents the state of a dev_server gen_server
 -record(devsrvstate,    
@@ -18,7 +18,7 @@
 		 devhandler_mon   % A reference used for monitoring the device handler assigned to the 'dev_server' in the controller node
 		}).
 
-% Maximum size of the buffer used for postponing device configuration updates towards the controller while not registered with it
+% Maximum size of the buffer used for postponing device configuration updates towards the controller while not paired with it
 -define(Max_handler_buffer_size, 100).  
 
 %%====================================================================================================================================
@@ -32,14 +32,14 @@ init(_) ->
  %% process_flag(trap_exit,true),
  
  % Return the server initial state, where further initialization operations will be performed in the "handle_continue(Continue,State)"
- % callback function for parallelization purposes (and for allowing the dev_manager process to respond to the registration request)  
+ % callback function for parallelization purposes (and for allowing the 'dev_manager' process to respond to the registration request)  
  {ok,#devsrvstate{dev_state = booting, _ = none},{continue,init}}.
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%  
 
 %% Registers the JANET device node with its device manager in the JANET simulator node and spawns
-%% the 'dev_reg_cli' process for registering the device with its location JANET Controller node
+%% the 'ctr_pairer' process for pairing the device with its locaiton's JANET Controller node
 handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting ->
 
  % Retrieve the 'mgr_pid' environment variable
@@ -56,7 +56,7 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  % Retrieve the device's state machine (supposedly) initial configuration
  % and initialize the 'handler_buffer' process dictionary variable to its
  % value, so that an immediate state update will be sent to the device's
- % handler as soon as the device registers within its controller
+ % handler as soon as the device pairs with its controller
  %
  % NOTE: This operation must succeed, otherwise the
  %       device node's execution should not continue
@@ -69,8 +69,8 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  {ok,Loc_id} = application:get_env(loc_id),
  {ok,Dev_id} = application:get_env(dev_id),
 
- % Spawn the 'dev_reg_cli' client for attempting to register the device with its controller node
- spawn_link(?MODULE,dev_reg_cli,[Loc_id,Dev_id,self()]),
+ % Spawn the 'ctr_pairer' client for attempting to pair the device with its controller node
+ spawn_link(?MODULE,ctr_pairer,[Loc_id,Dev_id,self()]),
 
  % Return the server initial state
  {noreply,#devsrvstate{dev_state = connecting, dev_id = Dev_id, loc_id = Loc_id, mgr_pid = MgrPid, _ = none}}.
@@ -78,6 +78,8 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
+%% DEV_CONFIG_CHANGE
+%% -----------------
 %% SENDER:    The device node's manager in the JANET Simulator node OR
 %%            the device's handler in the JANET Controller node 
 %% WHEN:      -
@@ -86,8 +88,8 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
 %% MATCHES:   (always) (when the requests comes from the device manager in the JANET Simulator or the device handler in the JANET Controller)
 %% ACTIONS:   1) Forward the configuration change command to the device's state machine and return its response to the caller
 %%            2) If the configuration change update was successful, inform the other actor which did not perform the call
-%%               of the updated device configuration and timestamp, storing it in the 'handler_buffer' process dictionary variable
-%%               in case the call came from the JANET Simulator and the device is not registered within the controller 
+%%               of the updated device configuration and timestamp, storing it in the 'handler_buffer' process dictionary 
+%%               variable in case the call came from the JANET Simulator and the device is not paired with the controller 
 %% ANSWER:    The reply of the device's state machine
 %% NEW STATE: -
 %%
@@ -131,8 +133,10 @@ handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when ReqPid =:= SrvS
    % ('statem_timeout' included), just return the error to the caller
    {reply,CfgChangeRes,SrvState}
  end;
- 
- 
+
+
+%% DEV_COMMAND
+%% ----------- 
 %% SENDER:    The device node's manager in the JANET Simulator node
 %% WHEN:      (varies) [TODO]: Double-check
 %% PURPOSE:   Execute a command on the device node and return the result of the operation
@@ -157,20 +161,22 @@ handle_call(_,{ReqPid,_},SrvState) ->
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
-%% SENDER:    The device controller registration client ('dev_reg_cli' process)
-%% WHEN:      When it successfully registered the device within the controller node
-%% PURPOSE:   Inform the 'dev_server' of the successful registration
-%% CONTENTS:  1) The PID of the device controller registration client ("security purposes")
-%%            2) The PID of the 'ctr_devhandler' server assigned to the device in the controller node
+%% PAIR_SUCCESS
+%% ------------ 
+%% SENDER:    The device's 'ctr_pairer' client
+%% WHEN:      When it successfully paired the device with the controller node
+%% PURPOSE:   Inform the 'dev_server' of the successful pairing
+%% CONTENTS:  1) The PID of the device's 'ctr_pairer' client ("security purposes")
+%%            2) The PID of the handler assigned to the device in the controller node
 %% MATCHES:   When the 'dev_server' is connecting (and the request comes from the JANET Device)
-%% ACTIONS:   Create a monitor towards the 'ctr_devhandler' server in the controller node and
-%%            inform the device manager in the JANET Simulator that the device is now online
+%% ACTIONS:   Create a monitor towards the device handler in the controller node and inform
+%%            the device manager in the JANET Simulator node that the device is now online
 %% NEW STATE: Update the device state to 'online' and set the 'devhandler_pid' and 'devhandler_mon' variables
 %%
-handle_cast({reg_success,DevRegCli,Devhandler_Pid},SrvState) when SrvState#devsrvstate.dev_state =:= connecting andalso node(DevRegCli) =:= node() ->
+handle_cast({pair_success,PairerPID,Devhandler_Pid},SrvState) when SrvState#devsrvstate.dev_state =:= connecting andalso node(PairerPID) =:= node() ->
 
- % Old logging
- % io:format("[dev_server-~w]: Registration Success (devhandler PID = ~w)~n",[SrvState#devsrvstate.dev_id,Devhandler_Pid]),
+ % Logging Purposes
+ % io:format("[dev_server-~w]: Pairing Success (devhandler PID = ~w)~n",[SrvState#devsrvstate.dev_id,Devhandler_Pid]),
 
  % Create a monitor towards the handler assigned to the device in the controller node
  %
@@ -190,6 +196,8 @@ handle_cast({reg_success,DevRegCli,Devhandler_Pid},SrvState) when SrvState#devsr
  {noreply,SrvState#devsrvstate{dev_state = online, devhandler_pid = Devhandler_Pid, devhandler_mon = Mon_Ref}}; 
  
 
+%% DEV_CONFIG_UPDATE
+%% -----------------
 %% SENDER:    The device's 'dev_statem' process
 %% WHEN:      When the device's state machine configuration changes
 %% PURPOSE:   Propagate the updated device configuration to the device manager in
@@ -199,7 +207,7 @@ handle_cast({reg_success,DevRegCli,Devhandler_Pid},SrvState) when SrvState#devsr
 %% MATCHES:   (always)
 %% ACTIONS:   1) Forward the updated device configuration and timestamp
 %%               to the device manager in the JANET Simulator
-%%            2) If registered within its controller, forward the updated device 
+%%            2) If paired with its controller, forward the updated device 
 %%               configuration and timestamp to the device handler, otherwise
 %%               store them in the 'handler_buffer' process dictionary variable 
 %% NEW STATE: -
@@ -209,21 +217,18 @@ handle_cast({dev_config_update,{UpdatedCfg,Timestamp}},SrvState) ->
  % Forward the updated device configuration and its timestamp to the device manager in the JANET Simulator node
  gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_config_update,self(),{UpdatedCfg,Timestamp}}),
  
- % If the device is registered within the controller node, forward it the updated device configuration
+ % If the device is paired with the controller node, forward it the updated device configuration
  % and timestamp, otherwise store them in the 'handler_buffer' process dictionary variable 
  push_or_store_ctr_update(SrvState#devsrvstate.dev_state,SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp}),
 
  % Keep the server state
- {noreply,SrvState};
-
-
-%% --------- STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
-
+ {noreply,SrvState}.
+ 
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
+%% CONTROLLER NODE DOWN
+%% --------------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
 %% WHEN:      When the monitored 'ctr_devhandler' process on the controller node terminates
 %% PURPOSE:   Inform of the 'ctr_devhandler' process termination
@@ -233,7 +238,7 @@ handle_cast(reset,State) -> % Resets the server State
 %% MATCHES:   When the device node is online (dev_state = 'online')
 %% ACTIONS:   1) If Reason =:= 'noproc' log the event (it should not happen)
 %%            2) Inform the device manager in the JANET Simulator that the device is no longer online
-%%            3) Respawn the 'dev_reg_cli' client for attempting to re-register the device with the controller 
+%%            3) Respawn the 'ctr_pairer' client for attempting to re-pair the device with the controller 
 %% ANSWER:    -
 %% NEW STATE: Update the 'dev_state' to 'connecting' and reset the 'devhandler_pid' and 'devhandler_mon' variables
 %%
@@ -241,7 +246,7 @@ handle_info({'DOWN',MonRef,process,Devhandler_pid,Reason},SrvState) when MonRef 
                                                                          Devhandler_pid =:= SrvState#devsrvstate.devhandler_pid,
 																		 SrvState#devsrvstate.dev_state =:= online ->
  
- % If Reason =:= 'noproc', which is associated to the fact that the 'ctr_regserver' passed a non-existing
+ % If Reason =:= 'noproc', which is associated to the fact that the 'ctr_pairserver' passed a non-existing
  % "Devhandler_pid" or the devhandler process died before the monitor could be established, log the error
  if
   Reason =:= noproc ->
@@ -253,8 +258,8 @@ handle_info({'DOWN',MonRef,process,Devhandler_pid,Reason},SrvState) when MonRef 
  % Inform the device manager that the device is no longer online
  gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_srv_state_update,connecting,self()}),
  
- % Respawn the 'dev_reg_cli' client for attempting to re-register the device with the controller node
- spawn_link(?MODULE,dev_reg_cli,[SrvState#devsrvstate.loc_id,SrvState#devsrvstate.dev_id,self()]),
+ % Respawn the 'ctr_pairer' client for attempting to re-pair the device with the controller node
+ spawn_link(?MODULE,ctr_pairer,[SrvState#devsrvstate.loc_id,SrvState#devsrvstate.dev_id,self()]),
  
  % Update the 'dev_state' to 'connecting' and reset the 'devhandler_pid' and 'devhandler_mon' variables
  {noreply,SrvState#devsrvstate{dev_state = connecting, devhandler_pid = none, devhandler_mon = none}}.
@@ -265,24 +270,24 @@ handle_info({'DOWN',MonRef,process,Devhandler_pid,Reason},SrvState) when MonRef 
 %%==================================================================================================================================== 
 
 %% DESCRIPTION:  Body function of the homonymous process spawned by the 'dev_server'
-%%               for attempting to register the device with its location controller
+%%               for attempting to pair the device with its location controller
 %%
 %% ARGUMENTS:    - Loc_id:    The device's location ID
 %%               - Dev_id:    The device's ID
-%%               - DevSrvPid: The PID of the device's 'dev_server' process where to return the PID of the handler 
-%%                            assigned to the device on the controller node when the registration is successful
+%%               - DevSrvPid: The PID of the device 'dev_server' where to return the PID of the handler
+%%                            assigned to the device on the controller node when the pairing is successful
 %%
-%% RETURNS:      - ok -> The registration was successful, and the PID of the handler assigned to the device
+%% RETURNS:      - ok -> The pairing was successful, and the PID of the handler assigned to the device
 %%                       on the controller node was returned to the 'dev_server' process via a cast()
 %%
-dev_reg_cli(Loc_id,Dev_id,DevSrvPid) ->
+ctr_pairer(Loc_id,Dev_id,DevSrvPid) ->
  
  % Sleep for 1 second (this is to account the initial delay when the JANET
  % Simulator is started as well as a interval between consecutive attempts)
  timer:sleep(1000),
  
- % Attempt to register the device to the location controller via a synchronous request, catching possible exceptions
- RegResult = try gen_server:call({ctr_regserver,utils:str_to_atom("ctr-" ++ integer_to_list(Loc_id) ++ "@localhost")},{reg_request,Dev_id,DevSrvPid},1500)
+ % Attempt to pair the device to the location controller via a synchronous request, catching possible exceptions
+ PairingResult = try gen_server:call({ctr_pairserver,utils:str_to_atom("ctr-" ++ integer_to_list(Loc_id) ++ "@localhost")},{pair_request,Dev_id,DevSrvPid},1500)
  catch
   exit:{timeout,_} ->
   
@@ -295,29 +300,29 @@ dev_reg_cli(Loc_id,Dev_id,DevSrvPid) ->
    Error
  end,
  
- % Old logging
- % io:format("[dev_reg_cli-~w]: Registration Result:~w~n",[Dev_id,RegResult]),
+ % Logging Purposes
+ % io:format("[ctr_pairer-~w]: Pairing Result:~w~n",[Dev_id,PairingResult]),
  
- case RegResult of
+ case PairingResult of
  
-  % If a timeout occured, re-attempt the registration with no further delay
+  % If a timeout occured, re-attempt the pairing with no further delay
   {error,ctr_timeout} ->
-   dev_reg_cli(Loc_id,Dev_id,DevSrvPid);
+   ctr_pairer(Loc_id,Dev_id,DevSrvPid);
    
-  % If the registration was successful, return to the 'dev_server' process the
+  % If the pairing was successful, return to the 'dev_server' process the
   % PID of the handler assigned to the device on the controller node via a cast()
   {ok,Devhandler_Pid} ->
-   gen_server:cast(DevSrvPid,{reg_success,self(),Devhandler_Pid});
+   gen_server:cast(DevSrvPid,{pair_success,self(),Devhandler_Pid});
 
   % If a generic error occured, delay the execution for an
-  % additional time interval before re-attempting the registration   
+  % additional time interval before re-attempting the pairing   
   _ ->
    timer:sleep(1000),
-   dev_reg_cli(Loc_id,Dev_id,DevSrvPid) 
+   ctr_pairer(Loc_id,Dev_id,DevSrvPid) 
  end.
 
 
-%% DESCRIPTION:  If the device node is registered within its controller, forwards it an updated device configuration
+%% DESCRIPTION:  If the device node is paired with its controller, forwards it an updated device configuration
 %%               and timestamp, otherwise stores them in the 'handler_buffer' process dictionary variable
 %%
 %% ARGUMENTS:    - DevState:               The current device state (connecting|online)
@@ -329,11 +334,11 @@ dev_reg_cli(Loc_id,Dev_id,DevSrvPid) ->
 %%
 push_or_store_ctr_update(DevState,Devhandler_pid,{UpdatedCfg,Timestamp}) ->
 
- % Check if the 'dev_server' is registered within the controller node
+ % Check if the 'dev_server' is paired with its controller node
  case DevState of
   online ->
   
-   % If it is registered, forward the updated device configuration
+   % If it is paired, forward the updated device configuration
    % and its timestamp to the device handler in the controller
    gen_server:cast(Devhandler_pid,{dev_config_update,self(),{UpdatedCfg,Timestamp}});
    

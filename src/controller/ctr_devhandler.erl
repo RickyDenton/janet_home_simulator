@@ -1,4 +1,4 @@
-%% This module represents the handler of a registered device in the JANET Controller application %%
+%% This module represents the handler of a paired device in the JANET Controller application %%
 
 -module(ctr_devhandler).
 -behaviour(gen_server).
@@ -25,21 +25,30 @@ init({Dev_id,DevSrvPid}) ->
  % Trap exit signals so to allow cleanup operations when terminating (terminate(Reason,SrvState) callback function)
  process_flag(trap_exit,true),
  
- % Register the handler in the 'devregister' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devregister{dev_id=Dev_id,handler_pid=self()}) end),
+ % Attempt to register the handler's PID in the 'ctr_device' table
+ case register_handler(Dev_id) of
  
- % Old logging
- % io:format("[ctr_devhandler-~w]: Device registered~n",[Dev_id]),
+  {aborted,device_not_exists} ->
+   
+    % If the device was not found in the 'ctr_device' table, meaning that it was deleted
+	% between its pairing and the spawning of its handler, abort the initialization 
+    {stop,ignore};
+	
+  {atomic,ok} ->
  
- % Create a monitor towards the device node's 'dev_server' process identified by "DevSrvPid"
- MonRef = monitor(process,DevSrvPid),
- 
- % Return the devhandler server (constant) state
- {ok,#devhandlerstate{dev_id = Dev_id, dev_srv_pid = DevSrvPid, dev_srv_mon = MonRef}}.
+    % If the device's handler was successfully registered, create a monito
+	% towards the device node's 'dev_server' process identified by "DevSrvPid"
+    MonRef = monitor(process,DevSrvPid),
+
+    % Return the devhandler server (constant) state
+    {ok,#devhandlerstate{dev_id = Dev_id, dev_srv_pid = DevSrvPid, dev_srv_mon = MonRef}}
+ end.
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
+%% DEV_CONFIG_CHANGE
+%% -----------------
 %% SENDER:    The controller's 'ctr_restserver' [TODO]: Double-check
 %% WHEN:      -
 %% PURPOSE:   Change the state machine configuration in the handled device
@@ -74,6 +83,8 @@ handle_call(_,{ReqPid,_},SrvState) ->
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
+%% DEV_CONFIG_UPDATE
+%% -----------------
 %% SENDER:    The device's 'dev_server' process
 %% WHEN:      When the device's state machine configuration changes
 %% PURPOSE:   Inform the device handler of the updated state machine configuration
@@ -93,16 +104,13 @@ handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when 
  %% [TODO]: Push to the remote MongoDB database
  
  % Keep the server state
- {noreply,SrvState};
-
-
-%% --------- STUB
-handle_cast(reset,SrvState) ->
  {noreply,SrvState}.
  
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
+%% DEVICE NODE DOWN
+%% ----------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
 %% WHEN:      When the monitored 'dev_server' process on the device node terminates
 %% PURPOSE:   Inform of the 'dev_server' process termination
@@ -111,17 +119,17 @@ handle_cast(reset,SrvState) ->
 %%            3) The reason for the monitored process's termination
 %% MATCHES:   (always) (when the monitor reference and the PID of the monitored process match the ones in the server's state)
 %% ACTIONS:   If Reason =:= 'noproc' log the event (it should not happen), and then stop 
-%%            the 'ctr_devhandler' server, deregistring the device node from the controller
+%%            the 'ctr_devhandler' server, unpairing the device node from the controller
 %% ANSWER:    -
 %% NEW STATE: Stop the server (reason = 'normal' because no errors should be propagated to the 'sup_devhandlers' supervisor)
 %%
 handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= SrvState#devhandlerstate.dev_srv_mon, DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
 
  % If Reason =:= 'noproc', which is associated to the fact that the 'dev_server' passed a non-existing "DevSrvPid"
- % while registering in the 'ctr_regserver' or it died before the monitor could be established, log the error
+ % while pairing with the 'ctr_pairserver' or it died before the monitor could be established, log the error
  if
   Reason =:= noproc ->
-   io:format("[ctr_devhandler-~w]: <WARNING> The 'dev_server' process of registered device does not exist~n",[SrvState#devhandlerstate.dev_id]);
+   io:format("[ctr_devhandler-~w]: <WARNING> The 'dev_server' process of paired device does not exist~n",[SrvState#devhandlerstate.dev_id]);
   true ->
    ok
  end,
@@ -135,8 +143,8 @@ handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= S
 %% Called when the 'dev_handler' server is asked to shutdown by its 'sup_devhandlers' supervisor or if it crashes
 terminate(_,SrvState) ->
   
- % Deregister the handled device from the 'devregister' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({devregister,SrvState#devhandlerstate.dev_id}) end),
+ % Attempt to deregister the handler's PID from the 'ctr_device' table 
+ deregister_handler(SrvState#devhandlerstate.dev_id),
  
  % Remove the monitor towards the device's 'dev_server' process, if it is still active
  demonitor(SrvState#devhandlerstate.dev_srv_mon),
@@ -144,12 +152,59 @@ terminate(_,SrvState) ->
  % Terminate
  ok. 
 
+
+%%====================================================================================================================================
+%%                                                    PRIVATE HELPER FUNCTIONS
+%%====================================================================================================================================  
+ 
+%% Attempts to register the handler's PID in the 'ctr_device' table (init({Dev_id,DevSrvPid}) helper function)
+register_handler(Dev_id) ->
+ F = fun() ->
+ 
+      % Retrieve the "Dev_id" entry from the 'ctr_device' table
+	  case mnesia:wread({ctr_device,Dev_id}) of      % wread = write lock
+	   [CtrDevRecord] ->
+	   
+	    % Register the device's handler by setting the 'handler_pid' field
+	    mnesia:write(CtrDevRecord#ctr_device{handler_pid = self()});
+		
+	   [] ->
+	   
+	    % If the entry does not exist, it means that the device was deleted between
+		% its pairing and the spawning of its handler, and so abort the transaction
+	    mnesia:abort(device_not_exists)
+      end
+	 end,
+	  
+ mnesia:transaction(F).
+ 
+%% Attempts to deregister the handler's PID from the 'ctr_device' table (terminate(_,SrvState) helper function)
+deregister_handler(Dev_id) ->
+ F = fun() ->
+ 
+      % Retrieve the "Dev_id" entry from the 'ctr_device' table
+	  case mnesia:wread({ctr_device,Dev_id}) of      % wread = write lock
+	   [CtrDevRecord] ->
+	   
+	    % Deregister the device's handler by clearing the 'handler_pid' field
+	    mnesia:write(CtrDevRecord#ctr_device{handler_pid = '-'});
+		
+	   [] ->
+	   
+	    % If the entry does not exist, it means that the
+		% device was already deleted, and so just return
+	    ok
+      end
+	 end,
+	  
+ mnesia:transaction(F).
+
  
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
 %%====================================================================================================================================
 
-%% Called by the registered device handlers supervisor 'sup_devhandlers' on behalf
-%% of the 'ctr_regserver' process whenever a device registers within the controller
+%% Called by the device handlers supervisor 'sup_devhandlers' on behalf
+%% of the 'ctr_pairserver' whenever a device pairs with the controller
 start_link(Dev_id,DevSrvPid) ->
  gen_server:start_link(?MODULE,{Dev_id,DevSrvPid},[]).

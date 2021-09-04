@@ -52,10 +52,6 @@ handle_continue(init,SrvState) ->
  % Retrieve the device record
  {ok,DeviceRecord} = db:get_record(device,Dev_id),
  
- % Check the record validity
- %% [TODO]: This is probably is not required, since if the record is corrupted the function crashes anyway (and it just checks for it to be in the form {device,...}
- % true = is_record(DeviceRecord,device),
- 
  % Retrieve the device's type and configuration
  Type = DeviceRecord#device.type,
  Config = DeviceRecord#device.config,
@@ -84,6 +80,8 @@ handle_continue(init,SrvState) ->
  
 %% ========================================================= HANDLE_CALL ========================================================= %% 
 
+%% DEV_REG
+%% -------
 %% SENDER:    The device's 'dev_server' process
 %% WHEN:      During the 'dev_server' initialization (handle_continue(init,_))
 %% PURPOSE:   Device registration request
@@ -112,6 +110,8 @@ handle_call({dev_reg,DevSrvPid},{DevSrvPid,_},SrvState) when SrvState#devmgrstat
  {reply,ok,SrvState#devmgrstate{dev_state = connecting, dev_srv_pid = DevSrvPid, dev_srv_mon = MonRef}}; 
 
 
+%% DEV_CONFIG_CHANGE
+%% -----------------
 %% SENDER:    The simulation controller (the user)
 %% WHEN:      -
 %% PURPOSE:   Change the state machine configuration in the managed device
@@ -174,6 +174,8 @@ handle_call({dev_config_change,_},{_,_},SrvState) ->
  {reply,{error,dev_booting},SrvState};
 
 
+%% DEV_COMMAND
+%% -----------
 %% SENDER:    The simulation controller (the user)
 %% WHEN:      -
 %% PURPOSE:   Execute a command on the device's node via its 'dev_server' and return the result of the operation
@@ -216,6 +218,8 @@ handle_call(_,{ReqPid,_},SrvState) ->
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
+%% DEV_SRV_STATE_UPDATE
+%% --------------------
 %% SENDER:    The device's 'dev_server' process
 %% WHEN:      When the 'dev_server' changes states from 'connecting' to 'online' or viceversa
 %% PURPOSE:   Inform the device manager of the device state change
@@ -242,6 +246,8 @@ handle_cast({dev_srv_state_update,connecting,DevSrvPid},SrvState) when SrvState#
  {noreply,SrvState#devmgrstate{dev_state = connecting}};
  
  
+%% DEV_CONFIG_UPDATE
+%% ----------------- 
 %% SENDER:    The device's 'dev_server' process
 %% WHEN:      When the device's state machine configuration changes
 %% PURPOSE:   Inform the device manager of the updated state machine configuration
@@ -262,16 +268,13 @@ handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when 
  io:format("[dev_mgr-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devmgrstate.dev_id,UpdatedCfg,PushToMnesia]),
  
  % Keep the server state
- {noreply,SrvState};
-  
- 
-%% --------- STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
+ {noreply,SrvState}.
 
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
+%% DEVICE NODE DOWN
+%% ----------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
 %% WHEN:      When the monitored 'dev_server' process on the device node terminates
 %% PURPOSE:   Inform of the 'dev_server' process termination

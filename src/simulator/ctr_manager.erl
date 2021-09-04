@@ -50,16 +50,12 @@ handle_continue(init,SrvState) ->
  % Retrieve the location record
  {ok,LocationRecord} = db:get_record(location,Loc_id),
  
- % Check the record validity
- %% [TODO]: This is probably is not required, since if the record is corrupted the function crashes anyway (and it just checks for it to be in the form {location,...}
- % true = is_record(LocationRecord,location),
- 
  % Retrieve the location port to be used as 'rest_port' by the controller
  Loc_port = LocationRecord#location.port,
  
- % Retrieve the records of the sublocations in the location and use them for preparing the controller's 'devalloc' table
+ % Retrieve the records of the location's sublocations and use them for preparing the controller's 'ctr_sublocation' table
  {atomic,SublocationRecords} = mnesia:transaction(fun() -> mnesia:match_object(#sublocation{sub_id = {Loc_id,'_'}, _ = '_'}) end),
- DevAlloc = derive_devalloc(SublocationRecords,[]),
+ CtrSublocTable = derive_ctr_subloc_table(SublocationRecords,[]),
  
  % Retrieve the 'remotehost' environment variable
  {ok,RemoteHost} = application:get_env(remotehost),
@@ -79,7 +75,7 @@ handle_continue(init,SrvState) ->
  {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),
  
  % Launch the Janet Controller application on the controller node
- ok = rpc:call(Node,jctr,run,[Loc_id,DevAlloc,self(),Loc_port,RemoteHost]),
+ ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,self(),Loc_port,RemoteHost]),
  
  % Set the ctr_node in the server state and wait for the
  % registration request of the controller's 'ctr_simserver' process
@@ -88,8 +84,8 @@ handle_continue(init,SrvState) ->
 
 %% ========================================================= HANDLE_CALL ========================================================= %% 
 
-%% ----------------------------------------------------------- BOOTING ----------------------------------------------------------- %%
-
+%% CTR_REG
+%% -------
 %% SENDER:    The controller's ctr_simserver
 %% WHEN:      During the ctr_simserver initialization (handle_continue(init,_))
 %% PURPOSE:   Controller registration request
@@ -118,14 +114,16 @@ handle_call({ctr_reg,CtrSrvPid},{CtrSrvPid,_},SrvState) when SrvState#ctrmgrstat
  % Confirm the controller registration and update the 'ctr_srv_pid' and the 'ctr_state' state variables
  {reply,ok,SrvState#ctrmgrstate{ctr_state = online, ctr_srv_pid = CtrSrvPid, ctr_srv_mon = MonRef}}; 
  
- 
+
+%% CTR_COMMAND
+%% -----------
 %% SENDER:    The simulation controller (the user)
 %% WHEN:      -
 %% PURPOSE:   Execute a command on the controller's node via its 'ctr_simserver' and return the result of the operation
 %% CONTENTS:  The Module, Function and ArgsList to be evaluated by the 'ctr_simserver' via apply()
 %% MATCHES:   When the controller has booted and its 'ctr_simserver' is registered, otherwise an
 %%            error message is returned (and the request comes from the JANET Simulator node)
-%% ACTIONS:   Forward the command to the 'ctr_simserver' via a synhcronous call and return its response [TODO]: Rewrite using a gen_cli?
+%% ACTIONS:   Forward the command to the 'ctr_simserver' via a synhcronous call and return its response
 %% ANSWER:    The answer of the 'ctr_simserver', consisting in the result of the specified command
 %% NEW STATE: -
 %%
@@ -151,7 +149,6 @@ handle_call({ctr_command,_,_,_},{_,_},SrvState) ->
  % Reply that the controller is still booting
  {reply,{error,ctr_booting},SrvState};  
  
- 
   
 %% DEBUGGING PURPOSES [TODO]: REMOVE
 handle_call(_,{ReqPid,_},SrvState) ->
@@ -159,16 +156,23 @@ handle_call(_,{ReqPid,_},SrvState) ->
  {reply,gen_response,SrvState}.
 
 
+%% ===================================================== HANDLE_CAST (STUB) ===================================================== %% 
 
-%% ========================================================= HANDLE_CAST ========================================================= %% 
+%% This represents a STUB of the handle_cast() callback function, whose
+%% definition is formally required by the 'gen_server' OTP behaviour
+handle_cast(Request,SrvState) ->
+ 
+ % Report that this gen_server should not receive cast requests
+ io:format("[ctr_manager-~w]: <WARNING> Unexpected cast (Request = ~w, SrvState = ~w)~n",[SrvState#ctrmgrstate.loc_id,Request,SrvState]),
 
-%% --------- STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
+ % Keep the SrvState
+ {noreply,SrvState}.
 
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
+%% CONTROLLER NODE DOWN
+%% --------------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
 %% WHEN:      When the monitored 'ctr_simserver' process on the controller node terminates
 %% PURPOSE:   Inform of the 'ctr_simserver' process termination
@@ -225,21 +229,22 @@ terminate(_,SrvState) ->
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
 
-%% Derives the controller 'devalloc' table from the records of the sublocations in the location (handle_continue(init,{booting,none,Loc_id}) helper function)
-derive_devalloc([],DevAlloc) ->
+%% Derives the controller's 'ctr_sublocation' table from the records of sublocations in the location (handle_continue(init,{booting,none,Loc_id}) helper function)
+derive_ctr_subloc_table([],CtrSublocTable) ->
 
- % Return the final 'devalloc' table
- DevAlloc;
-derive_devalloc([Subloc|NextSubloc],DevAlloc) ->
+ % Return the final controller's 'ctr_sublocation' table
+ CtrSublocTable;
+ 
+derive_ctr_subloc_table([Subloc|NextSubloc],CtrSublocTable) ->
 
- % Retrieve the subloc_id associated with the sublocation
+ % Retrieve the 'subloc_id' associated with the sublocation
  {_,Subloc_id} = Subloc#sublocation.sub_id,
  
- % Append the subloc_id and the list of devices in the location to the DevAlloc
- NextDevAlloc = DevAlloc ++ [{Subloc_id,Subloc#sublocation.devlist}],
+ % Append the 'subloc_id' and the 'devlist' of devices in the location to the "CtrSublocTable"
+ NextCtrSublocTable = CtrSublocTable ++ [{Subloc_id,Subloc#sublocation.devlist}],
  
  % Parse the next sublocation record
- derive_devalloc(NextSubloc,NextDevAlloc).
+ derive_ctr_subloc_table(NextSubloc,NextCtrSublocTable).
 
 
 %%====================================================================================================================================

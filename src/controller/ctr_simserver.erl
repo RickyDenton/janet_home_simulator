@@ -37,12 +37,14 @@ handle_continue(init,{booting,none}) ->
  %       the controller node's execution cannot continue if it fails 
  ok = gen_server:call(MgrPid,{ctr_reg,self()},10000),
  
- io:format("[ctr_simserver]: Initialized~n"),
+ % Return the server (constant) state
  {noreply,{online,MgrPid}}. %% [TODO]: Online or something else?
  
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
 
+%% CTR_COMMAND
+%% -----------
 %% SENDER:    The controller node's manager in the JANET Simulator node
 %% WHEN:      (varies) [TODO]: Double-check
 %% PURPOSE:   Execute a command on the controller node and return the result of the operation
@@ -55,21 +57,23 @@ handle_continue(init,{booting,none}) ->
 handle_call({ctr_command,Module,Function,ArgsList},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
 
  % Execute the required command and return its result
- {reply,apply(Module,Function,ArgsList),{State,MgrPid}};  
+ {reply,apply(Module,Function,ArgsList),{State,MgrPid}}.
+
+
+%% ===================================================== HANDLE_CAST (STUB) ===================================================== %% 
+
+%% This represents a STUB of the handle_cast() callback function, whose
+%% definition is formally required by the 'gen_server' OTP behaviour
+handle_cast(Request,SrvState) ->
+
+ % Retrieve the controller's location ID
+ {ok,Loc_id} = application:get_env(loc_id),
  
- 
-%% --------- STUB
-handle_call(Num,_,{Sum,N}) when is_number(Num) ->
- New_Sum = Sum + Num,
- New_N = N+1,
- {reply,New_Sum/New_N,{New_Sum,New_N}}.
+ % Report that this gen_server should not receive cast requests
+ io:format("[ctr_simserver-~w]: <WARNING> Unexpected cast (Request = ~w, SrvState = ~w)~n",[Loc_id,Request,SrvState]),
 
-
-%% ========================================================= HANDLE_CAST ========================================================= %% 
-
-%% --------- STUB
-handle_cast(reset,State) -> % Resets the server State
- {noreply,State}.
+ % Keep the SrvState
+ {noreply,SrvState}.
 
 
 %%====================================================================================================================================
@@ -78,4 +82,4 @@ handle_cast(reset,State) -> % Resets the server State
 
 %% Called by its 'sup_jctr' supervisor during the JANET Controller boot
 start_link() ->
- gen_server:start_link({local,?MODULE},?MODULE,[],[]).
+ gen_server:start_link({local,?MODULE},?MODULE,[],[]).  % The spawned process is also registered locally under the 'ctr_simserver' name

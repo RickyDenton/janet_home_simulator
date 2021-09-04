@@ -1,4 +1,4 @@
-%% This module represents the supervisor of registered device handlers (ctr_devhandler) in the Janet Controller application %%
+%% This module represents the device handlers (ctr_devhandler) supervisor in the Janet Controller application %%
 
 -module(sup_devhandlers).
 -behaviour(supervisor).
