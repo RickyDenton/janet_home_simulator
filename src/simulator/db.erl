@@ -170,7 +170,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
  F = fun() ->
  
       % Check the target sublocation to exist
-	  case mnesia:read({sublocation,{Loc_id,Subloc_id}}) of
+	  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of
 	   [Sublocation] ->
 	    
 		% Check if a device with the same Dev_id already exists
@@ -929,7 +929,7 @@ update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_n
 	  case mnesia:wread({device,Dev_id}) of      % wread = write lock
 	   [Device] ->
 	   
-	    % Retrieve the record of the device's current sublocation
+	    % Retrieve the device's current sublocation
 	    CurrSublocID = Device#device.sub_id,
 	
 		if 
@@ -943,18 +943,18 @@ update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_n
 		  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of
 		   [NewSubloc] ->
 		   
-		    % Remove the device from its current sublocation
+		    % If it exists, remove the device from the 'devlist' of its current sublocation
 			[CurrSubloc] = mnesia:wread({sublocation,CurrSublocID}),		
 			UpdatedCurrSublocDevlist = lists:delete(Dev_id,CurrSubloc#sublocation.devlist),
 			UpdatedCurrSubloc = CurrSubloc#sublocation{devlist=UpdatedCurrSublocDevlist},
 			mnesia:write(UpdatedCurrSubloc),
 			
-			% Insert the device in its new sublocation
+			% Insert the device in the 'devlist' of its new sublocation
 			UpdatedNewSublocDevList = lists:append(NewSubloc#sublocation.devlist,[Dev_id]),
 			UpdatedNewSubloc = NewSubloc#sublocation{devlist = UpdatedNewSublocDevList},
 			mnesia:write(UpdatedNewSubloc),
 			
-			% Change the device to the target sublocation
+			% Change the device's sublocation in the 'device' record
 			UpdatedDevice = Device#device{sub_id={Loc_id,Subloc_id}},
 		    mnesia:write(UpdatedDevice);
 		  
@@ -1263,14 +1263,14 @@ delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_numb
 	  case mnesia:wread({sublocation,{Loc_id,Subloc_id}}) of      % wread = write lock
 	   [Sublocation] ->
 
-		 % Move all the sublocation's devices to the (default) sublocation {Loc_id,0}
+		 % If it does, move all its devices to the location's default sublocation {Loc_id,0}
 		 SublocDevList = Sublocation#sublocation.devlist,
 		 [DefaultSubloc] = mnesia:wread({sublocation,{Loc_id,0}}),
 		 UpdatedDefaultSublocDevlist = lists:append(DefaultSubloc#sublocation.devlist,SublocDevList),
 		 UpdatedDefaultSubloc = DefaultSubloc#sublocation{devlist=UpdatedDefaultSublocDevlist},
 		 mnesia:write(UpdatedDefaultSubloc),
 		 
-		 % Update the devices' sub_ids in the device table
+		 % Update the devices' 'sub_id's in the 'device' table
 		 move_devlist_to_default_subloc(SublocDevList,Loc_id),
 		 
 		 % Remove the sublocation from the sublocation table
@@ -1290,14 +1290,11 @@ move_devlist_to_default_subloc([],_) ->
  ok;
 move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
 
- % Retrieve the device record
+ % Retrieve the device's record from the 'device' table
  [Device] = mnesia:wread({device,Dev_id}),
  
- % Change the device to the default sublocation
- UpdatedDevice = Device#device{sub_id={Loc_id,0}},
- 
- % Update the device record
- mnesia:write(UpdatedDevice),
+ % Change the device to the location's default sublocation
+ mnesia:write(Device#device{sub_id={Loc_id,0}}),
  
  % Proceed with the next device
  move_devlist_to_default_subloc(NextDev_id,Loc_id).
@@ -1305,7 +1302,7 @@ move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
 
 %% DESCRIPTION:  Deletes a device from the database, also terminating its node if it is running
 %%
-%% ARGUMENTS:    - Dev_id: The dev_id of the device to delete, which must exist and be >0
+%% ARGUMENTS:    - Dev_id: The 'dev_id' of the device to delete, which must exist and be >0
 %%
 %% RETURNS:      - {ok,ok}                   -> The device was deleted from the database and its device node was terminated
 %%               - ok                        -> The device was deleted from the database (its node was
@@ -1326,7 +1323,7 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
 		 UpdatedDeviceSubloc = DeviceSubloc#sublocation{devlist=UpdatedDeviceSublocDevlist},
 		 mnesia:write(UpdatedDeviceSubloc),
 		 
-		 % Remove the device from the device table
+		 % Remove the device from the 'device' table
 		 mnesia:delete({device,Dev_id});
 		
 	   [] ->

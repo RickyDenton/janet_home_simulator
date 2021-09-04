@@ -70,9 +70,31 @@ handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when node(ReqPid) =:
    {error,dev_timeout}
  end,
  
- % Return the caller the result of the operation ('dev_timeout' included)
- {reply,CfgChangeRes,SrvState};
-
+ % Depending on the result of the device configuration change
+ case CfgChangeRes of
+  {error, Reason} ->
+   
+   % In case of error ('dev_timeout' included), report it to the caller
+   {reply,{error,Reason},SrvState};
+   
+  {ok,{UpdatedCfg,Timestamp}} ->
+  
+   % If the device returned the updated device configuration and timestamp, attempt to push it in the Mnesia 'ctr_device' table
+   %% [NOTE]: This probably is not necessary, but it never knows
+   case ctr_db:update_dev_config(SrvState#devhandlerstate.dev_id,UpdatedCfg,Timestamp) of
+	 
+    {error,Reason} ->
+       
+	 % If there was an error in updating the device configuration and timestamp, return it
+     {reply,{mnesia_error,Reason},SrvState};
+		
+	ok ->
+	  
+	 % Otherwise return the user the updated device's configuration and timestamp
+	 {reply,{ok,{UpdatedCfg,Timestamp}},SrvState}
+  
+   end
+ end;
 
 
 %% DEBUGGING PURPOSES [TODO]: REMOVE
@@ -97,11 +119,15 @@ handle_call(_,{ReqPid,_},SrvState) ->
 %%
 handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
 
- % Log the received updated
- %% [TODO]: Debugging purposes, remove when ready
- io:format("[ctr_devhandler-~w]: Received device configuration update (Config = ~p, Timestamp = ~w)~n",[SrvState#devhandlerstate.dev_id,UpdatedCfg,Timestamp]),
+ % Push the updated device configuration and timestamp in the 'ctr_device' table
+ PushToMnesia = ctr_db:update_dev_config(SrvState#devhandlerstate.dev_id,UpdatedCfg,Timestamp),
  
- %% [TODO]: Push to the remote MongoDB database
+ % Log the result of the operation
+ %% [TODO]: Debugging purposes, remove when ready
+ io:format("[ctr_devhandler-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devhandlerstate.dev_id,UpdatedCfg,PushToMnesia]),
+ 
+ 
+ %% [TODO]: Push only the changed values to the Java EE Rest Server?
  
  % Keep the server state
  {noreply,SrvState}.

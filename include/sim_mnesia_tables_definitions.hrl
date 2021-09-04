@@ -28,7 +28,7 @@
 		 name,          % The device's name                                                 (optional)
 		 sub_id,        % The full ID of the sublocation the device is deployed in          ({loc_id,subloc_id})
 		 type,       	% The device's type                                                 (light|fan|door|thermostat|conditioner)
-		 config,      	% The device's configuration                                        (type-specific)
+		 config,      	% The device's current configuration (or state)                     (type-specific)
 		 lastupdate     % The timestamp of when the device's configuration was last updated (UNIX time)
 		}).
 

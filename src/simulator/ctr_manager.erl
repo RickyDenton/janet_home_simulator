@@ -53,9 +53,8 @@ handle_continue(init,SrvState) ->
  % Retrieve the location port to be used as 'rest_port' by the controller
  Loc_port = LocationRecord#location.port,
  
- % Retrieve the records of the location's sublocations and use them for preparing the controller's 'ctr_sublocation' table
- {atomic,SublocationRecords} = mnesia:transaction(fun() -> mnesia:match_object(#sublocation{sub_id = {Loc_id,'_'}, _ = '_'}) end),
- CtrSublocTable = derive_ctr_subloc_table(SublocationRecords,[]),
+ % Derive the initial contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
+ {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
  % Retrieve the 'remotehost' environment variable
  {ok,RemoteHost} = application:get_env(remotehost),
@@ -74,8 +73,11 @@ handle_continue(init,SrvState) ->
  % Instantiate the controller's node and link it to the manager
  {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),
  
+  % Derive the initial contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
+ {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
+ 
  % Launch the Janet Controller application on the controller node
- ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,self(),Loc_port,RemoteHost]),
+ ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),Loc_port,RemoteHost]),
  
  % Set the ctr_node in the server state and wait for the
  % registration request of the controller's 'ctr_simserver' process
@@ -229,22 +231,31 @@ terminate(_,SrvState) ->
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
 
-%% Derives the controller's 'ctr_sublocation' table from the records of sublocations in the location (handle_continue(init,{booting,none,Loc_id}) helper function)
-derive_ctr_subloc_table([],CtrSublocTable) ->
-
- % Return the final controller's 'ctr_sublocation' table
- CtrSublocTable;
+%% Derives the initial contents of a controller's 'ctr_sublocation' and 'ctr_device' tables (handle_continue(init,SrvState) helper function)
+prepare_ctr_tables(Loc_id) ->
+ F = fun() ->
  
-derive_ctr_subloc_table([Subloc|NextSubloc],CtrSublocTable) ->
-
- % Retrieve the 'subloc_id' associated with the sublocation
- {_,Subloc_id} = Subloc#sublocation.sub_id,
+      % Retrieve the records of the location's sublocations  
+	  LocSublocsRecords = mnesia:match_object(#sublocation{sub_id = {Loc_id,'_'}, _ = '_'}),
+	  
+	  % Retrieve the records of the location's devices
+      LocDevicesRecords = mnesia:match_object(#device{sub_id = {Loc_id,'_'}, _ = '_'}),
+	  
+	  % Return the two lists of records
+	  {LocSublocsRecords,LocDevicesRecords}
+     end,
+	 
+ % Retrieve the records of all sublocations and devices in the location	 
+ {atomic,{LocSublocsRecords,LocDevicesRecords}} = mnesia:transaction(F),
  
- % Append the 'subloc_id' and the 'devlist' of devices in the location to the "CtrSublocTable"
- NextCtrSublocTable = CtrSublocTable ++ [{Subloc_id,Subloc#sublocation.devlist}],
+ % Derive the initial contents of the controller's 'ctr_sublocation' table {subloc_id,devlist}
+ CtrSublocTable = [ {element(2,Subloc#sublocation.sub_id),Subloc#sublocation.devlist} || Subloc <- LocSublocsRecords ],
  
- % Parse the next sublocation record
- derive_ctr_subloc_table(NextSubloc,NextCtrSublocTable).
+ % Derive the initial non-null contents of the controller's 'ctr_device' table {dev_id,subloc_id,type,-,-,-}
+ CtrDeviceTable = [ {Dev#device.dev_id,element(2,Dev#device.sub_id),Dev#device.type} || Dev <- LocDevicesRecords ],
+ 
+ % Return the initial contents of both tables
+ {ok,CtrSublocTable,CtrDeviceTable}.
 
 
 %%====================================================================================================================================

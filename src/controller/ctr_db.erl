@@ -1,84 +1,115 @@
 %% This module offers functions for interfacing with the Mnesia RAM-only database on a Janet Controller node %%
 
 -module(ctr_db).
--export([init_mnesia/1]).
--export([print_tree/0,print_table/0,print_table/1,get_table_records/1,get_record/2]).
 
 -include("ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
 
+%% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
+-export([add_sublocation/1,add_device/3]).                                             % Create
+-export([print_tree/0,print_table/0,print_table/1,get_table_records/1,get_record/2]).  % Read
+-export([update_dev_sub/2,update_dev_config/3]).                                       % Update
+-export([delete_sublocation/1,delete_device/1]).                                       % Delete
 
-%% DESCRIPTION:  Starts Mnesia in disc-less and permanent mode and initializes
-%%               the tables used by the JANET Controller application
-%%
-%% ARGUMENTS:    - CtrSublocTable: The serialized controller's 'ctr_sublocation' table ([{subloc_id,subloc_devlist}])
-%%
-%% RETURNS:      - ok                               -> Mnesia started and tables successfully initialized
-%%               - {error,janet_controller_running} -> The JANET Controller is already running
-%%
-init_mnesia(CtrSublocTable) ->
+%% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
+-export([init_mnesia/2]).
 
- % Check if the JANET Controller is running
- case utils:is_running(janet_controller) of
-  true ->
-  
-   % If it is, return an error
-   {error,janet_controller_running};
-  
+
+%%====================================================================================================================================
+%%                                                     PUBLIC CRUD OPERATIONS                                                        
+%%==================================================================================================================================== 
+
+%% ========================================================== CREATE ===============================================================%%
+
+%% DESCRIPTION:  Adds an empty sublocation to the location
+%%
+%% ARGUMENTS:    - Subloc_id: The ID of the sublocation in the location, which must not already exist and be >0
+%%
+%% RETURNS:      - ok                                 -> The sublocation was successfully added
+%%               - {error,sublocation_already_exists} -> A sublocation with such 'sub_id' already exists
+%%               - {error,badarg}                     -> Invalid arguments
+%%
+add_sublocation(Subloc_id) when is_number(Subloc_id), Subloc_id>0 ->
+ F = fun() ->
+
+	  % Check if a sublocation with the same Subloc_id already exists on the controller
+	  case mnesia:read({ctr_sublocation,Subloc_id}) of
+	   [] ->
+		  
+	    % If it doesn't, add the new sublocation to the 'ctr_sublocation' table'
+	    mnesia:write(#ctr_sublocation{subloc_id = Subloc_id, devlist = []});
+		  
+	   [_SublocationRecord] ->
+	   
+	    % If a sublocation with such "subloc_id" already exists, return an error
+	    mnesia:abort(sublocation_already_exists)
+	  end
+     end,
+ do_transaction(F);
+
+add_sublocation(_) ->
+ {error,badarg}.
+ 
+ 
+%% DESCRIPTION:  Adds a new device in one of the location's sublocations
+%%
+%% ARGUMENTS:    - Dev_id:    The ID of the device to add, which must not already exist and be >0
+%%               - Subloc_id: The ID of the sublocation in the location where to put the device, which must exist be >=0
+%%               - Type:      The device's type (fan|light|door|thermostat|conditioner)
+%%
+%% RETURNS:      - ok                             -> The device was successfully added to the specified sublocation
+%%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
+%%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
+%%               - {error,badarg}                 -> Invalid arguments
+%%
+add_device(Dev_id,Subloc_id,Type) when is_number(Dev_id), Dev_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+ F = fun() ->
+ 
+      % Check the target sublocation to exist
+	  case mnesia:wread({ctr_sublocation,Subloc_id}) of
+	   [Sublocation] ->
+	    
+		% Check if a device with the same "Dev_id" already exists
+		case mnesia:read({ctr_device,Dev_id}) of
+		 [] ->
+		 
+		  % If it doesn't exist, add the new device in the 'ctr_device' table
+	      ok = mnesia:write(#ctr_device{dev_id = Dev_id, subloc_id = Subloc_id, type = Type, config = '-', lastupdate = '-', handler_pid = '-'}),
+		  
+		  % Append the "Dev_id" to the list of devices in the sublocation	
+		  UpdatedDevList = lists:append(Sublocation#ctr_sublocation.devlist,[Dev_id]),
+		  mnesia:write(Sublocation#ctr_sublocation{devlist = UpdatedDevList});
+	
+		 [_DeviceRecord] ->
+		 
+		  % If a device with the same "Dev_id" already exists, return an error
+		  mnesia:abort(device_already_exists)
+		end;
+		
+	   [] ->
+	    
+		% If the target sublocation does not exist, return an error
+	    mnesia:abort(sublocation_not_exists)
+      end
+     end,
+	 
+ % Check the device type to be valid (outside the transaction)
+ case utils:is_valid_devtype(Type) of
+ 
+  % If it is not, directly return an error 
   false ->
-   
-   % Otherwise start Mnesia in disc-less mode (i.e. using a RAM schema)
-   % and permanent mode (i.e. the node shuts down if it terminates)
-   ok = application:set_env(mnesia,schema_location,ram),
-   ok = application:start(mnesia,permanent),
-   
-   % Initialize the ram_copies tables used by the JANET Controller
-   {atomic,ok} = mnesia:create_table(ctr_sublocation,
-                                     [
-									  {attributes, record_info(fields, ctr_sublocation)},
-                                      {ram_copies, [node()]}
-									 ]),
-									
-   {atomic,ok} = mnesia:create_table(ctr_device,
-                                     [
-									  {attributes, record_info(fields, ctr_device)},
-                                      {ram_copies, [node()]}
-									 ]),
-   
-   % Initialize the contents of the two tables via the "CtrSublocTable" variable
-   ok = init_ctr_tables(CtrSublocTable)
- end.
-   
+   {error,invalid_devtype};
+  
+  % If it is, attempt the transaction
+  true -> 
+   do_transaction(F)
+ end;
  
-%% Initializes the contents of the controller's 'sublocation' and 'device' tables (init_mnesia(CtrSublocTable) helper function)
-%%
-%% NOTE: dirty_writes are used for improving performance since at this time
-%%       no other process is using the Mnesia database on the controller node
-%%
-init_ctr_tables([]) ->
- ok;
-init_ctr_tables([{Subloc_id,SublocDevList}|Next_SubAlloc]) ->
-
- % Write the {Subloc_id,SublocDevlist} entry in the 'ctr_sublocation' table
- ok = mnesia:dirty_write(#ctr_sublocation{subloc_id = Subloc_id, devlist = SublocDevList}),
+add_device(_,_,_) ->
+ {error,badarg}. 
  
- % Initialize the 'ctr_device' records of all devices in the sublocation 
- ok = init_ctr_dev_records(SublocDevList,Subloc_id),
  
- % Initialize the next 'ctr_sublocation' entry
- init_ctr_tables(Next_SubAlloc).
-
-%% Initializes the 'ctr_device' records associated with the list of devices in a sublocation (init_ctr_tables([{Subloc_id,SublocDevList}|Next_SubAlloc]) helper function)
-init_ctr_dev_records([],_) ->
- ok;
-init_ctr_dev_records([Dev_id|Next_Devid],Subloc_id) ->
-
- % Write the {Dev_id,Subloc_id,-} entry to the 'ctr_device' table
- ok = mnesia:dirty_write(#ctr_device{dev_id = Dev_id, subloc_id = Subloc_id, handler_pid = '-'}),
+%% =========================================================== READ ================================================================%%  
  
- % Initialize the next 'ctr_device' entry
- init_ctr_dev_records(Next_Devid,Subloc_id).
-
-
 %% DESCRIPTION:  Prints the contents of all or a specific table in the database
 %%
 %% ARGUMENTS:    - (Tabletype): The table to print, also considering shorthand forms
@@ -125,7 +156,7 @@ print_table() ->
 print_table_header(ctr_sublocation) ->
  io:format("CTR_SUBLOCATION TABLE {subloc_id,devlist}~n=====================~n");
 print_table_header(ctr_device) ->
- io:format("CTR_DEVICE TABLE {dev_id,subloc_id,handler_pid}~n================~n").
+ io:format("CTR_DEVICE TABLE {dev_id,subloc_id,type,config,lastupdate,handler_pid}~n================~n").
   
 %% Prints all records in a table, or "(empty)" if there are none (print_table(Table) helper function)
 print_table_records([]) ->
@@ -222,8 +253,23 @@ print_tree_devlist([Dev_id|Next_Devid],Indentation) ->
    DevStatus = "ONLINE"
  end,
  
- % Print the device "Dev_id" along on whether he is paired with the controller
- io:format("~s|--{dev-~w} - ~s~n",[Indentation,Dev_id,DevStatus]),
+ % Determine the device's 'config' and 'lastupdate' values to be printed depending on
+ % whether the controller received at least one configuration update from the device
+ case DevRecord#ctr_device.config of
+ 
+  % If no configuration updates were received from the device
+  '-' ->
+   Config = '-',
+   LastUpdate = '-';
+   
+  % If at least one configuration update was received from the device
+  _ ->
+   Config = utils:deprefix_dev_config(DevRecord#ctr_device.config),
+   LastUpdate = string:slice(calendar:system_time_to_rfc3339(DevRecord#ctr_device.lastupdate,[{time_designator,$\s}]),0,19)
+ end,
+ 
+ % Print the device information
+ io:format("~s|--{device ~w,~w,~p,~s} - ~s~n",[Indentation,Dev_id,DevRecord#ctr_device.type,Config,LastUpdate,DevStatus]),
  
  % Proceed with the next device, preserving the indentation
  print_tree_devlist(Next_Devid,Indentation).
@@ -294,7 +340,330 @@ get_record(Tabletype,Key) when is_atom(Tabletype) ->
 
 get_record(_,_) ->
  {error,badarg}.
+
+
+%% ========================================================== UPDATE ===============================================================%% 
  
+%% DESCRIPTION:  Updates a device's sublocation
+%%
+%% ARGUMENTS:    - Dev_id:    The ID of the device to change sublocation, which must exist and be >0
+%%               - Subloc_id: The 'sub_id' of the sublocation where to put the device, which must exist and be {>0,>=0}
+%%
+%% RETURNS:      - ok                             -> Device sublocation successfully updated
+%%               - {error,device_not_exists}      -> The device 'Dev_id' does not exist
+%%               - {error,sublocation_not_exists} -> The sublocation 'subloc_id' does not exist
+%%               - {error,badarg}                 -> Invalid arguments
+%%
+update_dev_sub(Dev_id,Subloc_id) when is_number(Dev_id), Dev_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({ctr_device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+		if 
+		 Device#ctr_device.subloc_id =:= Subloc_id ->
+         
+		  % If the current and new sublocations coincide, return		 
+		  ok;
+
+         true ->
+		 
+		  % Otherwise, check the target sublocation to exist
+		  case mnesia:wread({ctr_sublocation,Subloc_id}) of
+		   [NewSubloc] ->
+		   
+		    % If it exists, remove the device from the 'devlist' of its current sublocation
+			[CurrSubloc] = mnesia:wread({ctr_sublocation,Device#ctr_device.subloc_id}),	
+			UpdatedCurrSublocDevList = lists:delete(Dev_id,CurrSubloc#ctr_sublocation.devlist),
+			ok = mnesia:write(CurrSubloc#ctr_sublocation{devlist = UpdatedCurrSublocDevList}),
+			
+			% Insert the device in the 'devlist' of its new sublocation
+			UpdatedNewSublocDevlist = lists:append(NewSubloc#ctr_sublocation.devlist,[Dev_id]),
+			ok = mnesia:write(NewSubloc#ctr_sublocation{devlist = UpdatedNewSublocDevlist}),
+			
+			% Change the device's sublocation in the 'ctr_device' record
+            ok = mnesia:write(Device#ctr_device{subloc_id = Subloc_id});
+		  
+		   [] ->
+		   
+		    % If the target sublocation does not exist, return an error
+		    mnesia:abort(sublocation_not_exists)
+		  end
+	    end;
+		
+	   [] ->
+	   
+	    % If the device does not exist, return an error
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+ do_transaction(F);
+	 
+update_dev_sub(_,_) ->
+ {error,badarg}. 
+ 
+ 
+%% DESCRIPTION:  Updates a device's configuration
+%%
+%% ARGUMENTS:    - Dev_id:    The ID of the device to update the configuration, which must exist and be >0
+%%               - Config:    The updated device configuration
+%%               - Timestamp: The timestamp of the updated device configuration (>0)
+%%
+%% RETURNS:      - ok                        -> Device configuration successfully updated
+%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {error,invalid_devconfig} -> The updated device configuration is not valid
+%%               - {error,badarg}            -> Invalid arguments
+%%
+update_dev_config(Dev_id,Config,Timestamp) when is_number(Dev_id), Dev_id>0, is_number(Timestamp), Timestamp>0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({ctr_device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+	   
+	    % If it does, ensure the updated configuration to be valid
+		case catch(utils:is_valid_devconfig(Config,Device#ctr_device.type)) of
+		 ok ->
+		     
+	      % If it is, push it in the 'device' table along with its timestamp
+		  UpdatedDevice = Device#ctr_device{config = Config, lastupdate = Timestamp},
+		  mnesia:write(UpdatedDevice);
+			
+		 {error,invalid_devconfig} ->
+		   
+		  % Otherwise, if it is not valid (which SHOULD NOT happen), report the error and abort the transaction
+		  io:format("[ctr_db:update_dev_config]: <WARNING> An invalid device configuration was passed (Config = ~p, DevType = ~p)~n",[Config,Device#ctr_device.type]),
+		  mnesia:abort(invalid_devconfig)
+		end;		
+		
+	   [] ->
+	   
+	    % If the device does not exist, abort the transaction
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+ do_transaction(F);
+	 
+update_dev_config(_,_,_) ->
+ {error,badarg}. 
+ 
+ 
+%% ========================================================== DELETE ===============================================================%%  
+ 
+%% DESCRIPTION:  Deletes a sublocation from the controller, moving all its devices to the location's default sublocation "0"
+%%
+%% ARGUMENTS:    - Subloc_id: The ID of the sublocation to be deleted (>0)
+%%
+%% RETURNS:      - ok                             -> The sublocation was successfully deleted and its devices
+%%                                                   were moved to the location's default sublocation "0"
+%%               - {error,sublocation_not_exists} -> The sublocation 'Subloc_id' does not exist
+%%               - {error,badarg}                 -> Invalid arguments
+%%
+%% NOTE:         Default sublocations cannot be removed (Subloc_id > 0)
+%%
+delete_sublocation(Subloc_id) when is_number(Subloc_id), Subloc_id>0 -> 
+ F = fun() ->
+ 
+      % Check the sublocation to exist
+	  case mnesia:wread({ctr_sublocation,Subloc_id}) of      % wread = write lock
+	   [Sublocation] ->
+
+		 % If it does, move all its devices to the location's default sublocation "0"
+		 [DefaultSubloc] = mnesia:wread({ctr_sublocation,0}),
+		 UpdatedDefaultSublocDevlist = lists:append(DefaultSubloc#ctr_sublocation.devlist,Sublocation#ctr_sublocation.devlist),
+		 ok = mnesia:write(DefaultSubloc#ctr_sublocation{devlist = UpdatedDefaultSublocDevlist}),
+		 
+		 % Update the devices' 'subloc_id's in the 'ctr_device' table
+		 ok = move_devlist_to_default_subloc(Sublocation#ctr_sublocation.devlist),
+		 
+		 % Remove the sublocation from the 'ctr_sublocation' table
+		 ok = mnesia:delete({ctr_sublocation,Subloc_id});
+		
+	   [] ->
+	    
+		% If the sublocation does not exist, return an error
+	    mnesia:abort(sublocation_not_exists)
+      end
+     end,
+ do_transaction(F);
+
+delete_sublocation(_) ->
+ {error,badarg}.
+
+%% Moves all devices in a list to the default sublocation "0" (delete_sublocation(Subloc_id) helper function)
+move_devlist_to_default_subloc([]) ->
+ ok;
+move_devlist_to_default_subloc([Dev_id|Next_Devid]) ->
+
+ % Retrieve the device's record from the 'ctr_device' table
+ [Device] = mnesia:wread({ctr_device,Dev_id}),
+ 
+ % Change the device to the location's default sublocation
+ mnesia:write(Device#ctr_device{subloc_id = 0}),
+ 
+ % Proceed with the next device
+ move_devlist_to_default_subloc(Next_Devid). 
+ 
+ 
+%% DESCRIPTION:  Deletes a device from the location, also terminating its handler if it paired
+%%
+%% ARGUMENTS:    - Dev_id: The 'dev_id' of the device to delete, which must exist and be >0
+%%
+%% RETURNS:      - ok                        -> The device was deleted from the location, and
+%%                                              its handler was terminated if it was paired
+%%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
+%%               - {error,badarg}            -> Invalid arguments
+%%
+delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
+ F = fun() ->
+ 
+      % Check the device to exist
+	  case mnesia:wread({ctr_device,Dev_id}) of      % wread = write lock
+	   [Device] ->
+
+         % Remove the device from its sublocation's 'devlist'
+		 [DeviceSubloc] = mnesia:wread({ctr_sublocation,Device#ctr_device.subloc_id}),
+		 UpdatedSublocDevlist = lists:delete(Dev_id,DeviceSubloc#ctr_sublocation.devlist),
+		 ok = mnesia:write(DeviceSubloc#ctr_sublocation{devlist = UpdatedSublocDevlist}),
+		 
+		 % Remove the device from the 'ctr_device' table
+		 ok = mnesia:delete({ctr_device,Dev_id}),
+		 
+		 % Return the Devhandler_pid required for terminating the device handler
+		 Device#ctr_device.handler_pid;
+		 
+	   [] ->
+	   
+	    % If the device does not exist, return an error
+	    mnesia:abort(device_not_exists)
+      end
+     end,
+ 
+ % Attempt the transaction
+ case mnesia:transaction(F) of
+  {atomic,'-'} ->
+ 
+   % If the transaction was successful and the
+   % device handler is not running, simply return
+   ok;
+   
+  {atomic,Devhandler_pid} ->
+  
+   % If the transaction was successful and the device handler IS still running,
+   % attempt to terminate it handler via the 'sup_devhandlers' supervisor	
+   %
+   % NOTE: Since the only error that can be returned by the following function call is
+   %       "{error,not_found}", which is relative to the fact that the handler terminated
+   %       before its execution (which is expected due to it monitoring a device node that
+   %       supposedly stopped), the result of the handler's termination can be ignored
+   supervisor:terminate_child(sup_devhandlers,Devhandler_pid),
+   ok;
+   
+  {aborted,Reason} ->
+  
+   % If an error occured in the transaction, return it
+   {error,Reason}
+ end;
+ 
+delete_device(_) ->
+ {error,badarg}.
+
+ 
+%%====================================================================================================================================
+%%                                                    PUBLIC UTILITY FUNCTIONS
+%%====================================================================================================================================  
+ 
+%% DESCRIPTION:  Starts Mnesia in disc-less and permanent mode and initializes
+%%               the tables used by the JANET Controller application
+%%
+%% ARGUMENTS:    - CtrSublocTable: The serialized controller's 'ctr_sublocation' table ([{subloc_id,devlist}])
+%%               - CtrDeviceTable: The serialized controller's 'ctr_device' table      ([{dev_id,subloc_id,type,config,lastupdate,handler_pid}])
+
+%% RETURNS:      - ok                               -> Mnesia started and tables successfully initialized
+%%               - {error,janet_controller_running} -> The JANET Controller is already running
+%%
+init_mnesia(CtrSublocTable,CtrDeviceTable) ->
+
+ % Check if the JANET Controller is running
+ case utils:is_running(janet_controller) of
+  true ->
+  
+   % If it is, return an error
+   {error,janet_controller_running};
+  
+  false ->
+   
+   % Otherwise start Mnesia in disc-less mode (i.e. using a RAM schema)
+   % and permanent mode (i.e. the node shuts down if it terminates)
+   ok = application:set_env(mnesia,schema_location,ram),
+   ok = application:start(mnesia,permanent),
+   
+   % Initialize the ram_copies tables used by the JANET Controller
+   {atomic,ok} = mnesia:create_table(ctr_sublocation,
+                                     [
+									  {attributes, record_info(fields, ctr_sublocation)},
+                                      {ram_copies, [node()]}
+									 ]),
+									
+   {atomic,ok} = mnesia:create_table(ctr_device,
+                                     [
+									  {attributes, record_info(fields, ctr_device)},
+                                      {ram_copies, [node()]}
+									 ]),
+   
+   % Initialize the contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
+   ok = init_ctr_sublocation_table(CtrSublocTable),
+   ok = init_ctr_device_table(CtrDeviceTable)
+ end.
+ 
+%% Initializes the contents of the controller's 'ctr_sublocation' table (init_mnesia(CtrSublocTable,CtrDeviceTable) helper function)
+init_ctr_sublocation_table([]) ->
+ ok;
+init_ctr_sublocation_table([{Subloc_id,SublocDevList}|Next_Subloc]) ->
+ 
+ % Write the sublocation record in the 'ctr_sublocation' table
+ ok = mnesia:dirty_write(#ctr_sublocation{subloc_id = Subloc_id, devlist = SublocDevList}),
+ 
+ % Proceed with the next sublocation record
+ init_ctr_sublocation_table(Next_Subloc).
+ 
+%% Initializes the contents of the controller's 'ctr_device' table (init_mnesia(CtrSublocTable,CtrDeviceTable) helper function) 
+init_ctr_device_table([]) ->
+ ok;
+init_ctr_device_table([{Dev_id,Subloc_id,Type}|Next_Dev]) ->
+ 
+ % Write the sublocation record in the 'ctr_sublocation' table
+ ok = mnesia:dirty_write(#ctr_device{dev_id = Dev_id, subloc_id = Subloc_id, type = Type, config = '-', lastupdate = '-', handler_pid = '-'}),
+ 
+ % Proceed with the next device record
+ init_ctr_device_table(Next_Dev). 
+ 
+
+%%====================================================================================================================================
+%%                                                    PRIVATE HELPER FUNCTIONS
+%%====================================================================================================================================  
+
+%% DESCRIPTION:  Attempts a transaction defined in a database function
+%%
+%% ARGUMENTS:    - F -> The fun() associated with the transaction
+%%
+%% RETURNS:      - Result         -> The result of the transaction, if successful            ({atomic,Result})
+%%               - {error,Reason} -> The error occured in the transaction, if it was aborted ({aborted,Reason})
+%%
+do_transaction(F) ->
+ 
+ % Attempt the transaction
+ case mnesia:transaction(F) of
+ 
+  % If an error occured during the transaction, return it
+  {aborted,Reason} ->
+   {error,Reason};
+   
+  % Otherwise return the transaction's result
+  {atomic,Result} ->
+   Result
+ end.
+
  
 %% DESCRIPTION:  Returns the table name atom associated with its argument, also considering shorthand forms
 %%
