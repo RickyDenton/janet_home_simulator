@@ -124,7 +124,7 @@ handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when 
  
  % Log the result of the operation
  %% [TODO]: Debugging purposes, remove when ready
- io:format("[ctr_devhandler-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devhandlerstate.dev_id,UpdatedCfg,PushToMnesia]),
+ %io:format("[ctr_devhandler-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devhandlerstate.dev_id,UpdatedCfg,PushToMnesia]),
  
  
  %% [TODO]: Push only the changed values to the Java EE Rest Server?

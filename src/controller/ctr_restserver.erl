@@ -3,7 +3,7 @@
 -behaviour(gen_server).
 
 init(_) ->
- io:format("[ctr_restserver]: Initialized~n"),
+ % io:format("[ctr_restserver]: Initialized~n"),
  {ok,[]}.  % Initial State
 
 % STUB

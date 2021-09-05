@@ -261,11 +261,11 @@ handle_cast({dev_srv_state_update,connecting,DevSrvPid},SrvState) when SrvState#
 handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when SrvState#devmgrstate.dev_state =/= booting andalso DevSrvPid =:= SrvState#devmgrstate.dev_srv_pid ->
 
  % Push the updated device configuration and timestamp in the 'device' table
- PushToMnesia = db:update_dev_config(SrvState#devmgrstate.dev_id,UpdatedCfg,Timestamp),
+ db:update_dev_config(SrvState#devmgrstate.dev_id,UpdatedCfg,Timestamp),
  
  % Log the result of the operation
  %% [TODO]: Debugging purposes, remove when ready
- io:format("[dev_mgr-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devmgrstate.dev_id,UpdatedCfg,PushToMnesia]),
+ %io:format("[dev_mgr-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devmgrstate.dev_id,UpdatedCfg,PushToMnesia]),
  
  % Keep the server state
  {noreply,SrvState}.

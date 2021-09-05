@@ -5,12 +5,12 @@
 -include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
--export([add_location/4,add_sublocation/2,add_device/4]).                                                  % Create
--export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                  % Read
+-export([add_location/4,add_sublocation/2,add_device/4]).                                                    % Create
+-export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                    % Read
          get_table_records/1,get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,
 		 get_loc_devs/1,get_subloc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
--export([update_dev_sub/2,update_dev_config/3,update_loc_name/2,update_subloc_name/2,update_dev_name/2]).  % Update
--export([delete_location/1,delete_sublocation/1,delete_device/1]).                                         % Delete
+-export([update_dev_subloc/2,update_dev_config/3,update_loc_name/2,update_subloc_name/2,update_dev_name/2]). % Update
+-export([delete_location/1,delete_sublocation/1,delete_device/1]).                                           % Delete
 
 %% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
 -export([start_mnesia/0,stop_mnesia/0,backup/0,backup/1,restore/0,restore/1,clear/0,install/0]). 
@@ -32,6 +32,7 @@
 %%               - Port:   The port by which the location's controller listens for REST requests, which must not be already taken and be >=30000
 %%
 %% RETURNS:      - {ok,ok}                         -> The location was successfully added and its controller node was started
+%%               - {ok,Error}                      -> The location was successfully added, but starting its controller returned an Error
 %%               - ok                              -> The location was successfully added (but the controller node
 %%                                                    was not started since the JANET Simulator is not running)
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
@@ -145,13 +146,17 @@ add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_nu
 	    mnesia:abort(location_not_exists)
       end
      end,
- do_transaction(F);  %% [TODO]: If the transaction is successful, inform controller of the new sublocation
+ do_transaction(F);
 
+ %% NOTE: If the operation originated from the JANET Simulator the controller is informed to
+ %%       add the sublocation in the body of the "jsim:add_sublocation()" interface function
+	  
 add_sublocation(_,_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Adds a new device with a default configuration to the database, also starting its associated device node
+%% DESCRIPTION:  Adds a new device with a default configuration to the database,
+%%               and, if the JANET Simulator is running, also starts its device node
 %%
 %% ARGUMENTS:    - Dev_id:             The ID of the device, which must not already exist and be >0
 %%               - Name:               The device's name (optional)
@@ -159,6 +164,8 @@ add_sublocation(_,_) ->
 %%               - Type:               The device's type, which must belong to the set of valid device types
 %%
 %% RETURNS:      - {ok,ok}                        -> The device was successfully added and its device node was started
+%%               - {ok,Error}                     -> The device was successfully added, but
+%%                                                   an Error occured in starting its node
 %%               - ok                             -> The device was successfully added (but the device node
 %%                                                   was not started since the JANET Simulator is not running)
 %%               - {error,invalid_devtype}        -> The device type is invalid
@@ -241,31 +248,42 @@ add_device(_,_,_,_) ->
 spawn_devmanager(Dev_id,Loc_id) ->
 
  % Attempt to retrieve the PID of the location's 'sup_loc' supervisor
- Sup_pid = get_suploc_pid(Loc_id),
- 
- % Device manager child specification
- DevMgrSpec = {
-               "dev-" ++ integer_to_list(Dev_id),         % ChildID
-               {dev_manager,start_link,[Dev_id,Loc_id]},  % Child Start Function
-	           permanent,                                 % Child Restart Policy
-	           8000,                                      % Child Sub-tree Max Shutdown Time
-	           worker,                  	              % Child Type
-	           [dev_manager]                              % Child Modules (For Release Handling Purposes)
-              },
-
- % Attempt to spawn the device manager as a child of the 'sup_loc' supervisor
- case supervisor:start_child(Sup_pid,DevMgrSpec) of
-  
-  % If the spawning was successful, return just its result 
-  {ok,_DevMgrPid} ->
-   ok;
+ case get_suploc_pid(Loc_id) of 
+  {error,Reason} ->
    
-  % Otherwise, return the error raised in the spawning
-  SpawnError ->
-   SpawnError
+    % If an error occured in attempting to retrieve the PID of the location's 'sup_loc'
+	% supervisor, the location was deleted concurrently with this operation, or there is
+	% a consistency error with the 'suploc' table, and in any case, return the error
+	{error,Reason};
+	
+  Sup_pid ->
+	
+   % If the PID of the location's 'sup_loc' supervisor was successfully retrieved,
+   % define the child specification of the device manager to be spawned
+   DevMgrSpec = {
+                 "dev-" ++ integer_to_list(Dev_id),         % ChildID
+                 {dev_manager,start_link,[Dev_id,Loc_id]},  % Child Start Function
+	             permanent,                                 % Child Restart Policy
+                 8000,                                      % Child Sub-tree Max Shutdown Time
+	             worker,                  	              % Child Type
+	             [dev_manager]                              % Child Modules (For Release Handling Purposes)
+                },
+
+   % Attempt to spawn the device manager as a child of the 'sup_loc' supervisor
+   case supervisor:start_child(Sup_pid,DevMgrSpec) of
+  
+    % If the spawning was successful, return just its result 
+    {ok,_DevMgrPid} ->
+     ok;
+   
+    % Otherwise, return the error raised in the spawning
+    SpawnError ->
+     SpawnError
+   end
  end.
 
- %% [TODO]: inform the controller of the new device (if not passing directly from it)
+ %% NOTE: If the operation originated from the JANET Simulator the controller is informed
+ %%       to add the device in the body of the "jsim:add_device()" interface function
 
 
 %% =========================================================== READ ================================================================%% 
@@ -576,7 +594,7 @@ print_tree_device([Dev|NextDev],Indent) ->
 %%               - {error,unknown_table} -> Unknown table
 %%               - {error,badarg}        -> Invalid arguments
 %%
-get_record(Tabletype,Key) when is_atom(Tabletype), is_number(Key), Key>=0 ->
+get_record(Tabletype,Key) when is_atom(Tabletype) ->
 
  % Resolve possible table shorthand forms
  Table = resolve_tabletype_shorthand(Tabletype),
@@ -913,16 +931,16 @@ get_suploc_pid(Loc_id) ->
 %% DESCRIPTION:  Updates a device's sublocation
 %%
 %% ARGUMENTS:    - Dev_id:             The ID of the device to change sublocation, which must exist and be >0
-%%               - {Loc_id,Subloc_id}: The 'sub_id' of the sublocation where to put the device, which must exist and be {>0,>=0}
+%%               - {Loc_id,Subloc_id}: The 'sub_id' of the sublocation where to put the device, where "Loc_id" must be >0
+%%                                     and coincide with the current device's location, and the "Subloc_id" must be >=0
 %%
-%% RETURNS:      - ok                             -> Device sublocation successfully updated
+%% RETURNS:      - ok                             -> The device's sublocation was successfully updated
 %%               - {error,device_not_exists}      -> The device 'Dev_id' does not exist
 %%               - {error,sublocation_not_exists} -> The sublocation 'sub_id' does not exist
+%%               - {error,different_locations}    -> The specified and the current sublocations are in different locations
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-%% NOTE:         This function currently doesn't check whether the new and the old device sublocations belong to the same location
-%%
-update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
  
       % Check the device to exist
@@ -937,6 +955,10 @@ update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_n
 		 % If the current and new sublocations coincide, return
 		 CurrSublocID =:= {Loc_id,Subloc_id} ->  
 		  ok;
+
+         % If the current and new sublocations are in different locations, return an error
+		 element(1,CurrSublocID) =/= Loc_id ->
+		  mnesia:abort(different_locations);
 
          % Otherwise, check the target sublocation to exist
 		 true ->
@@ -967,9 +989,12 @@ update_dev_sub(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_n
 	    mnesia:abort(device_not_exists)
       end
      end,
- do_transaction(F);	  %% [TODO]: Inform controller of the change of sublocation for the device
+ do_transaction(F);	  
+ 
+ %% NOTE: If the operation originated from the JANET Simulator the controller is informed to update
+ %%       the device's sublocation in the body of the "jsim:update_dev_subloc()" interface function
 	 
-update_dev_sub(_,_) ->
+update_dev_subloc(_,_) ->
  {error,badarg}.
 
 
@@ -1280,7 +1305,10 @@ delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_numb
 	    mnesia:abort(sublocation_not_exists)
       end
      end,
- do_transaction(F);  %% [TODO]: Inform the controller that the sublocation no longer exists and so to change the devices to the default sublocation
+ do_transaction(F);  
+
+ %% NOTE: If the operation originated from the JANET Simulator the controller is informed to delete the sublocation and to
+ %%       move all its device in its default sublocation in the body of the "jsim:delete_sublocation()" interface function
 
 delete_sublocation(_) ->
  {error,badarg}.
@@ -1300,11 +1328,14 @@ move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
  move_devlist_to_default_subloc(NextDev_id,Loc_id).
 
 
-%% DESCRIPTION:  Deletes a device from the database, also terminating its node if it is running
+%% DESCRIPTION:  Deletes a device from the database and, if it is running, stops its node
 %%
 %% ARGUMENTS:    - Dev_id: The 'dev_id' of the device to delete, which must exist and be >0
 %%
-%% RETURNS:      - {ok,ok}                   -> The device was deleted from the database and its device node was terminated
+%% RETURNS:      - {ok,ok}                   -> The device was deleted from the database
+%%                                              and its device node was terminated
+%%               - {ok,Error}                -> The device was deleted from the database, but an
+%%                                              error was raised in terminating its device node
 %%               - ok                        -> The device was deleted from the database (its node was
 %%                                              not terminated since the JANET Simulator is not running)
 %%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
@@ -1391,7 +1422,8 @@ delete_devmanager(Dev_id) ->
      {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({devmanager,Dev_id}) end),
 	 ok
 	 
-	 %% [TODO]: Inform the controller that the device no longer exists
+	 %% NOTE: If the operation originated from the JANET Simulator the controller is informed
+	 %%       to delete the device in the body of the "jsim:delete_device()" interface function
    
    end
  end.
