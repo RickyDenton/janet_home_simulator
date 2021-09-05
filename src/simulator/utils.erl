@@ -5,7 +5,7 @@
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
          check_merge_devconfigs/3,get_devtype_default_config/1,deprefix_dev_config/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                  % Nodes Utility Functions
--export([is_running/1,str_to_atom/1,sign/1]).							                  % Other Utility Functions
+-export([ensure_janet_started/0,is_running/1,str_to_atom/1,sign/1]).		              % Other Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -427,6 +427,29 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
 %%====================================================================================================================================
 %%                                                     OTHER UTILITY FUNCTIONS
 %%====================================================================================================================================
+
+%% DESCRIPTION:  Ensures that the JANET Simulator application is currently running on the node
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok -> The JANET Simulator application is currently running on the node
+%%
+%% THROWS:       - {error,janet_not_running} -> The JANET Simulator application is NOT running on the node 
+%%
+ensure_janet_started() ->
+
+ % Check if the JANET Simulator is running
+ case is_running(janet_simulator) of
+ 
+  % If it is, return 'ok'
+  true ->
+   ok;
+   
+  % If it is not, throw an error
+  false ->
+   throw({error,janet_not_running})
+ end.
+
 
 %% DESCRIPTION:  Checks if an application is running, also considering shorthand forms
 %%

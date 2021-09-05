@@ -539,34 +539,27 @@ dev_command(_,_,_,_) ->
 %% =========================================== PER-NODE STOP/RESTART HELPER FUNCTIONS =========================================== %%
 
 %% Changes a node status by halting or restarting its manager process 
-%% (halt_node(NodeTypeShortHand,Node_id), restart_node(NodeTypeShortHand,Node_id) helper function)
+%% (stop_node(NodeTypeShortHand,Node_id), restart_node(NodeTypeShortHand,Node_id) helper function)
 change_node_status(NodeTypeShortHand,Node_id,Mode) -> 
  
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
-  
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % If it is running, determine the passed node type, taking shorthand forms into account
-   NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
+ ok = utils:ensure_janet_started(),
+
+ % If it is running, determine the passed node type, taking shorthand forms into account
+ NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
    
-   % Retrieve the node's manager location ID and status
-   {Loc_id,_,MgrStatus} = db:get_manager_info(NodeType,Node_id),
+ % Retrieve the node's manager location ID and status
+ {Loc_id,_,MgrStatus} = db:get_manager_info(NodeType,Node_id),
    
-    % Verify the node's status change to be valid (i.e. not attempting
-    % to stop an already stopped or restart an already running node)
-   ok = verify_node_status_change(MgrStatus,Mode),
+ % Verify the node's status change to be valid (i.e. not attempting
+ % to stop an already stopped or restart an already running node)
+ ok = verify_node_status_change(MgrStatus,Mode),
    
-   % Retrieve the PID of the node manager's 'sup_loc' supervisor
-   Sup_pid = db:get_suploc_pid(Loc_id),
+ % Retrieve the PID of the node manager's 'sup_loc' supervisor
+ Sup_pid = db:get_suploc_pid(Loc_id),
   
-   % Attempt to change the node's manager status via its 'sup_loc' supervisor as of "Mode"
-   ok = change_manager_status(Sup_pid,NodeType,Node_id,Mode)
- end.
+ % Attempt to change the node's manager status via its 'sup_loc' supervisor as of "Mode"
+ ok = change_manager_status(Sup_pid,NodeType,Node_id,Mode).
 	
 	
 %% ================================================ PER-SUBLOCATION STOP/RESTART ================================================ %%
@@ -576,26 +569,19 @@ change_node_status(NodeTypeShortHand,Node_id,Mode) ->
 change_subloc_status({Loc_id,Subloc_id},Mode) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
-  
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % Retrieve the list of devices in the sublocation
-   DevIdList = get_subloc_devs_throw({Loc_id,Subloc_id}),
+ ok = utils:ensure_janet_started(),
+ 
+ % Retrieve the list of devices in the sublocation
+ DevIdList = get_subloc_devs_throw({Loc_id,Subloc_id}),
    
-   % Retrieve the PID of the managers' 'sup_loc' supervisor
-   Sup_pid = db:get_suploc_pid(Loc_id),
+ % Retrieve the PID of the managers' 'sup_loc' supervisor
+ Sup_pid = db:get_suploc_pid(Loc_id),
    
-   % Attempt to change the statuses of all devices in the sublocation
-   DevicesStatusesChange = change_devices_statuses(DevIdList,Sup_pid,Mode),
+ % Attempt to change the statuses of all devices in the sublocation
+ DevicesStatusesChange = change_devices_statuses(DevIdList,Sup_pid,Mode),
    
-   % Print a summary of the operation
-   print_devs_statuses_change_summary(DevicesStatusesChange,Mode)   
- end.
+ % Print a summary of the operation
+ print_devs_statuses_change_summary(DevicesStatusesChange,Mode).
 
 
 %% Retrieves the list of devices in a sublocation, raising throws in case the sublocation does not exist or is empty 
@@ -626,41 +612,33 @@ get_subloc_devs_throw({Loc_id,Subloc_id}) ->
 change_loc_status(Loc_id,Mode) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
-  
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % Retrieve the PID of location managers' 'sup_loc' supervisor
-   Sup_pid = db:get_suploc_pid(Loc_id),
-   
-   % Attempt to change the status of the location's controller manager as of "Mode"
-   CtrMgrStatus = catch(change_ctr_status(Loc_id,Sup_pid,Mode)),
-   
-   % Retrieve the list of devices in the sublocation
-   %
-   % NOTE: Differently from "change_subloc_status()" and its "get_subloc_devs_throw()" function in
-   %       this case an empty list can be returned, meaning that the location contains no devices  
-   DevIdList = db:get_loc_devs(Loc_id),
-   
-   % Attempt to change the statuses of all device managers in the location, obtaining in return:
-   %
-   %  - If a non-empty "DevIdList" was passed, the {StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFails}
-   %    lists (see print_loc_status_change_summary())
-   %  - If an empty "DevIdList" was passed, the tuple {[],[],[],[]}
-   %  - If attempting to stop or restart a list of devices that are already all
-   %    stopped or running, the 'all_devs_stopped' or 'all_devs_running' atoms
-   % 
-   DevicesStatusesChange = catch(change_devices_statuses(DevIdList,Sup_pid,Mode)),
-   
-   % Print a summary of the operation
-   print_loc_status_change_summary(Loc_id,CtrMgrStatus,DevicesStatusesChange,Mode)
+ ok = utils:ensure_janet_started(),
  
- end.
-
+ % Retrieve the PID of location managers' 'sup_loc' supervisor
+ Sup_pid = db:get_suploc_pid(Loc_id),
+   
+ % Attempt to change the status of the location's controller manager as of "Mode"
+ CtrMgrStatus = catch(change_ctr_status(Loc_id,Sup_pid,Mode)),
+   
+ % Retrieve the list of devices in the sublocation
+ %
+ % NOTE: Differently from "change_subloc_status()" and its "get_subloc_devs_throw()" function in
+ %       this case an empty list can be returned, meaning that the location contains no devices  
+ DevIdList = db:get_loc_devs(Loc_id),
+   
+ % Attempt to change the statuses of all device managers in the location, obtaining in return:
+ %
+ %  - If a non-empty "DevIdList" was passed, the {StoppedMgrs,RunningMgrs,ChangedMgrsSuccesses,AllMgrsFails}
+ %    lists (see print_loc_status_change_summary())
+ %  - If an empty "DevIdList" was passed, the tuple {[],[],[],[]}
+ %  - If attempting to stop or restart a list of devices that are already all
+ %    stopped or running, the 'all_devs_stopped' or 'all_devs_running' atoms
+ % 
+ DevicesStatusesChange = catch(change_devices_statuses(DevIdList,Sup_pid,Mode)),
+   
+ % Print a summary of the operation
+ print_loc_status_change_summary(Loc_id,CtrMgrStatus,DevicesStatusesChange,Mode).
+ 
 
 %% Prints a summary of the status change operation of the controller and devices in a location
 %% (change_loc_status(Loc_id,Mode) helper function)
@@ -731,30 +709,24 @@ print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode) ->
 change_all_nodes_statuses(Mode) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
+ ok = utils:ensure_janet_started(),
   
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % If it is, retrieve all locations' IDs from the database
-   LocIdsList = db:get_table_keys(location),
+ % If it is, retrieve all locations' IDs from the database
+ LocIdsList = db:get_table_keys(location),
    
-   case LocIdsList of
-    [] ->
+ case LocIdsList of
+  [] ->
 	
-     % If the database is empty, just return
-	 io:format("The JANET simulator has no nodes~n");
+   % If the database is empty, just return
+   io:format("The JANET simulator has no nodes~n");
 	
-	_ ->
+  _ ->
 	 
-	 % Otherwise attempt to change the statuses
-	 % of nodes in all locations as of "Mode"
-     change_locs_statuses(LocIdsList,[],Mode)
-   end
+   % Otherwise attempt to change the statuses
+   % of nodes in all locations as of "Mode"
+   change_locs_statuses(LocIdsList,[],Mode)
  end.
+
    
 %% Attempts to change the statuses of all nodes in a list of locations
 %% (change_all_nodes_statuses(Mode) helper function)   
@@ -1108,76 +1080,63 @@ change_ctr_status(Loc_id,Sup_pid,Mode) ->
 print_managers(all) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
+ ok = utils:ensure_janet_started(),
   
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
-   CtrMgrRecords = db:get_table_records(ctrmanager),
-   DevMgrRecords = db:get_table_records(devmanager),
+ % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
+ CtrMgrRecords = db:get_table_records(ctrmanager),
+ DevMgrRecords = db:get_table_records(devmanager),
    
-   % Determine the sorted IDs of all stopped and running controller and device managers
-   StoppedCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =:= "STOPPED" ]),
-   StoppedDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =:= "STOPPED" ]),
-   RunningCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =/= "STOPPED" ]),
-   RunningDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =/= "STOPPED" ]),
+ % Determine the sorted IDs of all stopped and running controller and device managers
+ StoppedCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =:= "STOPPED" ]),
+ StoppedDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =:= "STOPPED" ]),
+ RunningCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =/= "STOPPED" ]),
+ RunningDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =/= "STOPPED" ]),
    
-   % Print the IDs of all stopped and running controller and device managers
-   io:format("~nSTOPPED NODES~n============="),
-   print_mgrs_list("Controllers:",StoppedCtrManagers),
-   print_mgrs_list("Devices:    ",StoppedDevManagers),
-   io:format("~n"),
-   io:format("~nRUNNING NODES~n============="),
-   print_mgrs_list("Controllers:",RunningCtrManagers),
-   print_mgrs_list("Devices:    ",RunningDevManagers),
-   io:format("~n~n")
- end;
+ % Print the IDs of all stopped and running controller and device managers
+ io:format("~nSTOPPED NODES~n============="),
+ print_mgrs_list("Controllers:",StoppedCtrManagers),
+ print_mgrs_list("Devices:    ",StoppedDevManagers),
+ io:format("~n"),
+ io:format("~nRUNNING NODES~n============="),
+ print_mgrs_list("Controllers:",RunningCtrManagers),
+ print_mgrs_list("Devices:    ",RunningDevManagers),
+ io:format("~n~n");
 
 print_managers(Status) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
+ ok = utils:ensure_janet_started(),
   
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
-   CtrMgrRecords = db:get_table_records(ctrmanager),
-   DevMgrRecords = db:get_table_records(devmanager),
+ % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
+ CtrMgrRecords = db:get_table_records(ctrmanager),
+ DevMgrRecords = db:get_table_records(devmanager),
    
-   % Depending on the specified Status of node managers
-   case Status of
-    stopped ->
+ % Depending on the specified Status of node managers
+ case Status of
+  stopped ->
 	
-	 % Determine the sorted IDs of all stopped controller and device managers
-	 StatusCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =:= "STOPPED" ]),
-     StatusDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =:= "STOPPED" ]),
+   % Determine the sorted IDs of all stopped controller and device managers
+   StatusCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =:= "STOPPED" ]),
+   StatusDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =:= "STOPPED" ]),
 	 
-	 % Print results header
-	 io:format("~nSTOPPED NODES~n=============");
+   % Print results header
+   io:format("~nSTOPPED NODES~n=============");
 	 
-	running ->
+  running ->
 
-	 % Determine the sorted IDs of all running controller and device managers
-	 StatusCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =/= "STOPPED" ]),
-     StatusDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =/= "STOPPED" ]),
+   % Determine the sorted IDs of all running controller and device managers
+   StatusCtrManagers = lists:sort([ Loc_id || {_,Loc_id,_,MgrStatus} <- CtrMgrRecords, MgrStatus =/= "STOPPED" ]),
+   StatusDevManagers = lists:sort([ Dev_id || {_,Dev_id,_,_,MgrStatus} <- DevMgrRecords, MgrStatus =/= "STOPPED" ]),
 	 
-	 % Print results header
-	 io:format("~nRUNNING NODES~n=============")
-   end,
+   % Print results header
+   io:format("~nRUNNING NODES~n=============")
+ end,
    
-   % Print the IDs of all controller and device managers in the specified Status
-   print_mgrs_list("Controllers:",StatusCtrManagers),
-   print_mgrs_list("Devices:    ",StatusDevManagers),
-   io:format("~n~n")
- end. 
+ % Print the IDs of all controller and device managers in the specified Status
+ print_mgrs_list("Controllers:",StatusCtrManagers),
+ print_mgrs_list("Devices:    ",StatusDevManagers),
+ io:format("~n~n").
+ 
 
 
 %% Prints a list of node managers' statuses (print_managers(all), print_managers(Status) helper function)
@@ -1199,35 +1158,28 @@ print_mgrs_list(StrHeader,MgrsList) ->
 gen_ctr_command(Loc_id,Module,Function,ArgsList) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
+ ok = utils:ensure_janet_started(),
   
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % Retrieve the controller's manager PID and status
-   {_,CtrMgrPid,CtrMgrStatus} = db:get_manager_info(controller,Loc_id),
-   case CtrMgrStatus of
-    "STOPPED" ->
+ % Retrieve the controller's manager PID and status
+ {_,CtrMgrPid,CtrMgrStatus} = db:get_manager_info(controller,Loc_id),
+ case CtrMgrStatus of
+  "STOPPED" ->
 	
-	 % If the manager and thus the controller node
-	 % is stopped, the command cannot be forwarded
-	 throw({error,node_stopped});
+   % If the manager and thus the controller node
+   % is stopped, the command cannot be forwarded
+   throw({error,node_stopped});
 	 
-	_ ->
+  _ ->
 	
-	 % Otherwise forward the command to the controller node's
-	 % manager and wait for a response up to a predefined timeout
-	 try gen_server:call(CtrMgrPid,{ctr_command,Module,Function,ArgsList},5000)
-     catch
-	  exit:{timeout,_} ->
+   % Otherwise forward the command to the controller node's
+   % manager and wait for a response up to a predefined timeout
+   try gen_server:call(CtrMgrPid,{ctr_command,Module,Function,ArgsList},5000)
+   catch
+    exit:{timeout,_} ->
 	   
-	   % Command timeout
-	   throw({error,request_timeout})
-     end	   
-   end
+     % Command timeout
+	 throw({error,request_timeout})
+   end	   
  end.
 
 
@@ -1238,58 +1190,51 @@ gen_ctr_command(Loc_id,Module,Function,ArgsList) ->
 gen_dev_config_change(Dev_id,Config) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
-  
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
+ ok = utils:ensure_janet_started(),
 
-   % Retrieve the device's manager PID and status
-   {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
-   case DevMgrStatus of
-    "STOPPED" ->
+ % Retrieve the device's manager PID and status
+ {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
+ case DevMgrStatus of
+  "STOPPED" ->
 	
-	 % If the manager and thus the device node
-	 % is stopped, the command cannot be forwarded
-	 throw({error,node_stopped});
+   % If the manager and thus the device node
+   % is stopped, the command cannot be forwarded
+   throw({error,node_stopped});
 	 
-	_ ->
+  _ ->
 	
-	 % Otherwise retrieve the device's record from the 'device' table
-	 %
-	 % NOTE: The device exists for sure at this point, since otherwise the
-	 %       db:get_manager_info(device,Dev_id) function would have raised a throw
-	 {ok,DevRecord} = db:get_record(device,Dev_id),
+   % Otherwise retrieve the device's record from the 'device' table
+   %
+   % NOTE: The device exists for sure at this point, since otherwise the
+   %       db:get_manager_info(device,Dev_id) function would have raised a throw
+   {ok,DevRecord} = db:get_record(device,Dev_id),
 	 
-	 % Attempt to build the new configurationto be
-	 % applied to the device depending on its type
-	 DevCfg = utils:build_dev_config_wildcard(Config,DevRecord#device.type),
+   % Attempt to build the new configurationto be
+   % applied to the device depending on its type
+   DevCfg = utils:build_dev_config_wildcard(Config,DevRecord#device.type),
 	 
-	 % Forward the configuration change command to the device node's
-	 % manager and wait for a response up to a predefined timeout
-	 CfgChangeRes = try gen_server:call(DevMgrPid,{dev_config_change,DevCfg},5000)
-     catch
-	  exit:{timeout,_} ->
+   % Forward the configuration change command to the device node's
+   % manager and wait for a response up to a predefined timeout
+   CfgChangeRes = try gen_server:call(DevMgrPid,{dev_config_change,DevCfg},5000)
+   catch
+	exit:{timeout,_} ->
 	   
-	   % Command timeout
-	   throw({error,request_timeout})
-     end,
+	% Command timeout
+	throw({error,request_timeout})
+   end,
 	 
-	 % Depending on the result of the operation
-	 case CfgChangeRes of
+   % Depending on the result of the operation
+   case CfgChangeRes of
 	  
-	  % If the operation was successful, format the received
-	  % Timestamp as a date before returning it to the user
-	  {ok,{UpdatedCfg,Timestamp}} ->
-	   {ok,{UpdatedCfg,string:slice(calendar:system_time_to_rfc3339(Timestamp,[{time_designator,$\s}]),0,19)}};
+   % If the operation was successful, format the received
+   % Timestamp as a date before returning it to the user
+   {ok,{UpdatedCfg,Timestamp}} ->
+	{ok,{UpdatedCfg,string:slice(calendar:system_time_to_rfc3339(Timestamp,[{time_designator,$\s}]),0,19)}};
 	   
-	  % Otherwise if an error was raised, simply return it to the user
-	  _ ->
-	   CfgChangeRes
-	 end
-   end
+   % Otherwise if an error was raised, simply return it to the user
+   _ ->
+	CfgChangeRes
+  end
  end.
 
 
@@ -1298,35 +1243,28 @@ gen_dev_config_change(Dev_id,Config) ->
 gen_dev_command(Dev_id,Module,Function,ArgsList) ->
 
  % Ensure the JANET Simulator to be running
- case utils:is_running(janet_simulator) of
-  false ->
+ ok = utils:ensure_janet_started(),
   
-   % If it is not, throw an error
-   throw({error,janet_not_running});
-  
-  true ->
-  
-   % Retrieve the device's manager PID and status
-   {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
-   case DevMgrStatus of
-    "STOPPED" ->
+ % Retrieve the device's manager PID and status
+ {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
+ case DevMgrStatus of
+  "STOPPED" ->
 	
-	 % If the manager and thus the device node
-	 % is stopped, the command cannot be forwarded
-	 throw({error,node_stopped});
+   % If the manager and thus the device node
+   % is stopped, the command cannot be forwarded
+   throw({error,node_stopped});
 	 
-	_ ->
+  _ ->
 	
-	 % Otherwise forward the command to the device node's manager
-	 % and wait for a response up to a predefined timeout
-	 try gen_server:call(DevMgrPid,{dev_command,Module,Function,ArgsList},5000)
-     catch
-	  exit:{timeout,_} ->
+   % Otherwise forward the command to the device node's manager
+   % and wait for a response up to a predefined timeout
+   try gen_server:call(DevMgrPid,{dev_command,Module,Function,ArgsList},5000)
+   catch
+    exit:{timeout,_} ->
 	   
-	   % Command timeout
-	   throw({error,request_timeout})
-     end	   
-   end
+	 % Command timeout
+	 throw({error,request_timeout})
+   end	   
  end.
 
  
