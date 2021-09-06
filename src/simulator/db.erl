@@ -106,15 +106,20 @@ add_location(_,_,_,_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Adds an empty sublocation to the database
+%% DESCRIPTION:  Adds a new empty sublocation to the database
 %%
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation, which must not already exist and be >0
 %%               - Name:               The name of the sublocation (optional)
 %%
-%% RETURNS:      - ok                                 -> The sublocation was successfully added
+%% RETURNS:      - ok                                 -> The sublocation was successfully added to the database
 %%               - {error,location_not_exists}        -> The location 'Loc_id' does not exist
 %%               - {error,sublocation_already_exists} -> A sublocation with such 'sub_id' already exists
 %%               - {error,badarg}                     -> Invalid arguments
+%%
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
+%%               either in the "jsim:add_sublocation()" (if the operation originated from the JANET Simulator) or
+%%               in the "ctr_restserver:add_sublocation()" (if the operation originated from the JANET Controller)
+%%               functions [TODO]: Check names 
 %%
 add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 ->
  F = fun() ->
@@ -147,16 +152,13 @@ add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_nu
       end
      end,
  do_transaction(F);
-
- %% NOTE: If the operation originated from the JANET Simulator the controller is informed to
- %%       add the sublocation in the body of the "jsim:add_sublocation()" interface function
 	  
 add_sublocation(_,_) ->
  {error,badarg}.
 
 
-%% DESCRIPTION:  Adds a new device with a default configuration to the database,
-%%               and, if the JANET Simulator is running, also starts its device node
+%% DESCRIPTION:  Adds a new device with a predefined initial configuration into the
+%%               database and, if JANET Simulator is running, also starts its device node
 %%
 %% ARGUMENTS:    - Dev_id:             The ID of the device, which must not already exist and be >0
 %%               - Name:               The device's name (optional)
@@ -166,12 +168,16 @@ add_sublocation(_,_) ->
 %% RETURNS:      - {ok,ok}                        -> The device was successfully added and its device node was started
 %%               - {ok,Error}                     -> The device was successfully added, but
 %%                                                   an Error occured in starting its node
-%%               - ok                             -> The device was successfully added (but the device node
-%%                                                   was not started since the JANET Simulator is not running)
+%%               - ok                             -> The device was successfully added, but the device node
+%%                                                   was not started since the JANET Simulator is not running
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
 %%               - {error,badarg}                 -> Invalid arguments
+%%
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
+%%               either in the "jsim:add_device()" (if the operation originated from the JANET Simulator) or in
+%%               the "ctr_restserver:add_device()" (if the operation originated from the JANET Controller) functions [TODO]: Check names 
 %%
 add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
@@ -281,9 +287,6 @@ spawn_devmanager(Dev_id,Loc_id) ->
      SpawnError
    end
  end.
-
- %% NOTE: If the operation originated from the JANET Simulator the controller is informed
- %%       to add the device in the body of the "jsim:add_device()" interface function
 
 
 %% =========================================================== READ ================================================================%% 
@@ -940,6 +943,11 @@ get_suploc_pid(Loc_id) ->
 %%               - {error,different_locations}    -> The specified and the current sublocations are in different locations
 %%               - {error,badarg}                 -> Invalid arguments
 %%
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
+%%               either in the "jsim:update_dev_subloc()" (if the operation originated from the JANET Simulator) or
+%%               in the "ctr_restserver:update_dev_subloc()" (if the operation originated from the JANET Controller)
+%%               functions [TODO]: Check names 
+%%
 update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
  
@@ -991,9 +999,6 @@ update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, i
      end,
  do_transaction(F);	  
  
- %% NOTE: If the operation originated from the JANET Simulator the controller is informed to update
- %%       the device's sublocation in the body of the "jsim:update_dev_subloc()" interface function
-	 
 update_dev_subloc(_,_) ->
  {error,badarg}.
 
@@ -1159,18 +1164,19 @@ update_dev_name(_,_) ->
 %% ========================================================== DELETE ===============================================================%% 
 
 %% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the
-%%               database, also stopping the associated controller' and devices' nodes
+%%               database, also stopping their associated controller and devices nodes
 %%
 %% ARGUMENTS:    - Loc_id: The ID of the location to delete from the database
 %%
 %% RETURNS:      - {ok,ok}                     -> The location and all its sublocations and devices were
-%%                                                successfully deleted, and the associated nodes were stopped
-%%               - ok                          -> The location and all its sublocations and devices were successfully
-%%                                                deleted (not their nodes since the JANET Simulator is not running)
+%%                                                successfully deleted, and their associated nodes were stopped
+%%               - ok                          -> The location and all its sublocations and devices were
+%%                                                successfully deleted, while their associated nodes
+%%                                                were not since the JANET Simulator is not running
 %%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
 %%               - {error,badarg}              -> Invalid arguments
 %%
-%% NOTE:         Use with caution, for deleted locations, sublocations and devices CANNOT be recovered
+%% NOTE:         Use with caution, for locations, sublocations and devices in this way CANNOT be recovered
 %%
 delete_location(Loc_id) when is_number(Loc_id), Loc_id>0 ->
  F = fun() ->
@@ -1281,6 +1287,11 @@ delete_suploc(Loc_id) ->
 %%
 %% NOTE:         Default sublocations cannot be removed (Subloc_id > 0)
 %%
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
+%%               either in the "jsim:delete_sublocation()" (if the operation originated from the JANET Simulator) or
+%%               in the "ctr_restserver:delete_sublocation()" (if the operation originated from the JANET Controller)
+%%               functions [TODO]: Check names 
+%%
 delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> 
  F = fun() ->
  
@@ -1305,10 +1316,7 @@ delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_numb
 	    mnesia:abort(sublocation_not_exists)
       end
      end,
- do_transaction(F);  
-
- %% NOTE: If the operation originated from the JANET Simulator the controller is informed to delete the sublocation and to
- %%       move all its device in its default sublocation in the body of the "jsim:delete_sublocation()" interface function
+ do_transaction(F);
 
 delete_sublocation(_) ->
  {error,badarg}.
@@ -1328,18 +1336,23 @@ move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
  move_devlist_to_default_subloc(NextDev_id,Loc_id).
 
 
-%% DESCRIPTION:  Deletes a device from the database and, if it is running, stops its node
+%% DESCRIPTION:  Deletes a device from the database and, if it is running, stops its device node
 %%
 %% ARGUMENTS:    - Dev_id: The 'dev_id' of the device to delete, which must exist and be >0
 %%
-%% RETURNS:      - {ok,ok}                   -> The device was deleted from the database
-%%                                              and its device node was terminated
-%%               - {ok,Error}                -> The device was deleted from the database, but an
-%%                                              error was raised in terminating its device node
-%%               - ok                        -> The device was deleted from the database (its node was
-%%                                              not terminated since the JANET Simulator is not running)
+%% RETURNS:      - {ok,ok}                   -> The device was deleted from the
+%%                                              database and its node was stopped
+%%               - {ok,Error}                -> The device was deleted from the database,  
+%%                                              but an Error was raised in stopping its node
+%%               - ok                        -> The device was deleted from the database, while its node
+%%                                              was not stopped since the JANET Simulator is not running
 %%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
 %%               - {error,badarg}            -> Invalid arguments
+%%
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
+%%               either in the "jsim:delete_device()" (if the operation originated from the JANET Simulator) or
+%%               in the "ctr_restserver:delete_device()" (if the operation originated from the JANET Controller)
+%%               functions [TODO]: Check names 
 %%
 delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
  F = fun() ->
@@ -1421,10 +1434,6 @@ delete_devmanager(Dev_id) ->
 	 % 'devmanager' table and return the result of the operation
      {atomic,ok} = mnesia:transaction(fun() -> mnesia:delete({devmanager,Dev_id}) end),
 	 ok
-	 
-	 %% NOTE: If the operation originated from the JANET Simulator the controller is informed
-	 %%       to delete the device in the body of the "jsim:delete_device()" interface function
-   
    end
  end.
  

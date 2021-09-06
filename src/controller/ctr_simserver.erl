@@ -53,6 +53,7 @@ handle_continue(init,{booting,none}) ->
 %% ACTIONS:   Execute the required command via apply()
 %% ANSWER:    The result of the apply() function
 %% NEW STATE: -
+%% NEW STATE: -
 %%
 handle_call({ctr_command,Module,Function,ArgsList},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
 

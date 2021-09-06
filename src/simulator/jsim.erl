@@ -166,87 +166,57 @@ shutdown() ->
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 
-% This is just an interface function, no further operation is required by the Simulator
+% Simulator database interface function (no synchronization is required with the location's controller)
 add_location(Loc_id,Name,User,Port) ->
  db:add_location(Loc_id,Name,User,Port).
- 
- 
-%% DESCRIPTION:  Adds an empty sublocation to the database and, if running, attempts to inform its controller node of it
+
+
+%% DESCRIPTION:  Adds a new empty sublocation to the database and, if it is running,
+%%               attempts to mirror such change in the location's controller
 %%
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation, which must not already exist and be >0
 %%               - Name:               The name of the sublocation (optional)
 %%
-%% RETURNS:      - {ok,ok}                            -> The sublocation was successfully added and
-%%                                                       its controller node was informed of it
-%%               - {ok,Error}                         -> The sublocation was successfully added, but
-%%                                                       informing its controller raised an Error
-%%               - ok                                 -> The sublocation was successfully added (informing
-%%                                                       its controller was not necessary since either the
-%%                                                       JANET Simulator or the controller node are stopped)
+%% RETURNS:      - {ok,ok}                            -> The sublocation was successfully added to the
+%%                                                       database and in the associated controller node
+%%               - {ok,Error}                         -> The sublocation was successfully added to the
+%%                                                       database, but an error was raised in adding it
+%%                                                       in the associated controller node
+%%               - ok                                 -> The sublocation was successfully added to the
+%%                                                       database (synchronizing with the controller was
+%%                                                       not necessary since it is not running)
 %%               - {error,location_not_exists}        -> The location 'Loc_id' does not exist
 %%               - {error,sublocation_already_exists} -> A sublocation with such 'sub_id' already exists
 %%               - {error,badarg}                     -> Invalid arguments
 %%
-add_sublocation({Loc_id,Subloc_id},Name) -> 
- 
- % Attempt to add the new sublocation to the database
- case db:add_sublocation({Loc_id,Subloc_id},Name) of
-  {error,DBError} ->
-  
-   % If the operation raised an error, return it
-   {error,DBError};
-   
-  ok ->
-  
-   % If the sublocation was successfully added, attempt to inform the controller node of the new
-   % sublocation, taking into account the situations where it or the JANET Simulator are stopped
-   %
-   % NOTE: the following 'try' block is structured so to return:
-   %        - ok          -> The result of the previous database operation only (if the
-   %                         JANET  Simulator or the controller node are not running)
-   %        - {ok,CtrRes} -> The result of the database operation plus the result of informing
-   %                         the controller of the new sublocation (if the JANET Simulator and
-   %                         the controller node are running)
-   try gen_ctr_command(Loc_id,ctr_db,add_sublocation,[Subloc_id]) of	
-    
-	% Result of the database operation + the result of informing the controller of the new sublocation
-    Res ->
-	 {ok,Res}
-   catch
-   
-    % If the JANET Simulator is not running, just return the result of the database operation
-    {error,janet_not_running} ->
-     ok; 
- 
-    % If the controller node is not running, just return the result of the database operation
-    {error,node_stopped} ->
-     ok;
+add_sublocation({Loc_id,Subloc_id},Name) ->
 
-    % All other throws consist in functional errors, and should
-	% be returned after the result of the database operation
-    Error ->
-     {ok,Error}
-   end
- end.
+ % Attempt to add the sublocation in the JANET Simulator database and, if successful, attempt to add it in the database of
+ % the associated location controller, taking into account the situations where it or the JANET Simulator are not running
+ ctr_db_sync(add_sublocation,[{Loc_id,Subloc_id},Name],[Subloc_id],Loc_id).
  
  
-%% DESCRIPTION:  Adds a new device with a default configuration to the database, and, if the JANET Simulator
-%%               is running, also starts its device node and informs its controller of the new device
+%% DESCRIPTION:  Adds a new device with a predefined initial configuration into the database and:
+%%               1) If the JANET Simulator is running, its device node is started
+%%               2) If its location controller is running, it is informed of the new device
 %%
 %% ARGUMENTS:    - Dev_id:             The ID of the device, which must not already exist and be >0
 %%               - Name:               The device's name (optional)
 %%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
 %%               - Type:               The device's type, which must belong to the set of valid device types
 %%
-%% RETURNS:      - {ok,ok,ok}                     -> The device was successfully added, its device node was
-%%                                                   started and its controller was informed of the new device
-%%               - {ok,ok,Error}                  -> The device was successfully added, its device node was started,
-%%                                                   but an Error occured in informing its controller of the new device
-%%               - {ok,ok}                        -> The device was successfully added and its device node was started
-%%                                                   (its controller was not informed since it is stopped)
-%%               - {ok,Error}                     -> The device was successfully added, but an Error occured in starting its node
-%%                                                   (its controlled was not informed since it would not have had sense)
-%%               - ok                             -> The device was successfully added (but the device node
+%% RETURNS:      - {ok,ok,ok}                     -> The device was successfully added, its device node
+%%                                                   was started and its controller was informed of it
+%%               - {ok,ok,CtrError}               -> The device was successfully added, its device node was started, but
+%%                                                   a "CtrError" occured in informing its controller of the new device
+%%               - {ok,DevError,ok}               -> The device was successfully added and its controller was informed
+%%                                                   of it, but a "DevError" was raised in starting the device's node
+%%               - {ok,ok}                        -> The device was successfully added and its device node was started,
+%%                                                   while its controller was not informed since it is not running
+%%               - {ok,DevError}                  -> The device was successfully added, but a "DevError" was raised in
+%%                                                   starting it (its controller was not informed since it is not running)
+%%               - ok                             -> The device was successfully added to the database, but no other
+%%                                                   operations were performed since the JANET Simulator is not running
 %%                                                   was not started since the JANET Simulator is not running)
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
@@ -255,39 +225,9 @@ add_sublocation({Loc_id,Subloc_id},Name) ->
 %%
 add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) ->
 
- % Attempt to add the new device to the database and start its device node
- case db:add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) of
-  {ok,ok} ->
-
-   % If the device was added successfully added AND its device node
-   % was started, attempt to inform its controller of the new device
-   %
-   % NOTE: the following 'try' block is structured so to return:
-   %        - {ok,ok}        -> The result of the previous two operations (if the controller node is not running)
-   %        - {ok,ok,CtrRes} -> The result of the previous two operations plus the result of informing 
-   %                            the controller of the new device (if the controller is running)
-   try gen_ctr_command(Loc_id,ctr_db,add_device,[Dev_id,Subloc_id,Type]) of	
-    
-	% The result of the previous two operations plus the result of informing the controller of the new device
-    Res ->
-	 {ok,ok,Res}
-   catch
-
-    % If the controller node is not running, just return the result of the previous two operations
-    {error,node_stopped} ->
-     {ok,ok};
-
-    % All other throws consist in functional errors, and should
-	% be returned after the result of the previous two operations
-    Error ->
-     {ok,ok,Error}
-   end;
-   
-  AddStartNode -> 
-  
-   % In all other cases, just return the results of the previous two operations
-   AddStartNode
- end.
+ % Attempt to add the device in the JANET Simulator database and, if successful, attempt to add it in the database of
+ % associated location controller, taking into account the situations where it or the JANET Simulator are not running
+ ctr_db_sync(add_device,[Dev_id,Name,{Loc_id,Subloc_id},Type],[Dev_id,Subloc_id,Type],Loc_id).
 
 
 %% =========================================================== READ ================================================================%%  
@@ -302,7 +242,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) ->
 %%               - {error,badarg}        -> Invalid arguments
 %%
 
-% These are just all interface functions, no further operation is required by the Simulator
+% Simulator database interface functions (no synchronization is required with the location's controller)
 print_table(all) ->
  db:print_table(all);
 print_table(Tabletype) ->
@@ -327,7 +267,7 @@ print_table() ->
 %%               - {error,badarg}         -> Invalid arguments
 %%
 
-% These are just all interface functions, no further operation is required by the Simulator
+% Simulator database interface functions (no synchronization is required with the location's controller)
 print_tree(all) ->
  db:print_tree(all).
 print_tree() ->
@@ -355,29 +295,32 @@ get_record(Tabletype,Key) ->
   {ok,Record} ->
   
    % If the record was successfully retrieved, print it
+   % formatted with leading and trailing newlines "~n"
    io:format("~n~p~n~n",[Record]);
    
   {error,Reason} ->
    
-   % If the table and/or record do not exist, return the error
+   % If the table and/or record do not exist, print the
+   % error formatted with leading and trailing newlines "~n"
    io:format("~n~p~n~n",[Reason])
  end.   
 
  
 %% ========================================================== UPDATE ===============================================================%% 
 
-%% DESCRIPTION:  Updates a device's sublocation and, if the controller node is running, informs it of such change
+%% DESCRIPTION:  Attempts to update a device's sublocation and, if it is running,
+%%               attempts to mirror such change in the associated location controller
 %%
 %% ARGUMENTS:    - Dev_id:             The ID of the device to change sublocation, which must exist and be >0
 %%               - {Loc_id,Subloc_id}: The 'sub_id' of the sublocation where to put the device, where "Loc_id" must be >0
 %%                                     and coincide with the current device's location, and the "Subloc_id" must be >=0
 %%
-%% RETURNS:      - {ok,ok}                        -> The device's sublocation was successfully updated
-%%                                                   and its controller node informed of such change
-%%               - {ok,Error}                     -> The device's sublocation was successfully updated, but
-%%                                                   informing its controller of such change returned an Error
-%%               - ok                             -> Device sublocation successfully updated (the controller was not
-%%                                                   informed of the change since it or the JANET Simulator are stopped)
+%% RETURNS:      - {ok,ok}                        -> The device's sublocation was successfully updated and 
+%%                                                   the operation was mirrored on its location controller
+%%               - {ok,Error}                     -> The device's sublocation was successfully updated, but an "Error"  
+%%                                                   was raised in mirroring the operation on its location controller
+%%               - ok                             -> The device's sublocation was successfully updated, while its
+%%                                                   location controller was not informed since it is not running
 %%               - {error,device_not_exists}      -> The device 'Dev_id' does not exist
 %%               - {error,sublocation_not_exists} -> The sublocation 'sub_id' does not exist
 %%               - {error,different_locations}    -> The specified and the current sublocations are in different locations
@@ -385,45 +328,9 @@ get_record(Tabletype,Key) ->
 %%
 update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) ->
  
- % Attempt to change the device's sublocation
- case db:update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) of
-  {error,DBError} ->
-  
-   % If the operation raised an error, return it
-   {error,DBError};
-   
-  ok ->
-  
-   % If the device's sublocation was successfully changed, attempt to inform its controller of such
-   % change, taking into account the situations where the it or the JANET Simulator are stopped
-   %
-   % NOTE: the following 'try' block is structured so to return:
-   %        - ok          -> The result of the previous database operation only (if the
-   %                         JANET  Simulator or the controller node are not running)
-   %        - {ok,CtrRes} -> The result of the database operation plus the result of informing
-   %                         the controller of such change (if the JANET Simulator and the
-   %                         controller node are running)
-   try gen_ctr_command(Loc_id,ctr_db,update_dev_sub,[Dev_id,Subloc_id]) of	
-    
-	% Result of the database operation + the result of informing the controller of the change
-    Res ->
-	 {ok,Res}
-   catch
-   
-    % If the JANET Simulator is not running, just return the result of the database operation
-    {error,janet_not_running} ->
-     ok; 
- 
-    % If the controller node is not running, just return the result of the database operation
-    {error,node_stopped} ->
-     ok;
-
-    % All other throws consist in functional errors, and should
-	% be returned after the result of the database operation
-    Error ->
-     {ok,Error}
-   end
- end.
+ % Attempt to change the device's sublocation in the JANET Simulator database and, if successful, attempt to mirror such change in the 
+ % database of the associated location controller, taking into account the situations where it or the JANET Simulator are not running
+ ctr_db_sync(update_dev_subloc,[Dev_id,{Loc_id,Subloc_id}],[Dev_id,Subloc_id],Loc_id). 
 
 
 %% DESCRIPTION:  Updates a location's name
@@ -436,7 +343,7 @@ update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) ->
 %%               - {error,badarg}              -> Invalid arguments
 %%
 
-% This is just an interface function, no further operation is required by the Simulator
+% Simulator database interface function (no synchronization is required with the location's controller)
 update_loc_name(Loc_id,Name) ->
  db:update_loc_name(Loc_id,Name).
 
@@ -454,7 +361,7 @@ update_loc_name(Loc_id,Name) ->
 %% NOTE:         Currently the name of the "(default)" sublocation of a location cannot be changed (Subloc_id >0)
 %%
 
-% This is just an interface function, no further operation is required by the Simulator
+% Simulator database interface function (no synchronization is required with the location's controller)
 update_subloc_name({Loc_id,Subloc_id},Name) -> 
  db:update_subloc_name({Loc_id,Subloc_id},Name).
  
@@ -469,7 +376,7 @@ update_subloc_name({Loc_id,Subloc_id},Name) ->
 %%               - {error,badarg}            -> Invalid arguments
 %%
 
-% This is just an interface function, no further operation is required by the Simulator
+% Simulator database interface function (no synchronization is required with the location's controller)
 update_dev_name(Dev_id,Name) ->
  db:update_dev_name(Dev_id,Name).
 
@@ -477,36 +384,40 @@ update_dev_name(Dev_id,Name) ->
 %% ========================================================== DELETE ===============================================================%% 
 
 %% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the
-%%               database, also stopping the associated controller' and devices' nodes
+%%               database, also stopping their associated controller and devices nodes
 %%
 %% ARGUMENTS:    - Loc_id: The ID of the location to delete from the database
 %%
 %% RETURNS:      - {ok,ok}                     -> The location and all its sublocations and devices were
-%%                                                successfully deleted, and the associated nodes were stopped
-%%               - ok                          -> The location and all its sublocations and devices were successfully
-%%                                                deleted (not their nodes since the JANET Simulator is not running)
+%%                                                successfully deleted, and their associated nodes were stopped
+%%               - ok                          -> The location and all its sublocations and devices were
+%%                                                successfully deleted, while their associated nodes
+%%                                                were not since the JANET Simulator is not running
 %%               - {error,location_not_exists} -> The location 'Loc_id' does not exist
 %%               - {error,badarg}              -> Invalid arguments
 %%
-%% NOTE:         Use with caution, for deleted locations, sublocations and devices CANNOT be recovered
+%% NOTE:         Use with caution, for locations, sublocations and devices in this way CANNOT be recovered
 %%
 
-% This is just an interface function, no further operation is required by the Simulator
+% Simulator database interface functions (no synchronization is required with the location's controller)
 delete_location(Loc_id) ->
  db:delete_location(Loc_id).
-
+ 
 
 %% DESCRIPTION:  Deletes a sublocation from the database, moving all its devices to its location's default 
-%%               sublocation {Loc_id,0} and, if it is running, informs the location controller of such changes
+%%               sublocation {Loc_id,0} and, if it is running, informs the location controller of such change
 %%
 %% ARGUMENTS:    - {Loc_id,Subloc_id}: The sub_id of the sublocation to delete, with both elements >0
 %%
 %% RETURNS:      - {ok,ok}                        -> The sublocation was successfully deleted, its devices were
-%%                                                   moved to the location's default sublocation {Loc_id,0},
+%%                                                   moved to the location's default sublocation {Loc_id,0}
 %%                                                   and the location controller was informed of such change
-%%               - ok                             -> The sublocation was successfully deleted and its devices were moved
-%%                                                   to the location's default sublocation {Loc_id,0} (the controller
-%%                                                   was not inform since it or the JANET Simulator are not running)
+%%               - {ok,Error}                     -> The sublocation was successfully deleted, its devices were
+%%                                                   moved to the default sublocation {Loc_id,0}, but an Error
+%%                                                   was raised in informing the location controller of such change
+%%               - ok                             -> The sublocation was successfully deleted and its devices were
+%%                                                   moved to the location's default sublocation {Loc_id,0}, while 
+%%                                                   the location controller was not informed since it is not running
 %%               - {error,sublocation_not_exists} -> The sublocation 'Sub_id' does not exist
 %%               - {error,badarg}                 -> Invalid arguments
 %%
@@ -514,66 +425,32 @@ delete_location(Loc_id) ->
 %%
 delete_sublocation({Loc_id,Subloc_id}) ->
 
- % Attempt to remove the sublocation from the database
- case db:delete_sublocation({Loc_id,Subloc_id}) of
-  {error,DBError} ->
-  
-   % If the operation raised an error, return it
-   {error,DBError};
-   
-  ok ->
-  
-   % If the sublocation was successfully removed, attempt to inform the controller node of the change,
-   % change, taking into account the situations where it or the JANET Simulator are stopped
-   %
-   % NOTE: the following 'try' block is structured so to return:
-   %        - ok          -> The result of the previous database operation only (if the
-   %                         JANET  Simulator or the controller node are not running)
-   %        - {ok,CtrRes} -> The result of the database operation plus the result of informing
-   %                         the controller of the change (if the JANET Simulator and
-   %                         the controller node are running)
-   try gen_ctr_command(Loc_id,ctr_db,delete_sublocation,[Subloc_id]) of	
-    
-	% Result of the database operation + the result of informing the controller of the new sublocation
-    Res ->
-	 {ok,Res}
-   catch
-   
-    % If the JANET Simulator is not running, just return the result of the database operation
-    {error,janet_not_running} ->
-     ok; 
- 
-    % If the controller node is not running, just return the result of the database operation
-    {error,node_stopped} ->
-     ok;
-
-    % All other throws consist in functional errors, and should
-	% be returned after the result of the database operation
-    Error ->
-     {ok,Error}
-   end
- end.
+ % Attempt to delete the sublocation from the JANET Simulator database and, if successful, attempt to delete it from the database 
+ % of the associated location controller, taking into account the situations where it or the JANET Simulator are not running
+ ctr_db_sync(delete_sublocation,[{Loc_id,Subloc_id}],[Subloc_id],Loc_id). 
 
 
-%% DESCRIPTION:  Deletes a device from the database and if they are running, the
-%%               device node is stopped and its controller is informed of such change
+%% DESCRIPTION:  Attempts to delete a device from the database and
+%%               1) If it is running, its device node is stopped
+%%               2) If it is running, its associated location controller is informed of its deletion
 %%
 %% ARGUMENTS:    - Dev_id: The 'dev_id' of the device to delete, which must exist and be >0
 %%
 %% RETURNS:      - {ok,ok,ok}                -> The device was deleted from the database, its node was
-%%                                              stopped, and its controller was informed of such change
-%%               - {ok,ok,ErrorCtr}          -> The device was deleted from the database and its node was stopped,
-%%                                              but an "ErrorCtr" was raised in informing its controller of such change
+%%                                              stopped, and its controller was informed of its deletion
+%%               - {ok,ok,ErrorCtr}          -> The device was deleted from the database and its node was stopped, but
+%%                                              an "ErrorCtr" was raised in informing its controller of its deletion
 %%               - {ok,ErrorDev,ok}          -> The device was deleted from the database and its controller was informed
-%%                                              of such change, but an "ErrorDev" was raised in stopping the device's node
-%%               - {ok,ErrorDev,ErrorCtr}    -> The device was deleted from the database, but two "ErrorDev" and "ErrorCtr" were
-%%                                              raised respectively in stopping its node and informing its controller of such change
-%%               - {ok,ok}                   -> The device was deleted from the database and its node was stopped
-%%                                              (its controller was not informed since it is not running)
+%%                                              of its deletion, but an "ErrorDev" was raised in stopping the device node
+%%               - {ok,ErrorDev,ErrorCtr}    -> The device was deleted from the database, but an "ErrorDev"
+%%                                              and an "ErrorCtr" were raised respectively in stopping its 
+%%                                              node and informing its controller of its deletion
+%%               - {ok,ok}                   -> The device was deleted from the database and its node was stopped, while
+%%                                              its controller was not informed since it is not running
 %%               - {ok,ErrorDev}             -> The device was deleted from the database, but an "ErrorDev" was raised in
-%%                                              stopping its node (the controller was not informed since it is not running)
-%%               - ok                        -> The device was deleted from the database (its node was not terminated and
-%%                                              the controller was not informed since the JANET Simulator is not running)
+%%                                              stopping its node, and its controller was not informed since it is not running
+%%               - ok                        -> The device was deleted from the database, while neither its node was stopped or
+%%                                              its location controller was informed since the JANET Simulator is not running
 %%               - {error,device_not_exists} -> The device 'Dev_id' does not exist
 %%               - {error,badarg}            -> Invalid arguments
 %%
@@ -589,40 +466,9 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id >0 ->
 	
   {ok,DevRecord} ->
   
-   % If the device was found in the database, attempt
-   % to delete it from it and to stop its node
-   case db:delete_device(Dev_id) of
-    {ok,DevStopRes} ->
-
-     % If the device was successfully removed from the database, whether
-     % its node was stopped or not, inform the controller of such change
-     %
-     % NOTE: the following 'try' block is structured so to return:
-     %        - {ok,DevStopRes}        -> The result of the previous two operations (if the controller is not running)
-     %        - {ok,DevStopRes,CtrRes} -> The result of the previous two operations plus the result of informing 
-     %                                    the controller of the change (if the controller is running)
-     try gen_ctr_command(element(1,DevRecord#device.sub_id),ctr_db,delete_device,[Dev_id]) of	
-    
-	  % The result of the previous two operations plus the result of informing the controller of the change
-      CtrRes ->
-  	   {ok,DevStopRes,CtrRes}
-     catch
-
-      % If the controller node is not running, just return the result of the previous two operations
-      {error,node_stopped} ->
-       {ok,DevStopRes};
-
-      % All other throws consist in functional errors, and should
-	  % be returned after the result of the previous two operations
-      Error ->
-       {ok,DevStopRes,Error}
-     end;
-   
-    DeleteStopNode -> 
-  
-     % In all other cases, just return the results of the previous two operations
-     DeleteStopNode
-   end
+   % Attempt to delete the device from the JANET Simulator database and, if successful, attempt to delete it from the database
+   % of the associated location controller, taking into account the situations where it or the JANET Simulator are not running
+   ctr_db_sync(delete_device,[Dev_id],[Dev_id],element(1,DevRecord#device.sub_id))
  end;
 
 delete_device(_) ->
@@ -1024,6 +870,88 @@ dev_command(_,_,_,_) ->
  io:format("usage: dev_command(Dev_id,Module,Function,ArgsList)~n"),
  {error,badarg}.
 
+
+
+
+%%====================================================================================================================================%
+%%                                                                                                                                    %
+%%                                                     PRIVATE HELPER FUNCTIONS                                                       %
+%%                                                                                                                                    %
+%%====================================================================================================================================%
+
+%%====================================================================================================================================
+%%                                                 DATABASE INTERFACE HELPER FUNCTIONS
+%%====================================================================================================================================
+
+%% Attempts to perform an operation in the JANET Simulator database and, if successful, attempts to mirror it in the database
+%% of the associated location controller, taking into account the situations where it or the JANET Simulator are not running 
+%% (add_sublocation({Loc_id,Subloc_id},Name), add_device(Dev_id,Name,{Loc_id,Subloc_id},Type),
+%% update_dev_subloc(Dev_id,{Loc_id,Subloc_id}), delete_sublocation({Loc_id,Subloc_id}), delete_device(Dev_id) helper function)
+ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) ->
+
+ % Attempt to perform the "DBFun" function with
+ % "SimArgsList" arguments in the JANET Simulator database
+ case apply(db,DBFun,SimArgsList) of
+ 
+  {error,SimDBError} ->
+  
+   % If the JANET Simulator database operation raised an error, simply return
+   % it without attempting to mirror it on the associated location controller
+   {error,SimDBError};
+   
+  SimDBRes ->
+   
+   % If the JANET Simulator database operation was successful, regardles of the results
+   % of its side-effects, if any (which are carried in the "SimDBRes" variable), attempt
+   % to mirror such operation in the associated location controller, taking into account
+   % the situations where it or the JANET Simulator are not running
+   %
+   % The following 'try' block is structured so to return:
+   %
+   %  - SimDBRes          -> The result(s) of the JANET Simulator database operation (if
+   %                         the controller node or the JANET Simulator are not running)
+   %  - {SimDBRes|CtrRes} -> The result(s) of the JANET Simulator database operation
+   %                         concatenated in a tuple with the result of mirroring the
+   %                         database operation on the associated location controller
+   %                         (if both controller node and the JANET Simulator are running)
+   %
+   try gen_ctr_command(Loc_id,ctr_db,DBFun,CtrArgsList) of	
+    
+	% If a reply was received from the controller node, concatenate it
+	% with the result(s) of the database operation on the Simulator
+	CtrDBRes ->
+	 print_ctr_db_sync_result(SimDBRes,CtrDBRes)
+   catch
+   
+    % If the JANET Simulator is not running, just return the
+	% result(s) of the database operation on the Simulator
+    {error,janet_not_running} ->
+     SimDBRes; 
+ 
+    % If the assocaited controller is not running, just return
+	% the result(s) of the database operation on the Simulator
+    {error,node_stopped} ->
+     SimDBRes;
+
+    % If an error occured in attempting to mirror the operation in 
+	% the database of the associated controller, concatenate it
+	% with the result(s) of the database operation on the Simulator
+    CtrDBError ->
+	 print_ctr_db_sync_result(SimDBRes,CtrDBError)
+   end
+ end.
+
+%% Concatenates the result of a database operation in the JANET Simulator and the result of its mirroring in the
+%% associated location controller into a tuple (ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) helper function) 
+print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_atom(CtrDBRes) ->
+ {SimDBRes,CtrDBRes};
+print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_tuple(CtrDBRes) ->
+ list_to_tuple([SimDBRes] ++ [CtrDBRes]);
+print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_atom(CtrDBRes) ->
+ list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]);
+print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_tuple(CtrDBRes) ->
+ list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]).
+ 
 
 %%====================================================================================================================================
 %%                                        PRIVATE JANET NODES STOP AND RESTART HELPER FUNCTIONS

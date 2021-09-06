@@ -7,7 +7,7 @@
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_sublocation/1,add_device/3]).                                             % Create
 -export([print_tree/0,print_table/0,print_table/1,get_table_records/1,get_record/2]).  % Read
--export([update_dev_sub/2,update_dev_config/3]).                                       % Update
+-export([update_dev_subloc/2,update_dev_config/3]).                                    % Update
 -export([delete_sublocation/1,delete_device/1]).                                       % Delete
 
 %% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
@@ -354,7 +354,7 @@ get_record(_,_) ->
 %%               - {error,sublocation_not_exists} -> The sublocation 'subloc_id' does not exist
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-update_dev_sub(Dev_id,Subloc_id) when is_number(Dev_id), Dev_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+update_dev_subloc(Dev_id,Subloc_id) when is_number(Dev_id), Dev_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
  
       % Check the device to exist
@@ -399,7 +399,7 @@ update_dev_sub(Dev_id,Subloc_id) when is_number(Dev_id), Dev_id>0, is_number(Sub
      end,
  do_transaction(F);
 	 
-update_dev_sub(_,_) ->
+update_dev_subloc(_,_) ->
  {error,badarg}. 
  
  
