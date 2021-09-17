@@ -53,13 +53,38 @@ handle_continue(init,{booting,none}) ->
 %% ACTIONS:   Execute the required command via apply()
 %% ANSWER:    The result of the apply() function
 %% NEW STATE: -
-%% NEW STATE: -
 %%
 handle_call({ctr_command,Module,Function,ArgsList},{ReqPid,_},{State,MgrPid}) when State =/= booting andalso ReqPid =:= MgrPid ->
 
  % Execute the required command and return its result
- {reply,apply(Module,Function,ArgsList),{State,MgrPid}}.
+ {reply,apply(Module,Function,ArgsList),{State,MgrPid}};
 
+
+%% SIM_COMMAND
+%% -----------
+%% SENDER:    The controller's REST server [TODO]:
+%% WHEN:      A remote command is received requiring a function to be executed in the JANET Simulator
+%% PURPOSE:   Execute a command on the JANET Simulator via its 'ctr_manager' and return the result of the operation
+%% CONTENTS:  The Module, Function and ArgsList to be evaluated by the 'ctr_manager' via apply()
+%% MATCHES:   (always) (when the request comes from the JANET Controller node)
+%% ACTIONS:   Forward the command to the 'ctr_manager' via a synhcronous call and return its response
+%% ANSWER:    The answer of the 'ctr_manager', consisting in the result of the specified command
+%% NEW STATE: -
+%%
+handle_call({sim_command,Module,Function,ArgsList},{CommPid,_},{State,MgrPid}) when node(CommPid) =:= node() ->
+
+ % Forward the command to associated 'ctr_manager' in the JANET Simulator, waiting for its response up to a predefined timeout
+ Res = try gen_server:call(MgrPid,{sim_command,Module,Function,ArgsList},4800)
+ catch
+  exit:{timeout,_} ->
+  
+   % ctr_manager timeout
+   {error,sim_timeout}
+ end,
+ 
+ % Return the 'ctr_manager' response (or the timeout expiration)
+ {reply,Res,{State,MgrPid}}.
+ 
 
 %% ===================================================== HANDLE_CAST (STUB) ===================================================== %% 
 

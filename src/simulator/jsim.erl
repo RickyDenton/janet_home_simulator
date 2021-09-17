@@ -941,7 +941,7 @@ ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) ->
    end
  end.
 
-%% Concatenates the result of a database operation in the JANET Simulator and the result of its mirroring in the
+%% Concatenates the result of a database operation in the JANET Simulator with the result of its mirroring in the
 %% associated location controller into a tuple (ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) helper function) 
 print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_atom(CtrDBRes) ->
  {SimDBRes,CtrDBRes};

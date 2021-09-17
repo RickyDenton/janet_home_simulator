@@ -57,6 +57,7 @@ add_sublocation(_) ->
 %%               - Type:      The device's type (fan|light|door|thermostat|conditioner)
 %%
 %% RETURNS:      - ok                             -> The device was successfully added to the specified sublocation
+%%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
 %%               - {error,badarg}                 -> Invalid arguments

@@ -151,7 +151,26 @@ handle_call({ctr_command,_,_,_},{_,_},SrvState) ->
  % Reply that the controller is still booting
  {reply,{error,ctr_booting},SrvState};  
  
-  
+
+%% SIM_COMMAND
+%% -----------
+%% SENDER:    The associated controller node's simulation server (ctr_simserver)
+%% WHEN:      Following a command received via the REST interface
+%% PURPOSE:   Execute a command on the simulator node and return the result of the operation
+%% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()
+%% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Controller)
+%% ACTIONS:   Execute the required command via apply()
+%% ANSWER:    The result of the apply() function
+%% NEW STATE: -
+%%
+handle_call({sim_command,Module,Function,ArgsList},{ReqPid,_},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =/= none andalso
+                                                                             node(ReqPid) =:= node(SrvState#ctrmgrstate.ctr_srv_pid) ->
+ % Execute the required command and return its result
+ {reply,apply(Module,Function,ArgsList),SrvState};
+ 
+ 
+ 
+ 
 %% DEBUGGING PURPOSES [TODO]: REMOVE
 handle_call(_,{ReqPid,_},SrvState) ->
  io:format("[ctr_mgr-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#ctrmgrstate.loc_id,ReqPid]),
