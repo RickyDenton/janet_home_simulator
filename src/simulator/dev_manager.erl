@@ -31,26 +31,25 @@ init({Dev_id,Loc_id}) ->
  % Register the manager in the 'devmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
- % Return the server initial state, where the initialization of the device node will continue
- % in the "handle_continue(Continue,State)" callback function for parallelization purposes  
- {ok,#devmgrstate{dev_state = booting, dev_id = Dev_id, loc_id = Loc_id, _ = none},{continue,init}}.
+ % For parallelizing the device node's initialization as well as for preventing limit race conditions between its creation
+ % and deletion, retrieve its record from the database and use is as a bridge state between the "init({Dev_id,Loc_id})" and
+ % the "handle_continue(init,DeviceRecord)" callback function where the initialization will continue  
+ {ok,DeviceRecord} = db:get_record(device,Dev_id),
+ {ok,DeviceRecord,{continue,init}}.
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
 
 %% Initializes the device's node (called right after the 'init' callback function)
-handle_continue(init,SrvState) ->
+handle_continue(init,DeviceRecord) ->
  
  %% ---------------- Device Node Configuration Parameters Definition ---------------- %%
  
  % Retrieve the Dev_id and the Loc_id and convert them to strings
- Dev_id = SrvState#devmgrstate.dev_id,
- Loc_id = SrvState#devmgrstate.loc_id,
+ Dev_id     = DeviceRecord#device.dev_id,
+ {Loc_id,_} = DeviceRecord#device.sub_id,
  Dev_id_str = integer_to_list(Dev_id),
  Loc_id_str = integer_to_list(Loc_id),
- 
- % Retrieve the device record
- {ok,DeviceRecord} = db:get_record(device,Dev_id),
  
  % Retrieve the device's type and configuration
  Type = DeviceRecord#device.type,
@@ -73,9 +72,9 @@ handle_continue(init,SrvState) ->
  % Launch the Janet Device application on the controller node
  ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,self(),Type,Config]),
  
- % Set the 'dev_node' state variable and wait for the
- % registration request of the device's dev_server process
- {noreply,SrvState#devmgrstate{dev_node = Node}}.
+ % Set the proper initial 'dev_manager' gen_server state and wait
+ % for the registration request of the device's 'dev_server' process
+ {noreply,#devmgrstate{dev_state = booting, dev_node = Node, dev_id = Dev_id, loc_id = Loc_id, _ = none}}.
   
  
 %% ========================================================= HANDLE_CALL ========================================================= %% 
