@@ -1,0 +1,2 @@
+#!/bin/bash
+ERL_FLAGS="-sname janet-simulator@localhost -hidden -setcookie janet-simulator -mnesia dir '\"priv/db/mnesia.db\"' -run db start_mnesia" rebar3 shell

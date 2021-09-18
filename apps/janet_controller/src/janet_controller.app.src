@@ -1,0 +1,20 @@
+%% This is the resource file of the JANET Controller application %%
+
+{application,
+ janet_controller,				                     % Application Name
+ [
+  {description,"JANET Erlang Controller"},	         % Application Description
+  {vsn,"0.0.1"},							         % Application Version
+  {modules,[jctr,sup_jctr,sup_devhandlers,           % Application-specific Modules
+            ctr_pairserver,ctr_devhandler,
+			ctr_restserver,ctr_simserver,
+			ctr_db]},                 
+  {registered,[sup_devs,ctr_pairserver,              % Application Registered Names
+               ctr_simserver]},             
+  {applications,[mnesia,stdlib,kernel]},             % Application Dependencies
+  {mod,{jctr,[]}},                                   % Application Callback Module and Arguments([] = 'normal')
+
+  {licenses, ["Apache 2.0"]},                        % Licenses (added by Rebar3)
+  {links, []}                                        % Links    (added by Rebar3)
+ ]
+}.

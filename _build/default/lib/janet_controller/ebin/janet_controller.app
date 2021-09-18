@@ -1,0 +1,10 @@
+{application,janet_controller,
+             [{description,"JANET Erlang Controller"},
+              {vsn,"0.0.1"},
+              {modules,[ctr_db,ctr_devhandler,ctr_pairserver,ctr_restserver,
+                        ctr_simserver,jctr,sup_devhandlers,sup_jctr]},
+              {registered,[sup_devs,ctr_pairserver,ctr_simserver]},
+              {applications,[mnesia,stdlib,kernel]},
+              {mod,{jctr,[]}},
+              {licenses,["Apache 2.0"]},
+              {links,[]}]}.
