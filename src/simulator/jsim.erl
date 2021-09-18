@@ -1212,23 +1212,23 @@ change_locs_statuses([Loc_id|Next_LocId],MgrsErrors,Mode) ->
 
 % All stopped, no errors
 print_all_nodes_statuses_change_summary([],stop) ->
- io:format("All JANET nodes are now stopped~n");
+ io:format("All JANET nodes have been stopped~n");
 
 % All restarted, no errors
 print_all_nodes_statuses_change_summary([],restart) ->
- io:format("All JANET nodes are now running~n");
+ io:format("All JANET nodes have been restarted~n");
 
 % Some errors, the rest is stopped
 print_all_nodes_statuses_change_summary(MgrsErrors,stop) ->
  io:format("The following nodes raised an error in stopping:~n"),
  print_failed_mgrs_changes(MgrsErrors),
- io:format("The remaining nodes are now stopped~n");
+ io:format("The remaining nodes have being stopped~n");
 
 % Some errors, the rest is restarted
 print_all_nodes_statuses_change_summary(MgrsErrors,restart) ->
  io:format("The following nodes raised an error in restarting:~n"),
  print_failed_mgrs_changes(MgrsErrors),
- io:format("The remaining nodes are now running~n").
+ io:format("The remaining nodes have been restarted~n").
 
 
 %% ============================================ SHARED STOP/RESTART HELPER FUNCTIONS ============================================ %%
