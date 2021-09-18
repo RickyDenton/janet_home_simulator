@@ -31,23 +31,24 @@ init(Loc_id) ->
  % Register the manager in the 'ctrmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=Loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
- % For parallelizing the controller node's initialization as well as for preventing limit race conditions between its
- % creation and deletion, retrieve its record from the database and use is as a bridge state between the "init(Loc_id)" 
- % and the "handle_continue(init,LocationRecord)" callback function where the initialization will continue  
- {ok,LocationRecord} = db:get_record(location,Loc_id),
- {ok,LocationRecord,{continue,init}}.
+ % Return the server initial state, where the initialization of the controller node will continue
+ % in the "handle_continue(Continue,State)" callback function for parallelization purposes 
+ {ok,#ctrmgrstate{ctr_state=booting,ctr_node=none,ctr_srv_pid=none,loc_id=Loc_id},{continue,init}}.
  
 
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
   
 %% Initializes the controller's node (called right after the 'init' callback function)
-handle_continue(init,LocationRecord) ->
+handle_continue(init,SrvState) ->
  
  %% -------------- Controller Node Configuration Parameters Definition -------------- %%
  
  % Retrieve the Loc_id and convert it to string
- Loc_id = LocationRecord#location.loc_id,
+ Loc_id = SrvState#ctrmgrstate.loc_id,
  Loc_id_str = integer_to_list(Loc_id),
+ 
+ % Retrieve the location record
+ {ok,LocationRecord} = db:get_record(location,Loc_id),
  
  % Retrieve the location port to be used as 'rest_port' by the controller
  Loc_port = LocationRecord#location.port,
@@ -78,9 +79,9 @@ handle_continue(init,LocationRecord) ->
  % Launch the Janet Controller application on the controller node
  ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),Loc_port,RemoteHost]),
  
- % Set the proper initial 'dev_manager' gen_server state and wait for
- % the registration request of the controller's 'ctr_simserver' process
- {noreply,#ctrmgrstate{ctr_state = booting, ctr_node = Node, loc_id = Loc_id, _ = none}}.
+ % Set the ctr_node in the server state and wait for the
+ % registration request of the controller's 'ctr_simserver' process
+ {noreply,SrvState#ctrmgrstate{ctr_node = Node}}.
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %% 
