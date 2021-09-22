@@ -2,9 +2,21 @@
 -export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2]).
 -behaviour(gen_server).
 
+
+-export([init/2]).
+
+init(Req0, State) ->
+    Req = cowboy_req:reply(200,
+        #{<<"content-type">> => <<"text/plain">>},
+        <<"Hello Erlang!">>,
+        Req0),
+    {ok, Req, State}.
+
+
+
 init(_) ->
  io:format("[sim_restserver]: Initialized~n"),
- {ok,[]}.  % Initial State
+ {ok,[]}.  % Initial State	
 
 % STUB
 % NOTE: This is currently not called on shutdown since the process is not trapping exit signals

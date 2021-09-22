@@ -70,7 +70,7 @@ run(RestPort,RemoteHost) when is_number(RestPort), RestPort>=30000 ->
      %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
      application:start(janet_simulator);
 	 
-	Error ->
+	_ ->
      % Otherwise notify that the JANET Simulator cannot be started
      io:format("The JANET Simulator cannot be started~n")
    end
@@ -1694,6 +1694,12 @@ gen_dev_command(Dev_id,Module,Function,ArgsList) ->
 
 %% Starts the JANET Simulator
 start(normal,_Args) ->
+
+ % Cowboy
+ application:start(ranch),
+ Dispatch = cowboy_router:compile([{'_', [{"/",sim_restserver, []}]}]),
+ {ok,_} = cowboy:start_clear(my_http_listener,[{port, 45678}],#{env => #{dispatch => Dispatch}}),
+	
  sup_jsim:start_link().
  
 %% Called once the JANET Simulator has been stopped
