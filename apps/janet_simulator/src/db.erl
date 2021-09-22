@@ -2,7 +2,7 @@
 
 -module(db).
 
--include("include/sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
+-include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).                                                    % Create
@@ -1457,27 +1457,27 @@ delete_devmanager(Dev_id) ->
 start_mnesia() ->
  
  % Check if Mnesia is already running
- case utils:is_running(mnesia) of
+ MnesiaStarted = case utils:is_running(mnesia) of
   
   false ->
    
    % If not, attempt to start it
-   MnesiaStarted = application:start(mnesia),
-   case MnesiaStarted of
+   case application:start(mnesia) of
 	
     % If successfully started, do nothing
-	ok ->
+	  ok ->
      ok;
 	
     % Otherwise, report the error
     {error,Reason} ->
-     io:format("Error in starting Mnesia (reason = ~w) (is the Mnesia scheme installed?...)~n",[Reason])
+     io:format("Error in starting Mnesia (reason = ~w) (is the Mnesia scheme installed?...)~n",[Reason]),
+      {error,Reason}
    end;	
 	
   true ->
 
    % If already started, set the variable
-   MnesiaStarted = ok
+   ok
  end,
  
  case MnesiaStarted of

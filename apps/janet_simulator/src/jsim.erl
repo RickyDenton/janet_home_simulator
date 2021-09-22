@@ -29,7 +29,7 @@
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
 
--include("include/sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
+-include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %%====================================================================================================================================
 %%                                                  JANET SIMULATOR RUN AND STOP                                                       
@@ -1167,13 +1167,13 @@ change_locs_statuses([Loc_id|Next_LocId],MgrsErrors,Mode) ->
  CtrMgrStatus = catch(change_ctr_status(Loc_id,Sup_pid,Mode)),  
    
  % If changing the controller's manager status resulted in an error, append it into "MgrsErrors"
- case CtrMgrStatus of
+ MgrsErrorsWithCtr = case CtrMgrStatus of
  
   {error,{internal,_}} ->
-   MgrsErrorsWithCtr = lists:append(MgrsErrors,[{CtrMgrStatus,utils:prefix_node_id(controller,Loc_id)}]);
+   lists:append(MgrsErrors,[{CtrMgrStatus,utils:prefix_node_id(controller,Loc_id)}]);
    
   _ ->
-   MgrsErrorsWithCtr = MgrsErrors
+   MgrsErrors
  end,
   
  % Retrieve the list of devices in the location

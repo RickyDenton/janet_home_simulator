@@ -5,7 +5,7 @@
 
 -export([start_link/2,callback_mode/0,init/1,handle_event/4]). % gen_statem Behaviour Callback Functions
 
--include("include/devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
+-include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %% ------------------------- Inactivity Update Constants ------------------------- %%
 

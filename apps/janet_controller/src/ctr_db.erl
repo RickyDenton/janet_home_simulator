@@ -2,7 +2,7 @@
 
 -module(ctr_db).
 
--include("include/ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
+-include("ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
 -export([add_sublocation/1,add_device/3]).                                             % Create

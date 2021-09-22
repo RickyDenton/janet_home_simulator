@@ -5,7 +5,7 @@
 
 -export([start_link/2,init/1,terminate/2,handle_call/3,handle_cast/2,handle_info/2]).  % gen_server Behaviour Callback Functions
 
--include("include/ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
+-include("ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
 
 %% This record represents the state of a 'ctr_devhandler' gen_server (which is constant)
 -record(devhandlerstate,    

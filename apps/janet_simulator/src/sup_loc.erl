@@ -6,7 +6,7 @@
 -export([init/1]).              % Supervisor Behaviour Callback Function
 -export([start_link/1]).        % Start Function
 
--include("include/sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
+-include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %%====================================================================================================================================
 %%                                                SUPERVISOR INIT CALLBACK FUNCTION                                                        

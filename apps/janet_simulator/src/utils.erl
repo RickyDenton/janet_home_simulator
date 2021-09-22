@@ -7,7 +7,7 @@
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                  % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1,str_to_atom/1,sign/1]).		              % Other Utility Functions
 
--include("include/devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
+-include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %%====================================================================================================================================
 %%                                                    DEVICES UTILITY FUNCTIONS

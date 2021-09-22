@@ -5,7 +5,7 @@
 -export([loc_devs_init/2]).     % Process Body
 -export([spawn_link/2]).        % Start Function (spawn_link/2 instead of start_link/1 because this is no OTP Behaviour callback module)
  
--include("include/sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
+-include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %%====================================================================================================================================
 %%                                                         PROCESS BODY                                                        
