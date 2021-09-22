@@ -1447,66 +1447,55 @@ delete_devmanager(Dev_id) ->
 %% ARGUMENTS:    none 
 %%
 %% RETURNS:      - ok                  -> Mnesia started and disc_copies tables successfully loaded
-%%               - {timeout,[table()]} -> Timeout in loading the Mnesia Tables (probably the schema is not installed)
-%%               - {error,Reason}      -> Internal Mnesia error
+%%               - {timeout,[table()]} -> Timeout in loading the Mnesia Tables (probably a wrong schema is installed)
+%%               - {error,Reason}      -> Internal Mnesia error (probably the schema is not installed)
 %%
 %% NOTES:        1) If Mnesia is already running, the function returns 'ok'
 %%               2) This function is for debugging purposes olny, and should not be called explicitly during the JANET Simulator operations
-%%               3) This function is called on the JANET Simulator node at boot by the 'init' process so to automatically start Mnesia
 %%
 start_mnesia() ->
  
  % Check if Mnesia is already running
  MnesiaStarted = case utils:is_running(mnesia) of
   
+  % If not, attempt to start it
   false ->
+   application:start(mnesia);
    
-   % If not, attempt to start it
-   case application:start(mnesia) of
-	
-    % If successfully started, do nothing
-	  ok ->
-     ok;
-	
-    % Otherwise, report the error
-    {error,Reason} ->
-     io:format("Error in starting Mnesia (reason = ~w) (is the Mnesia scheme installed?...)~n",[Reason]),
-      {error,Reason}
-   end;	
-	
+  
+  % If already started, do nothing 
   true ->
-
-   % If already started, set the variable
    ok
  end,
  
- case MnesiaStarted of
+ % Ensure Mnesia to be now running
+ case MnesiaStarted of 
   ok ->
-   % If Mnesia is running, wait for its disc_copies tables to be loaded from disc
-   TablesLoaded = mnesia:wait_for_tables([location,sublocation,device],4000),
-   case TablesLoaded of
-   
-    % If the tables were successfully loaded, do nothing
-	ok ->
-	 ok;
-	 
-	% If timeout in loading the tables, report the error
-    {timeout,TableList} ->
-	 io:format("Timeout in loading the Mnesia tables ~w (is the Mnesia scheme installed?...)~n",[TableList]);
+  
+   % If it is, wait for its disc_copies tables to be loaded from disc
+   case mnesia:wait_for_tables([location,sublocation,device],4000) of
+    ok ->
 	
-    % If other error in loading the tables, report the error
+	 % If the tables were successfully loaded, return 'ok'
+	 ok;
+	
+	% If the tables couldn't be loaded due to a timeout, notify the error
+    {timeout,TableList} ->
+	 io:format("<FATAL> Timeout in loading the Mnesia tables ~w (is the correct Mnesia scheme installed?...)~n",[TableList]),
+	 {timeout,TableList};
+	 
+	% If the tables couldn't be loaded due to another error, notify it
     {error,LoadReason} ->
-	 io:format("Error in loading the Mnesia tables (reason = ~w) (is the Mnesia scheme installed?...)~n",[LoadReason])	
-   end,
+	 io:format("<FATAL> Error in loading the Mnesia tables (reason = ~w)~n",[LoadReason]),
+     {error,LoadReason}	 
+   end;
    
-   % Return the TablesLoaded variable
-   TablesLoaded;
-    
-  _ ->
-   % Otherwise, if Mnesia is not running, report its starting error
-   MnesiaStarted
+  % Otherwise, notify the error in starting Mnesia
+  {error,Reason} ->
+   io:format("<FATAL> Error in starting Mnesia (reason = ~w) (is the Mnesia scheme installed?...)~n"),
+   {error,Reason}
  end.
-
+ 
 
 %% DESCRIPTION:  Stops the Mnesia application
 %%
@@ -1533,14 +1522,14 @@ stop_mnesia() ->
 
   % If another error occured, report it
   {error,Reason} ->
-   io:format("[Janet-Simulator]: Error in stopping the Mnesia application (reason = ~w)~n",[Reason]),
+   io:format("<FATAL> Error in stopping the Mnesia application (reason = ~w)~n",[Reason]),
    {error,Reason}
  end.
  
  
 %% DESCRIPTION:  Backups the entire Mnesia database to a file
 %%
-%% ARGUMENTS:    - (none): The default backup file is used ("priv/db/mnesia_backup.db")
+%% ARGUMENTS:    - (none): The default backup file is used ("db/mnesia_backup.db")
 %%               - (File): A custom backup file is used
 %%
 %% RETURNS:      - ok             -> Mnesia database successfully backed up to the specified file
@@ -1550,7 +1539,7 @@ stop_mnesia() ->
 %% NOTE:         Mnesia backups can later be restored using the restore()/restore(File) function
 %% 
 backup() ->
- backup("priv/db/mnesia_backup.db").  % Default backup file
+ backup("db/mnesia_backup.db").  % Default backup file
  
 backup(File) ->
 
@@ -1574,7 +1563,7 @@ backup(File) ->
 
 %% DESCRIPTION:  Restores the database to the contents of a backup file
 %%
-%% ARGUMENTS:    - (none): The default backup file is used for restoring the database ("priv/db/mnesia_backup.db")
+%% ARGUMENTS:    - (none): The default backup file is used for restoring the database ("db/mnesia_backup.db")
 %%               - (File): A custom backup file is used
 %%
 %% RETURNS:      - ok                       -> Database successfully restored to the contents of the specified backup file
@@ -1587,7 +1576,7 @@ backup(File) ->
 %%               2) Database backup files can be created via the db:backup()/db:backup(File) function
 %%
 restore() ->
- restore("priv/db/mnesia_backup.db").
+ restore("db/mnesia_backup.db").
  
 restore(File) ->
 

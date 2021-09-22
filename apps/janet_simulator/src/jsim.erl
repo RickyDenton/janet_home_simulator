@@ -70,10 +70,9 @@ run(RestPort,RemoteHost) when is_number(RestPort), RestPort>=30000 ->
      %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
      application:start(janet_simulator);
 	 
-	{error,_} ->
+	Error ->
      % Otherwise notify that the JANET Simulator cannot be started
-     io:format("Mnesia is required for running the JANET Simulator~n")
-	 
+     io:format("The JANET Simulator cannot be started~n")
    end
  end;
 

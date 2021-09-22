@@ -1,1 +1,0 @@
-application:set_env(mnesia,dir,'priv/db/mnesia.db').
