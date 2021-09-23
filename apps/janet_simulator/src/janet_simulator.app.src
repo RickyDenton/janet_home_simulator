@@ -5,7 +5,7 @@
  [
   {description,"JANET Erlang Simulator"},	% Application Description
   {vsn,"0.0.1"},							% Application Version
-  {modules,[jsim,sup_jsim,sim_restserver,   % Application-specific Modules
+  {modules,[jsim,sup_jsim,sim_resthandler,  % Application-specific Modules
             db,utils,sup_locs,sup_loc,
 			locs_init,loc_devs_init,
 			ctr_manager,dev_manager]},

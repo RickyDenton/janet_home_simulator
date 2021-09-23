@@ -13,7 +13,7 @@
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).                                           % Delete
 
 %% ------------------------------------ PUBLIC UTILITY FUNCTIONS ------------------------------------ %%
--export([start_mnesia/0,stop_mnesia/0,backup/0,backup/1,restore/0,restore/1,clear/0,install/0]). 
+-export([start_check_mnesia/0,stop_mnesia/0,backup/0,backup/1,restore/0,restore/1,clear/0,install/0]). 
 
 
 %%====================================================================================================================================
@@ -1442,18 +1442,17 @@ delete_devmanager(Dev_id) ->
 %%                                                    PUBLIC UTILITY FUNCTIONS
 %%==================================================================================================================================== 
 
-%% DESCRIPTION:  Starts the Mnesia application and waits for its disc_copies tables (location,sublocation,device) to be loaded from disc
+%% DESCRIPTION:  Ensure the Mnesia application to be started and for the disc_copies tables required
+%%               by the JANET Simulator application (location,sublocation,device) to be loaded
+%%               (called during the bootstrap of the JANET Simulator application)
 %%
 %% ARGUMENTS:    none 
 %%
-%% RETURNS:      - ok                  -> Mnesia started and disc_copies tables successfully loaded
-%%               - {timeout,[table()]} -> Timeout in loading the Mnesia Tables (probably a wrong schema is installed)
-%%               - {error,Reason}      -> Internal Mnesia error (probably the schema is not installed)
+%% RETURNS:      - ok                     -> Mnesia started and disc_copies tables successfully loaded
+%%               - {error,tables_timeout} -> Timeout in loading the Mnesia Tables (probably a wrong schema is installed)
+%%               - {error,Reason}         -> Internal Mnesia error (probably the schema is not installed)
 %%
-%% NOTES:        1) If Mnesia is already running, the function returns 'ok'
-%%               2) This function is for debugging purposes olny, and should not be called explicitly during the JANET Simulator operations
-%%
-start_mnesia() ->
+start_check_mnesia() ->
  
  % Check if Mnesia is already running
  MnesiaStarted = case utils:is_running(mnesia) of
@@ -1482,7 +1481,7 @@ start_mnesia() ->
 	% If the tables couldn't be loaded due to a timeout, notify the error
     {timeout,TableList} ->
 	 io:format("<FATAL> Timeout in loading the Mnesia tables ~w (is the correct Mnesia scheme installed?...)~n",[TableList]),
-	 {timeout,TableList};
+	 {error,tables_timeout};
 	 
 	% If the tables couldn't be loaded due to another error, notify it
     {error,LoadReason} ->
@@ -1532,36 +1531,48 @@ stop_mnesia() ->
 %% ARGUMENTS:    - (none): The default backup file is used ("db/mnesia_backup.db")
 %%               - (File): A custom backup file is used
 %%
-%% RETURNS:      - ok             -> Mnesia database successfully backed up to the specified file
-%%               - {error,Reason} -> Error in creating the backup file (its directory must exist
-%%                                   and its 'write' permission must be granted)
+%% RETURNS:      - ok                    -> Mnesia database successfully backed up to the specified file
+%%               - {file_error,Reason}   -> Error in creating the backup file (its directory must
+%%                                          exist and its 'write' permission must be granted)
+%%               - {mnesia_error,Reason} -> The Mnesia database is not in a consistent state
+%%                                          (probably a wrong or no schema is installed)
 %% 
-%% NOTE:         Mnesia backups can later be restored using the restore()/restore(File) function
+%% NOTE:         Mnesia backups can be restored using the restore()/restore(File) function
 %% 
 backup() ->
  backup("db/mnesia_backup.db").  % Default backup file
  
 backup(File) ->
 
- % Ensure Mnesia to be running
- ok = start_mnesia(),
-
- % Attempt to backup the database contents to the specified file
- BackupResult = mnesia:backup(File),
- case BackupResult of
+ % Ensure Mnesia to be running and in a consistent state
+ case start_check_mnesia() of
  
-  % If the backup was successful, notify it
   ok ->
-   io:format("Mnesia database backed up to file \"~s\"~n",[File]);
+  
+   % If Mnesia is in a consistent state, attempt to backup its contents to the specified file
+   case mnesia:backup(File) of
    
-  % Otherwise, report the error
-  _ ->
-   io:format("Error in creating the backup file \"~s\" (check its directory to exist and its permissions)~n",[File]),
-   BackupResult
+    ok -> 
+
+     % If the backup was successful, notify it
+	 io:format("Mnesia database successfully backed up to file \"~s\"~n",[File]);
+
+    {error,Reason} ->
+	
+	 % Otherwise, notify the error
+     io:format("<WARNING> Error in creating the backup file \"~s\" (check the directory to exist and its 'write' permission to be granted)~n",[File]),
+     {file_error,Reason}
+   end;
+   
+  {error,Reason} ->
+  
+    % If the Mnesia database is NOT in a consistent state, abort the backup
+	io:format("The Mnesia database is not in a consistent state, the backup cannot be created~n"),
+	{mnesia_error,Reason}
  end.
 
 
-%% DESCRIPTION:  Restores the database to the contents of a backup file
+%% DESCRIPTION:  Restores the Mnesia database to the contents of a backup file
 %%
 %% ARGUMENTS:    - (none): The default backup file is used for restoring the database ("db/mnesia_backup.db")
 %%               - (File): A custom backup file is used
@@ -1569,8 +1580,10 @@ backup(File) ->
 %% RETURNS:      - ok                       -> Database successfully restored to the contents of the specified backup file
 %%               - aborted                  -> The user aborted the operation
 %%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
-%%               - {error,Reason}           -> Error in restoring the database from the backup file
-%%                                             (check the file to exist and its read permission to be granted)
+%%               - {file_error,Reason}      -> Error in restoring the database from the backup file
+%%                                             (check the file to exist and its 'read' permission to be granted)
+%%               - {mnesia_error,Reason}    -> The Mnesia database is not in a consistent state
+%%                                             (probably a wrong or no schema is installed)
 %%
 %% NOTES:        1) The current database contents will be DISCARDED by calling this function
 %%               2) Database backup files can be created via the db:backup()/db:backup(File) function
@@ -1581,31 +1594,40 @@ restore() ->
 restore(File) ->
 
  % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
- CheckOp = check_db_operation("Restoring"),
- case CheckOp of
+ case check_db_operation("Restoring") of
    
   % If the user confirmed the operation
   ok ->
   
-   % Ensure Mnesia to be running
-   ok = start_mnesia(),
-   
-   % Attempt to restore the database to the contents of the specified file
-   RestoreDBResult = mnesia:restore(File,[{default_op,recreate_tables}]),
-   case RestoreDBResult of
-    
-	% If the restoring was successful, notify it
-	{atomic, _} ->
-	 io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[File]);
+   % Ensure Mnesia to be running and in a consistent state
+   case start_check_mnesia() of
+    ok ->
 	
-	% Otherwise return the error
-	_ ->
-	 RestoreDBResult
+     % If it is, attempt to restore its tables to the contents of the specified file 
+	 case mnesia:restore(File,[{default_op,recreate_tables}]) of
+	 
+	  {atomic,_} ->
+	  
+	   % If the restoring was successful, notify it
+	   io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[File]);
+	   
+      {aborted,Reason} ->
+	  
+	   % If an error occured while restoring, notify it
+	   io:format("<FATAL> Error in restoring the Mnesia database (reason = ~w)~n",[Reason]),
+	   {file_error,Reason}
+	 end;
+	 
+    {error,Reason} ->
+  
+      % If the Mnesia database is NOT in a consistent state, abort the restore
+	  io:format("The Mnesia database is not in a consistent state, its contents cannot be restored~n"),
+	  {mnesia_error,Reason}
    end;
-
-  % Otherwise return CheckOp
-  _ ->
-   CheckOp
+   
+  % Otherwise, return the result of the check_db_operation()
+  CheckDBOperation ->
+   CheckDBOperation
  end.
 
 
@@ -1616,6 +1638,8 @@ restore(File) ->
 %% RETURNS:      - ok                       -> Database tables successfully cleared
 %%               - aborted                  -> The user aborted the operation
 %%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
+%%               - {mnesia_error,Reason}    -> The Mnesia database is not in a consistent state
+%%                                             (probably a wrong or no schema is installed)
 %%
 %% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
 %%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
@@ -1623,31 +1647,37 @@ restore(File) ->
 clear() ->
 
  % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
- CheckOp = check_db_operation("Clearing"),
-
- case CheckOp of
+ case check_db_operation("Clearing") of
  
   % If the user confirmed the operation
   ok ->
   
-   % Ensure Mnesia to be running
-   ok = start_mnesia(),
-   
-   % Clear all Mnesia tables and report the operation
-   [{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok}] =
-	[mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device),
-	 mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
+   % Ensure Mnesia to be running and in a consistent state
+   case start_check_mnesia() of
+    ok ->   
+	
+     % If Mnesia is in a consistent state, clear all its tables
+     [{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok}] =
+	  [mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device),
+	   mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
      
-   % Return the result of the operation
-   io:format("Mnesia tables successfully cleared~n");
+     % Return the result of the operation
+     io:format("Mnesia tables successfully cleared~n");
 	 
-  % Otherwise return CheckOp
-  _ ->
-   CheckOp
+	{error,Reason} ->
+	
+	 % If Mnesia is NOT in a consistent state, its tables cannot be cleared
+	 io:format("The Mnesia database is not in a consistent state, its tables cannot be cleared~n"),
+	 {mnesia_error,Reason}
+   end;
+	  
+  % Otherwise, return the result of the check_db_operation()
+  CheckDBOperation ->
+   CheckDBOperation
  end.
  
  
-%% DESCRIPTION:  Installs from scratch (schema + tables) the Mnesia database used by the Janet Simulator
+%% DESCRIPTION:  Installs from scratch the Mnesia database used by the Janet Simulator (schema + tables) 
 %%
 %% ARGUMENTS:    none
 %%
@@ -1661,9 +1691,7 @@ clear() ->
 install() ->
 
  % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
- CheckOp = check_db_operation("Installing"),
-
- case CheckOp of
+ case check_db_operation("Installing") of
   
   % If the user confirmed the operation
   ok ->
@@ -1671,12 +1699,14 @@ install() ->
    % Ensure the Mnesia database not to be running
    ok = stop_mnesia(),
 	 
-   % Recreate the Mnesia Schema
+   % Recreate the Mnesia schema
    ok = mnesia:delete_schema([node()]),
    ok = mnesia:create_schema([node()]),
    
-   % Start Mnesia and create its tables 
+   % Start Mnesia
    ok = application:start(mnesia),
+   
+   % Create the Mnesia tables used by the JANET Simulator application
 	 
    %% ---------------------------- disc_copies tables ---------------------------- %%   
    {atomic,ok} = mnesia:create_table(location,
@@ -1722,9 +1752,9 @@ install() ->
    % Report the result of the operation		
    io:format("Mnesia database successfully installed~n");
  
-  % Otherwise return CheckOp
-  _ ->
-   CheckOp
+  % Otherwise, return the result of the check_db_operation()
+  CheckDBOperation ->
+   CheckDBOperation
  end.
 
  

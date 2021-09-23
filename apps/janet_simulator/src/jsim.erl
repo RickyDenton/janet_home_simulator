@@ -35,19 +35,40 @@
 %%                                                  JANET SIMULATOR RUN AND STOP                                                       
 %%====================================================================================================================================
 
-%% DESCRIPTION:  Prepares the configuration parameters and starts the JANET Simulator application
+%% DESCRIPTION:  Attempts to start the JANET Simulator application with the default environment parameters:
+%%                 - rest_port   -> 45678
+%%                 - remote_host -> "janethome.zapto.org"
 %%
-%% ARGUMENTS:    - RestPort:   The port that will be used by the JANET Simulator for binding its REST server on the host OS
-%%                             (must be >=30000 for preventing port allocation conflicts)
-%%               - RemoteHost: The IP address of the host where JANET controllers will forward state updates
-%%               - ():         A default RestPort and RemoteHost are used (testing purposes olny) 
+%% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok                      -> JANET Simulator succesfully started
-%%               - {error,already_running} -> The janet_simulator application is already running on the node
-%%               - {error,Reason}          -> Internal error in starting the application
-%%               - {error,badarg}          -> Invalid arguments
+%% RETURNS:      - ok                         -> JANET Simulator succesfully started
+%%               - {error,already_running}    -> The janet_simulator application is already running on the node
+%%               - {error,mnesia_init_failed} -> The Janet Simulator cannot be started due to an invalid Mnesia configuration
+%%               - {error,Reason}             -> Internal error in starting the application
+%%               - {error,badarg}             -> Invalid arguments
 %%
-run(RestPort,RemoteHost) when is_number(RestPort), RestPort>=30000 ->
+run() ->
+ 
+ % Retrieve the default values of the 'rest_port' and 'remote_host' environment parameters
+ {ok,RESTPort} = application:get_env(janet_simulator,default_rest_port),
+ {ok,RemoteHost} = application:get_env(janet_simulator,default_remote_host),
+ 
+ % Attempt to start the JANET Simulator with the default parameters
+ run(RESTPort,RemoteHost).
+ 
+
+%% DESCRIPTION:  Sets the 'rest_port' and 'remote_host' enviroment parameters and attempts to start the JANET Simulator application
+%%
+%% ARGUMENTS:    - RESTPort:   The port to be used by the JANET Simulator REST Server (>= 30000 for preventing port allocation conflicts)
+%%               - RemoteHost: The remote host from which accept REST requests
+%%
+%% RETURNS:      - ok                         -> JANET Simulator succesfully started
+%%               - {error,already_running}    -> The janet_simulator application is already running on the node
+%%               - {error,mnesia_init_failed} -> The Janet Simulator cannot be started due to an invalid Mnesia configuration
+%%               - {error,Reason}             -> Internal error in starting the application
+%%               - {error,badarg}             -> Invalid arguments
+%%
+run(RESTPort,RemoteHost) when is_number(RESTPort), RESTPort >= 30000 ->
 
  % Check if the JANET Simulator is already running
  case utils:is_running(janet_simulator) of
@@ -57,36 +78,40 @@ run(RestPort,RemoteHost) when is_number(RestPort), RestPort>=30000 ->
    {error,already_running};
    
   false ->
-  
-   % Otherwise, initialize the JANET Simulator configuration parameters as for the arguments
-   application:set_env(janet_simulator,rest_port,RestPort),
-   application:set_env(janet_simulator,remotehost,RemoteHost),
    
-   % Ensure the Mnesia database to be running
-   case db:start_mnesia() of
+   % If it is not, ensure the Mnesia database to be running and for the disc_copies tables
+   % required by the JANET Simulator application (location,sublocation,device) to be loaded
+   case db:start_check_mnesia() of
  
     ok ->
-     % If Mnesia is running, start the JANET Simulator and its tables
-     %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
+     
+	 % If Mnesia is in a consistent state, set the 'rest_port' and
+	 % 'remote_host' environment parameters of the JANET Simulator application
+	 application:set_env(janet_simulator,rest_port,RESTPort),
+     application:set_env(janet_simulator,remote_host,RemoteHost),
+	 
+	 %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
+     
+	 % Attempt to start the JANET Simulator application
      application:start(janet_simulator);
 	 
-	_ ->
-     % Otherwise notify that the JANET Simulator cannot be started
-     io:format("The JANET Simulator cannot be started~n")
+    _ ->
+   
+     % If Mnesia is NOT in a consistent state, the JANET Simulator cannot be started
+	 io:format("The Mnesia database is not in a consistent state, the JANET Simulator cannot be started~n"),
+     {error,mnesia_init_failed}
    end
  end;
 
-%% Invalid function invocations (print help messages)
-run(RestPort,_) when is_number(RestPort) ->
- io:format("Please use a port of value >= 30000 for the Simulator rest server for preventing port allocation conflicts on the host OS~n"),
+%% A RESTPort < 30000 was passed (print help message)
+run(RESTPort,_) when is_number(RESTPort) ->
+ io:format("Please use a RESTPort >= 30000 for reducing the chance of port allocation conflicts on the host OS~n"),
  {error,badarg};
-run(_,_) ->
- io:format("usage: run(RestPort,RemoteHost) (Port >= 30000)~n"),
- {error,badarg}.
  
-%% Start the JANET Simulator with the default configuration (testing purposes olny) 
-run() ->
- run(55555,"somehost.com:1240").
+%% A non-number RESTPort was passed (print help message) 
+run(_,_) ->
+ io:format("usage: run(RESTPort,RemoteHost) (RESTPort >= 30000)~n"),
+ {error,badarg}.
 
 
 %% DESCRIPTION:  Stops the JANET Simulator
@@ -109,22 +134,25 @@ stop() ->
   true ->
   
    % Otherwise, attempt to stop the JANET Simulator
-   StopSimStatus = application:stop(janet_simulator),
-   case StopSimStatus of
+   case application:stop(janet_simulator) of
     ok ->
 	 
 	 % If stopped, clear all Mnesia ram_copies tables and report the operation
      [{atomic,ok},{atomic,ok},{atomic,ok}] = 
 	  [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
-	 timer:sleep(5),                            %% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
+   
+	 %% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
+	 timer:sleep(5),                            
+	 
+	 % Inform that the JANET Simulator has successfully stopped
      io:format("Janet Simulator stopped~n");
 	 
 	{error,Reason} ->
 	 
 	 % Otherwise, notify the error
-     io:format("Error in stopping the Janet Simulator (reason = ~w)~n",[Reason])
-   end,
-   StopSimStatus
+     io:format("<FATAL> Error in stopping the Janet Simulator (reason = ~w)~n",[Reason]),
+	 {error,Reason}
+   end
  end.
 
 
@@ -140,7 +168,7 @@ shutdown() ->
  stop(),
  
  % Shut down the node
- init:stop("shutdown").
+ init:stop().
 
 
 %%====================================================================================================================================
@@ -1694,12 +1722,6 @@ gen_dev_command(Dev_id,Module,Function,ArgsList) ->
 
 %% Starts the JANET Simulator
 start(normal,_Args) ->
-
- % Cowboy
- application:start(ranch),
- Dispatch = cowboy_router:compile([{'_', [{"/",sim_restserver, []}]}]),
- {ok,_} = cowboy:start_clear(my_http_listener,[{port, 45678}],#{env => #{dispatch => Dispatch}}),
-	
  sup_jsim:start_link().
  
 %% Called once the JANET Simulator has been stopped

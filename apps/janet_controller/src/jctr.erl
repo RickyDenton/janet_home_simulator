@@ -39,7 +39,7 @@ run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RestPort,RemoteHost) when is_num
    application:set_env(janet_controller,loc_id,Loc_id),
    application:set_env(janet_controller,mgr_pid,MgrPid),
    application:set_env(janet_controller,rest_port,RestPort),
-   application:set_env(janet_controller,remotehost,RemoteHost),
+   application:set_env(janet_controller,remote_host,RemoteHost),
    
    % Start Mnesia in disc-less and permanent mode and initialize
    % the tables used by the JANET Controller application

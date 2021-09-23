@@ -56,8 +56,8 @@ handle_continue(init,SrvState) ->
  % Derive the initial contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
  {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
- % Retrieve the 'remotehost' environment variable
- {ok,RemoteHost} = application:get_env(remotehost),
+ % Retrieve the 'remote_host' environment variable
+ {ok,RemoteHost} = application:get_env(remote_host),
  
  %% ---------------------------- Controller Node Creation ---------------------------- %% 
  

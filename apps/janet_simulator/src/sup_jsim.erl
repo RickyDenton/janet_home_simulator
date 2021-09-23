@@ -21,16 +21,6 @@ init(_) ->
 
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%
    [   
-    %% ------------- The Janet Simulator's REST server (sim_restserver) ------------- %%
-    {
-     sim_restserver,		            % ChildID
-     {sim_restserver,start_link,[]},    % Child Start Function
- 	 permanent,                         % Child Restart Policy 
-	 5000,                              % Child Sub-tree Max Shutdown Time
-	 worker,                  	        % Child Type
-	 [sim_restserver]                   % Child Modules (For Release Handling Purposes)
-    },
-  
     %% ---------------- The locations' tree top supervisor (sup_locs) ---------------- %%
     {
      sup_locs,                          % ChildID
@@ -49,6 +39,16 @@ init(_) ->
 	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [locs_init]                        % Child Modules (For Release Handling Purposes)
+    },
+	
+	%% ------------ The Janet Simulator's REST handler (sim_resthandler) ------------ %%
+    {
+     sim_resthandler,		            % ChildID
+     {sim_resthandler,start_link,[]},   % Child Start Function
+ 	 permanent,                         % Child Restart Policy 
+	 5000,                              % Child Sub-tree Max Shutdown Time
+	 worker,                  	        % Child Type
+	 [sim_resthandler]                  % Child Modules (For Release Handling Purposes)
     }
    ] 
   }
