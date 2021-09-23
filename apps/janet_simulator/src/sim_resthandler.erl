@@ -23,15 +23,64 @@ init(_) ->
  % Trap exit signals so to allow cleanup operations when terminating (terminate(Reason,SrvState) callback function)
  process_flag(trap_exit,true),
  
- % Retrieve the 'rest_port' and 'remotehost' environment variables
+ % Retrieve the 'rest_port' and 'remote_host' environment variables
  {ok,RESTPort} = application:get_env(rest_port),
  {ok,RemoteHost} = application:get_env(remote_host),
  
+ % Start the Ranch TCP acceptor required by the Cowboy REST server
+ application:start(ranch),
+
+
+
+ Greater0 =
+ fun 
+  (forward,X) when X > 0 ->
+   {ok,X};
+  (forward,_) ->
+   {error,non_greater_zero};
+  (format_error,{non_greater_zero,X})  ->
+   io_lib:format("~p is not > 0", [X])
+ end,
+
+ GreaterEqual0 =
+ fun 
+  (forward,X) when X >= 0 ->
+   {ok,X};
+  (forward,_) ->
+   {error,non_greater_equal_zero};
+  (format_error,{non_greater_equal_zero,X})  ->
+   io_lib:format("~p is not >= 0", [X])
+ end,
+
+
+ % Initialize the list of resource paths accepted by Cowboy as of the JANET Simulator REST interface
+ %
+ % Paths = [{Path,Constraints,CallbackModule,InitialState}]        
+ %
+ Paths = [
+          % add_location(), update_loc_name(), delete_location()
+          {"/location/:loc_id",[{loc_id,[int,Greater0]}],?MODULE,[]},						
+			 
+	      % update_subloc_name()
+		  {"/location/:loc_id/sublocation/:subloc:id",[{loc_id,[int,Greater0]},{subloc_id,[int,GreaterEqual0]}],?MODULE,[]},
+			 
+		  % update_dev_name()
+		  {"/device/:dev_id",[{dev_id,[int,Greater0]}],?MODULE,[]}
+	     ],
+			 
+ % Initialize the list of Cowboy routes by merging the list of resource
+ % paths with the list of accepted hosts (the RemoteHost and localhost)
+ Routes = [{"localhost",Paths},{RemoteHost,Paths}],
+ 
+ % Compile the Cowboy Routes
+ CompiledRoutes = cowboy_router:compile(Routes),
+ 
+   
+   
    
  % Cowboy
- application:start(ranch),
- Dispatch = cowboy_router:compile([{'_', [{"/",sim_resthandler, []}]}]),
- {ok,_} = cowboy:start_clear(sim_restserver,[{port, 45678}],#{env => #{dispatch => Dispatch}}),
+ %Dispatch = cowboy_router:compile([ {'_', [{"/",sim_resthandler, []}]} ]),
+ {ok,_} = cowboy:start_clear(sim_restserver,[{port, RESTPort}],#{env => #{dispatch => CompiledRoutes}}),
 	
 	
  io:format("[sim_resthandler]: Initialized~n"),
@@ -70,11 +119,9 @@ handle_cast(Request,SrvState) ->
 %% when restarting the tree due to a crash or when shutting down the JANET Simulator application)
 terminate(_,_) ->
 
- % Stop the Cowboy server
- ok = cowboy:stop_listener(sim_restserver),
- 
- % Stop the sim_resthandler
- ok.
+ % Stop the JANET Simulator REST server by
+ % deregistering the sim_resthandler listener 
+ ok = cowboy:stop_listener(sim_restserver).
 
 
 %%====================================================================================================================================
