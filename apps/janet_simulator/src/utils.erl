@@ -7,6 +7,9 @@
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                  % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1,str_to_atom/1,sign/1]).		              % Other Utility Functions
 
+
+-export([bin_to_int_comp/2]).
+
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %%====================================================================================================================================
@@ -495,6 +498,34 @@ resolve_appname_shorthand(AppShorthand) ->
   true ->
    AppShorthand
  end.
+
+
+
+
+bin_to_int_comp(Bin,MinValue) ->
+
+ Num = try binary_to_integer(Bin)
+ catch
+  error:badarg ->
+   {error,nan}
+ end,
+ 
+ case Num of
+ 
+  {error,nan} ->
+   {error,nan};
+   
+  _ ->
+  
+   if
+    Num >= MinValue ->
+	 Num;
+	true ->
+	 {error,out_of_range}
+   end
+ end.
+	 
+
 
 
 %% DESCRIPTION:  Converts a string to atom using the Erlang BIFs

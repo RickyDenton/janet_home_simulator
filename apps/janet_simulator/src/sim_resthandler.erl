@@ -30,42 +30,19 @@ init(_) ->
  % Start the Ranch TCP acceptor required by the Cowboy REST server
  application:start(ranch),
 
-
-
- Greater0 =
- fun 
-  (forward,X) when X > 0 ->
-   {ok,X};
-  (forward,_) ->
-   {error,non_greater_zero};
-  (format_error,{non_greater_zero,X})  ->
-   io_lib:format("~p is not > 0", [X])
- end,
-
- GreaterEqual0 =
- fun 
-  (forward,X) when X >= 0 ->
-   {ok,X};
-  (forward,_) ->
-   {error,non_greater_equal_zero};
-  (format_error,{non_greater_equal_zero,X})  ->
-   io_lib:format("~p is not >= 0", [X])
- end,
-
-
  % Initialize the list of resource paths accepted by Cowboy as of the JANET Simulator REST interface
  %
- % Paths = [{Path,Constraints,CallbackModule,InitialState}]        
+ % Paths = [{Path,CallbackModule,InitialState}]        
  %
  Paths = [
           % add_location(), update_loc_name(), delete_location()
-          {"/location/:loc_id",[{loc_id,[int,Greater0]}],?MODULE,[]},						
+          {"/location/:loc_id",sim_cowroute_loc,#{}},						
 			 
 	      % update_subloc_name()
-		  {"/location/:loc_id/sublocation/:subloc:id",[{loc_id,[int,Greater0]},{subloc_id,[int,GreaterEqual0]}],?MODULE,[]},
+		  {"/location/:loc_id/sublocation/:subloc:id",?MODULE,#{}},
 			 
 		  % update_dev_name()
-		  {"/device/:dev_id",[{dev_id,[int,Greater0]}],?MODULE,[]}
+		  {"/device/:dev_id",?MODULE,#{}}
 	     ],
 			 
  % Initialize the list of Cowboy routes by merging the list of resource
@@ -75,15 +52,15 @@ init(_) ->
  % Compile the Cowboy Routes
  CompiledRoutes = cowboy_router:compile(Routes),
  
-   
-   
-   
- % Cowboy
- %Dispatch = cowboy_router:compile([ {'_', [{"/",sim_resthandler, []}]} ]),
- {ok,_} = cowboy:start_clear(sim_restserver,[{port, RESTPort}],#{env => #{dispatch => CompiledRoutes}}),
-	
-	
- io:format("[sim_resthandler]: Initialized~n"),
+ % Start the Cowboy REST Server
+ {ok,_} = cowboy:start_clear(sim_restserver,                          % Listener Name
+                             [{port, RESTPort}],                      % Listener Port
+							 #{env => #{dispatch => CompiledRoutes}}  % Listener Routes
+							),
+
+ % Inform that the Cowboy REST Server was successfully initialized
+ % and return the gen_server initial (and constant) state	
+ io:format("[sim_resthandler]: Cowboy REST Server successfully initialized~n"),
  {ok,null}.  	
  
 
@@ -128,14 +105,60 @@ terminate(_,_) ->
 %%                                               COWBOY REST SERVER CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-init(Req0, State) ->
-    Req = cowboy_req:reply(200,
-        #{<<"content-type">> => <<"text/plain">>},
-        <<"Hello Erlang!">>,
-        Req0),
-    {ok, Req, State}.
+%% 0) INIT
+%% ------- 
+%% PURPOSE:     Initial HTTP Request callback
+%% MODIFIES:    -
+%% RETURNS:     Inform Cowboy to handle the request via its REST state machine
+%% IF NO MATCH: -
+%%
+init(Req,State) ->
+
+ % Return an atom informing Cowboy to handle
+ % the HTTP request via its REST state machine
+ {cowboy_rest,Req,State}.
 
 
+%% 1) KNOWN_METHODS
+%% ---------------- 
+%% PURPOSE:       Defines the list of HTTP methods supported by the JANET Simulator REST Server
+%% MODIFIES:      -
+%% RETURNS:       The list of HTTP methods supported by the JANET Simulator REST Server
+%% MISMATCH RESP: 501 (NOT IMPLEMENTED)
+%%
+known_methods(Req,State) ->
+
+ % Define the list of HTTP methods supported by the JANET Simulator REST Server
+ %
+ % NOTE: Cowboy provides a default implementation of
+ %       the "OPTIONS" method which returns this list
+ %
+ Known_Methods = [<<"PUT">>,<<"POST">>,<<"DELETE">>,<<"OPTIONS">>],
+ 
+ % Return the list of known methods
+ {Known_Methods, Req, State}.
+ 
+ 
+%% 2) ALLOWED_METHODS
+%% ------------------
+%% PURPOSE:       Defines the list of HTTP methods allowed by the JANET Simulator REST Server
+%% MODIFIES:      -
+%% RETURNS:       The list of HTTP methods allowed by the JANET Simulator REST Server
+%% MISMATCH RESP: 405 (METHOD NOT ALLOWED)
+%%
+allowed_methods(Req,State) ->
+
+ % Define the list of HTTP methods allowed by the JANET Simulator REST Server
+ %
+ % NOTE: Cowboy provides a default implementation of
+ %       the "OPTIONS" method which returns this list
+ %
+ Allowed_Methods = [<<"PUT">>,<<"POST">>,<<"DELETE">>,<<"OPTIONS">>],
+ 
+ % Return the list of allowed methods
+ {Allowed_Methods, Req, State}.
+ 
+ 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
 %%====================================================================================================================================
