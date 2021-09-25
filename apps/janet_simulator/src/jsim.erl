@@ -190,6 +190,7 @@ shutdown() ->
 %%                                                    was not started since the JANET Simulator is not running)
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
+%%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 

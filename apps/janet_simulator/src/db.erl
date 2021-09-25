@@ -22,7 +22,7 @@
 
 %% NOTE: All the public CRUD functions crash if Mnesia is NOT started on the node (which is automatically performed by the 'init' process at startup)
 
-%% ========================================================== CREATE ===============================================================%%
+%% ========================================================== CREATE =============================================================== %%
 
 %% DESCRIPTION:  Adds an empty location to the database with its (default) sublocation {Loc_id,0}, and starts up its controller
 %%
@@ -37,6 +37,7 @@
 %%                                                    was not started since the JANET Simulator is not running)
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
+%%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port >= 30000 ->
@@ -66,9 +67,19 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
 		    LocUser = User
 		  end, 
 		 
-		  % Insert the new location and its default sublocation
-	      mnesia:write(#location{loc_id=Loc_id,name=LocName,user=LocUser,port=Port}),
-		  mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)", devlist=[]});
+		  % Check if the port is available on the host OS
+		  case utils:is_os_port_available(Port) of
+		   false ->
+		   
+		    % If it is not, return an error
+			mnesia:abort(host_port_taken);
+			
+		   true ->
+		   
+		    % If it is, insert the new location and its default sublocation
+		    mnesia:write(#location{loc_id=Loc_id,name=LocName,user=LocUser,port=Port}),
+		    mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)", devlist=[]})
+		  end;
 		  
 		 [_LocationRecord] ->
 		  mnesia:abort(port_already_taken)
@@ -289,7 +300,7 @@ spawn_devmanager(Dev_id,Loc_id) ->
  end.
 
 
-%% =========================================================== READ ================================================================%% 
+%% =========================================================== READ ================================================================ %% 
 
 %% DESCRIPTION:  Prints the contents of all or a specific table in the database
 %%
@@ -592,8 +603,8 @@ print_tree_device([Dev|NextDev],Indent) ->
 %% ARGUMENTS:    - Tabletype: The table where to search the record, also considering shorthand forms
 %%               - Key:       The record key (>=0)
 %%
-%% RETURNS:      - {ok,Record}             -> The record with key "Key" in table "Tabletype"
-%%               - {error,not_found}       -> The record with key "Key" was not found in table "Tabletype"
+%% RETURNS:      - {ok,Record}           -> The record with key "Key" in table "Tabletype"
+%%               - {error,not_found}     -> The record with key "Key" was not found in table "Tabletype"
 %%               - {error,unknown_table} -> Unknown table
 %%               - {error,badarg}        -> Invalid arguments
 %%
@@ -929,7 +940,7 @@ get_suploc_pid(Loc_id) ->
  end.
  
  
-%% ========================================================== UPDATE ===============================================================%% 
+%% ========================================================== UPDATE =============================================================== %% 
 
 %% DESCRIPTION:  Updates a device's sublocation
 %%
@@ -1161,7 +1172,7 @@ update_dev_name(Dev_id,Name) when is_number(Dev_id), Dev_id>0 ->
 update_dev_name(_,_) ->
  {error,badarg}.
  
-%% ========================================================== DELETE ===============================================================%% 
+%% ========================================================== DELETE =============================================================== %% 
 
 %% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the
 %%               database, also stopping their associated controller and devices nodes

@@ -4,11 +4,9 @@
 
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
          check_merge_devconfigs/3,get_devtype_default_config/1,deprefix_dev_config/1]). 
--export([resolve_nodetype_shorthand/1,prefix_node_id/2]).				                  % Nodes Utility Functions
--export([ensure_janet_started/0,is_running/1,str_to_atom/1,sign/1]).		              % Other Utility Functions
-
-
--export([bin_to_int_comp/2]).
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
+-export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
+-export([bin_to_int_comp/2,str_to_atom/1,sign/1]).                                        % Conversions Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -426,9 +424,41 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
  % Call the function clause associated with the NodeType
  prefix_node_id(NodeType,Node_id).
  
+
+%% DESCRIPTION:  Checks if a port is currently available in the host OS
+%%
+%% ARGUMENTS:    - Port: The port to check the availability (integer > 0)
+%%
+%% RETURNS:      - true           -> Port currently available in the host OS
+%%               - false          -> Port not currently available in the host OS
+%%               - {error,badarg} -> Invalid arguments
+%%
+is_os_port_available(Port) when is_integer(Port), Port > 0 ->
+
+ % Attempt to bind the process to the port in
+ % the host OS using a default configuration
+ case gen_tcp:listen(Port,[binary,{packet,0},{active,false}]) of
+
+  {ok,Sock} ->
+
+   % If the binding was successful the port is
+   % available, and so unbind from it before returning
+   gen_tcp:close(Sock),
+   true;
+  
+  _ ->
+  
+   % If the binding was unsuccessful the port
+   % is not currently available in the host OS
+   false
+ end;
+   
+is_os_port_available(_) ->
+ {error,badarg}.
+ 
  
 %%====================================================================================================================================
-%%                                                     OTHER UTILITY FUNCTIONS
+%%                                                  APPLICATIONS UTILITY FUNCTIONS
 %%====================================================================================================================================
 
 %% DESCRIPTION:  Ensures that the JANET Simulator application is currently running on the node
@@ -500,32 +530,55 @@ resolve_appname_shorthand(AppShorthand) ->
  end.
 
 
+%%====================================================================================================================================
+%%                                                  CONVERSIONS UTILITY FUNCTIONS
+%%==================================================================================================================================== 
 
-
+%% DESCRIPTION:  Attempts to convert a binary value to an integer and checks if it is
+%%               greater or equal than a given MinValue (used by the REST handlers)
+%%
+%% ARGUMENTS:    - Bin:      The binary value to be converted to an integer
+%%               - MinValue: The minimum value for the converted integer to pass the test
+%%
+%% RETURNS:      - 'Num'                -> The integer associated with the binary value,
+%%                                         value, if the conversion was successful and
+%%                                         it is greater or equal than MinValue
+%%               - {error,nan}          -> The binary value could not be mapped to an integer
+%%               - {error,out_of_range} -> The converted integer is lesser than MinValue
+%%
 bin_to_int_comp(Bin,MinValue) ->
 
+ % Attempt to cast the binary to integer
  Num = try binary_to_integer(Bin)
  catch
+ 
+  % The binary could not be converted to integer
   error:badarg ->
-   {error,nan}
+   {error,not_an_integer}
  end,
  
+ % Depending on the result of the previous cast
  case Num of
- 
-  {error,nan} ->
-   {error,nan};
+  {error,not_an_integer} ->
+  
+   % If an error was raised, just return it 
+   {error,not_an_integer};
    
   _ ->
-  
+   
+   % Otherwise, check if the converted integer
+   % is greater or equal than MinValue
    if
+   
+    % If it is, return it
     Num >= MinValue ->
 	 Num;
+	 
+	% Otherwise, return an error
 	true ->
 	 {error,out_of_range}
    end
  end.
-	 
-
 
 
 %% DESCRIPTION:  Converts a string to atom using the Erlang BIFs
