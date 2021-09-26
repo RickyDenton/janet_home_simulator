@@ -222,7 +222,7 @@ content_types_accepted(Req,State) ->
 %% MISMATCH RESP: 400 (BAD REQUEST)
 %%
 
-% PUT -> jsim:add_location(Loc_id)
+% PUT -> jsim:add_location(Loc_id,Name,User,Port)
 loc_put_post_callback(Req=#{method := <<"PUT">>},State) ->
  
  % Retrieve the "Loc_id" from the state map
@@ -260,13 +260,12 @@ loc_put_post_callback(Req=#{method := <<"PUT">>},State) ->
    parse_error("sim_rest_loc_put",BodyBin,ParseParamsError,Req1,State);
  
   {Name,User,Port} ->
-   io:format("PRESI! Name = ~p, User = ~p, Port = ~p~n",[Name,User,Port]),
    
    % Attempt to add the location
    case jsim:add_location(Loc_id,Name,User,Port) of
    
     {ok,ok} ->
-	 io:format("VICTORY!n"),
+	 io:format("[sim_rest_loc_put]: Added location {loc_id = ~w, name = ~p, user = ~p, port = ~w)~n",[Loc_id,Name,User,Port]),
      {true,Req1,State};
 	 
     {error,OpError} ->
@@ -276,7 +275,59 @@ loc_put_post_callback(Req=#{method := <<"PUT">>},State) ->
 	 parse_error("sim_rest_loc_put",BodyBin,controller_spawn_error,Req1,State) 
 
    end
+ end;
+
+
+% POST -> jsim:update_loc_name(Loc_id,Name)
+loc_put_post_callback(Req=#{method := <<"POST">>},State) ->
+
+ % Retrieve the "Loc_id" from the state map
+ #{loc_id := Loc_id} = State,
+ 
+ % Retrieve the request body as a binary
+ {ok,BodyBin,Req1} = cowboy_req:read_body(Req),
+ 
+ % Define the list of parameters to be retrieved
+ % from the body, each being characterized by:
+ % 
+ % - The parameter name (atom)
+ % - The parameter type ('list' | 'integer')
+ % - (list only) whether the parameter is required (true) or not (false)
+ % - (integer only): the minimum allowed value for the parameter
+ ParamsDefList = [{name,list,required}],  % "Name" parameter (required)
+ 
+ % Attempt to retrieve the required
+ % parameters from the request body
+ Params = try parse_req_body(BodyBin,ParamsDefList)
+          catch
+		   ExcType:ExcReason ->
+		    io:format("Error in parse_req_body (ExcType: ~w, ExcReason: ~w)~n",[ExcType,ExcReason]),
+		    {error,ExcReason}
+		  end,
+
+ % Check whether the list of parameters was successfully retrieved
+ case Params of
+ 
+  {error,ParseParamsError} ->
+   parse_error("sim_rest_loc_put",BodyBin,ParseParamsError,Req1,State);
+ 
+  {Name} ->
+   
+   % Attempt to update the location's name
+   case jsim:update_loc_name(Loc_id,Name) of
+   
+    ok ->
+	 io:format("[sim_rest_loc_put]: Updated location name {loc_id = ~w, name = ~p)~n",[Loc_id,Name]),
+     {true,Req1,State};
+	 
+    {error,OpError} ->
+	 parse_error("sim_rest_loc_put",BodyBin,OpError,Req1,State)
+   end
  end.
+
+
+
+
 
 
 
@@ -306,9 +357,7 @@ extract_bodymap_params([{ParamName,list,Required}|NextParam],ParamsList,BodyMap)
 
  % Convert the ParamName to a binary
  ParamNameBin = atom_to_binary(ParamName),
- 
- io:format("gaga1"),
-  
+
  BodyParam = case Required of
  
           % throws error:{badkey,<<"ParamName">>} 
