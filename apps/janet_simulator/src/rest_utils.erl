@@ -8,69 +8,92 @@
 
 handle_req(HandlerMod,ResHandlerName,Req) ->
 
- %% ----------------------------- Resource Handler Call ----------------------------- %%         
+  %% ----------------------------- Resource Handler Call ----------------------------- %%         
  
- % Pass the HTTP request map to its associated resource handler, obtaining:
- %
- % - The name of the operation handler associated with the request
- % - The list of path binding parameters to be passed to the operation handler
- % - The list of expected parameters to be retrieved from the body of the HTTP request
- %
- {OpHandlerName,PathParams,ExpBodyParams} =
- try HandlerMod:ResHandlerName(Req)
- catch
-  _:ResHandlerError ->
+  % Pass the HTTP request map to its associated resource handler, obtaining:
+  %
+  % - The name of the operation handler associated with the request
+  % - The list of path binding parameters to be passed to the operation handler
+  % - The list of expected parameters to be retrieved from the body of the HTTP request
+  %
+  {OpHandlerName,PathParams,ExpBodyParams} =
+  try HandlerMod:ResHandlerName(Req)
+  catch
+   _:ResHandlerError ->
    
-   % If an error was raised, initialize its associated 'reqerror'
-   % record and propagate it to the root handler "init()" callback
-   throw(#reqerror{handler = ResHandlerName, error = ResHandlerError, req = Req})
- end,
+    % If an error was raised by the resource handler, initialize the associated
+	% 'reqerror' record and propagate it to the root handler "init()" callback
+    throw(#reqerror{handlername = ResHandlerName, error = ResHandlerError, errormod = ?MODULE, req = Req, binbody = <<"<not_read>">>})
+  end,
 
- % Depending on whether there are expected parameters
- % to be retrieved from the body of the HTTP request
- case ExpBodyParams of
-   
-  %% ------------------ Operation Handler Call (no body parameters) ------------------ %%  
-  [] -> 
+  %% --------------------------- Body Parameters Retrieval --------------------------- %%
+
+  % Depending on whether there are expected parameters to be
+  % retrieved from the body of the HTTP request, determine:
+  %
+  % 1) The complete list of arguments to be passed to the operation handler
+  % 2) If it must be read, the HTTP request body as a binary
+  % 3) If it must be read, the updated HTTP request map
+  %
+  {OpHandlerArguments,BinBody,ReqBody} = 
+  case ExpBodyParams of
   
-   % If there are not, call the operation handler with the list of
-   % path binding parameters as returned by the resource handler
-   try HandlerMod:OpHandlerName(Req,PathParams)
-   catch 
-	_:OpHandlerError ->
-	 
-	 % If an error was raised, initialize its associated 'reqerror'
-     % record and propagate it to the root handler "init()" callback
-     throw(#reqerror{handler = OpHandlerName, error = OpHandlerError, req = Req})
-   end;
+   [] ->
+    
+	% If no parameters must be read from the body:
+    %
+    % 1- The "OpHandlerArguments" coincide with the "PathParams"
+    % 2- The "BinBody" is to be left to its default <<"<not_read>">> value
+    % 3- The "ReqRead" coincides with the initial "Req"
+    %
+	{PathParams,<<"<not_read>">>,Req};
 	
-  %% ----------------- Operation Handler Call (with body parameters) ----------------- %%   
-  _ ->
-   
-   % Otherwise, if there are parameters to be retrieved
-   % from the body of the HTTP request, read it as a binary
-   {ok,BinBody,Req1} = cowboy_req:read_body(Req),
- 
-   try
-	  
-    % Attempt to retrieve the list of expected parameters
+   %% [TODO]: Insert "custom" here
+	
+   _ ->
+
+	% If there are parameters to be read from the body:
+    %
+    % 1- The "OpHandlerArguments" is given by the concatenation of the "PathParams" with the "ExpectedBodyParams"
+    % 2- The "BinBody" is to be set once it has been read
+    % 3- The "ReqRead" is to be set to the modified map returned by Cowboy once the body has been read
+	
+    % Retrieve the HTTP request body as a binary
+    {ok,ReadBinBody,ReadReq} = cowboy_req:read_body(Req),
+	
+	% Attempt to retrieve the list of expected parameters
 	% from the binary body assuming it is JSON-encoded
-	ExpectedBodyParams = get_expected_body_params(BinBody,ExpBodyParams),
-	
-	% Call the operation handler by concatenating the list of
-	% path bindings with the list of expected body parameters
-	HandlerMod:OpHandlerName(Req,PathParams ++ ExpectedBodyParams)
-   catch 
-	_:OpHandlerError ->
+    ExpectedBodyParams =
+	try get_expected_body_params(ReadBinBody,ExpBodyParams)
+    catch 
+	 _:BodyParamsError ->
 	 
-	 % If an error was raised, initialize its associated 'reqerror'
-     % record and propagate it to the root handler "init()" callback
-     throw(#reqerror{handler = OpHandlerName, error = OpHandlerError, req = Req1, binbody = BinBody})
-   end
- end.	  
-
-
-
+	  % If an error was raised in retrieving the list of expected parameter, initialize the
+	  % associated 'reqerror' record and propagate it to the root handler "init()" callback
+	  %
+	  % NOTE: Even if it has not been called yet, the 'handlername' field is set to the
+	  %       "OpHandlerName" for a more informative logging in the get_error_response()
+	  %
+     throw(#reqerror{handlername = OpHandlerName, error = BodyParamsError, errormod = ?MODULE, req = ReadReq, binbody = ReadBinBody})
+    end,
+	
+	% Return the required tuple
+	{PathParams ++ ExpectedBodyParams,ReadBinBody,ReadReq}
+  end,
+  
+  %% ----------------------------- Operation Handler Call ----------------------------- %% 
+  
+  % Call the operation handler with the defined list of parameters, which
+  % if successful returns the HTTP response to be replied to the client
+  try HandlerMod:OpHandlerName(Req,OpHandlerArguments)
+  catch 
+   _:OpHandlerError ->
+	 
+    % If an error was raised by the operation handler, initialize its associated
+	% the 'reqerror' record and propagate it to the root handler "init()" callback
+    throw(#reqerror{handlername = OpHandlerName, error = OpHandlerError, errormod = HandlerMod, req = ReqBody, binbody = BinBody})
+  end.
+  
 
 get_check_method(Req,Allowed_Methods) ->
  
@@ -89,8 +112,6 @@ get_check_method(Req,Allowed_Methods) ->
   false ->
    throw({unallowed_method,ReqMethodBin})
  end.
- 
-
 
 
 %% DESCRIPTION:  Attempts to convert a binary value to an integer and checks if it is
@@ -321,12 +342,21 @@ get_error_response(HandlerError) when is_record(HandlerError,reqerror) ->
  % which caused the error from binary to list
  Body = binary_to_list(HandlerError#reqerror.binbody),
 
- % Determine the HTTP code and the plain
- % text message associated with the error
- {ErrorCode,ErrorMsg} = err_to_code_msg(HandlerError#reqerror.error),
+ % Retrieve the HTTP code and plain text message associated with the error by
+ % calling the 'err_to_code_msg()' function in module "HandlerError#reqerror.errmod"
+ {ErrorCode,ErrorMsg} = case HandlerError#reqerror.errormod of
  
+  % Current module (resource handler or body parameters retrieval error)
+  ?MODULE ->
+   err_to_code_msg(HandlerError#reqerror.error);
+   
+  % Custom module (operation handler error)
+  CustomMod ->
+   CustomMod:err_to_code_msg(HandlerError#reqerror.error)
+ end,
+   
  % Log the error
- io:format("[~s]: ~s (body = ~s, code = ~w) ~n",[HandlerError#reqerror.handler,ErrorMsg,Body,ErrorCode]),
+ io:format("[~s]: ~s (body = ~s, code = ~w) ~n",[HandlerError#reqerror.handlername,ErrorMsg,Body,ErrorCode]),
 
  % Return the HTTP error response to be replied to the client
  cowboy_req:reply(
@@ -383,39 +413,6 @@ err_to_code_msg({missing_param,ParamName}) ->
 % A body list parameter was cast to an unknown Erlang type by the JSONE library
 err_to_code_msg({unknown_jsone_cast,ParamName,Param}) ->
  {500,io_lib:format("<SERVER ERROR> Unknown JSONE type for parameter \"~s\" (value = ~s)",[ParamName,Param])};
-
-%% --------------------------------- Operation Handlers Errors --------------------------------- % 
-
-%% ADD_LOCATION (PUT /location/:loc_id) 
-%% ------------
-% Trying to add a location that already exists
-err_to_code_msg({location_already_exists,Loc_id}) ->
- {409,io_lib:format("<ERROR> A location with such \"loc_id\" (~w) already exists",[Loc_id])};
- 
-% Trying to add a location whose port is already assigned to another controller
-err_to_code_msg({port_already_taken,Port}) ->
- {412,io_lib:format("<ERROR> The specified \"port\" (~w) is already assigned to another location controller",[Port])};
-
-% Trying to add a location whose port is currently unavailable in the host OS
-err_to_code_msg({host_port_taken,Port}) ->
- {412,io_lib:format("<ERROR> The specified \"port\" (~w) is currently unavailable in the host OS",[Port])};
- 
-% The location was added into the database, but an internal error occured in starting its controller node
-err_to_code_msg({controller_not_started,Error}) ->
- {500,io_lib:format("<SERVER ERROR> The location was added, but an internal error occured in starting its controller node: ~w",[Error])};
- 
-%% UPDATE_LOC_NAME (POST /location/:loc_id)
-%% ---------------
-% Trying to operate on a location that does not exist
-err_to_code_msg({location_not_exists,Loc_id}) ->
- {404,io_lib:format("<ERROR> A location with such \"loc_id\" (~w) does not exist",[Loc_id])};
-
-%% DELETE_LOCATION (DELETE /location/:loc_id)
-%% ---------------
-% The location along with all its sublocations and devices were deleted from 
-% the database, but an internal error occured in stopping their associated nodes
-err_to_code_msg({stop_location_nodes_error,Error}) ->
- {500,io_lib:format("<SERVER ERROR> The location along with all its sublocations and devices were deleted from the database, but an internal error occured in stopping their associated nodes: ~w",[Error])};
 
 %% --------------------------------------- Unknown Error --------------------------------------- % 
 err_to_code_msg(UnknownError) ->

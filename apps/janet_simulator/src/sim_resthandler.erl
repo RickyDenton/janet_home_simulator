@@ -14,9 +14,10 @@
 %% SrvState: null (constant, stateless server)
 
 %% ------------------------------- REST HANDLERS CALLBACK FUNCTIONS ------------------------------- %%
--export([init/2]).                  													% Cowboy root handler callback
--export([res_loc_handler/1]).															% REST resource handlers
--export([add_location_handler/2,update_loc_name_handler/2,delete_location_handler/2]).  % REST operation handlers
+-export([init/2]).                  						% Cowboy root handler callback
+-export([res_loc_handler/1]).								% REST resource handlers
+-export([add_location_handler/2,update_loc_name_handler/2,  % REST operation handlers
+         delete_location_handler/2,err_to_code_msg/1]).  
 
 -include("reqerror.hrl").           % REST error handler record
 
@@ -279,6 +280,45 @@ delete_location_handler(Req,[Loc_id]) ->
   {ok,Error} ->
    throw({stop_location_nodes_error,Error}) 
  end.
+
+%% ================================================== OPERATION HANDLERS ERRORS ================================================== %%
+
+%% ADD_LOCATION (PUT /location/:loc_id) 
+%% ------------
+% Trying to add a location that already exists
+err_to_code_msg({location_already_exists,Loc_id}) ->
+ {409,io_lib:format("<ERROR> A location with such \"loc_id\" (~w) already exists",[Loc_id])};
+ 
+% Trying to add a location whose port is already assigned to another controller
+err_to_code_msg({port_already_taken,Port}) ->
+ {412,io_lib:format("<ERROR> The specified \"port\" (~w) is already assigned to another location controller",[Port])};
+
+% Trying to add a location whose port is currently unavailable in the host OS
+err_to_code_msg({host_port_taken,Port}) ->
+ {412,io_lib:format("<ERROR> The specified \"port\" (~w) is currently unavailable in the host OS",[Port])};
+ 
+% The location was added into the database, but an internal error occured in starting its controller node
+err_to_code_msg({controller_not_started,Error}) ->
+ {500,io_lib:format("<SERVER ERROR> The location was added, but an internal error occured in starting its controller node: ~w",[Error])};
+ 
+%% UPDATE_LOC_NAME (POST /location/:loc_id) + DELETE_LOCATION (DELETE /location/:loc_id)
+%% ---------------                            ---------------    
+% Trying to operate on a location that does not exist
+err_to_code_msg({location_not_exists,Loc_id}) ->
+ {404,io_lib:format("<ERROR> A location with such \"loc_id\" (~w) does not exist",[Loc_id])};
+
+%% DELETE_LOCATION (DELETE /location/:loc_id)
+%% ---------------
+% The location along with all its sublocations and devices were deleted from 
+% the database, but an internal error occured in stopping their associated nodes
+err_to_code_msg({stop_location_nodes_error,Error}) ->
+ {500,io_lib:format("<SERVER ERROR> The location along with all its sublocations and devices were deleted from the database, but an internal error occured in stopping their associated nodes: ~w",[Error])};
+
+%% UNKNOWN ERROR
+%% ------------- 
+err_to_code_msg(UnknownError) ->
+ {500,io_lib:format("<SERVER ERROR> Unknown error: ~p",[UnknownError])}.
+ 
  
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
