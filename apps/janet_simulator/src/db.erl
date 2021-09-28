@@ -1181,6 +1181,8 @@ update_dev_name(_,_) ->
 %%
 %% RETURNS:      - {ok,ok}                     -> The location and all its sublocations and devices were
 %%                                                successfully deleted, and their associated nodes were stopped
+%%               - {ok,Error}                  -> The location and all its sublocation and devices were successfully
+%%                                                deleted, but an Error raised in stopping their associated nodes
 %%               - ok                          -> The location and all its sublocations and devices were
 %%                                                successfully deleted, while their associated nodes
 %%                                                were not since the JANET Simulator is not running

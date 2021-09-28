@@ -6,7 +6,7 @@
          check_merge_devconfigs/3,get_devtype_default_config/1,deprefix_dev_config/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
--export([bin_to_int_comp/2,str_to_atom/1,sign/1]).                                        % Conversions Utility Functions
+-export([str_to_atom/1,sign/1]).                                                          % Conversions Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -533,53 +533,6 @@ resolve_appname_shorthand(AppShorthand) ->
 %%====================================================================================================================================
 %%                                                  CONVERSIONS UTILITY FUNCTIONS
 %%==================================================================================================================================== 
-
-%% DESCRIPTION:  Attempts to convert a binary value to an integer and checks if it is
-%%               greater or equal than a given MinValue (used by the REST handlers)
-%%
-%% ARGUMENTS:    - Bin:      The binary value to be converted to an integer
-%%               - MinValue: The minimum value for the converted integer to pass the test
-%%
-%% RETURNS:      - 'Num'                -> The integer associated with the binary value,
-%%                                         value, if the conversion was successful and
-%%                                         it is greater or equal than MinValue
-%%               - {error,nan}          -> The binary value could not be mapped to an integer
-%%               - {error,out_of_range} -> The converted integer is lesser than MinValue
-%%
-bin_to_int_comp(Bin,MinValue) ->
-
- % Attempt to cast the binary to integer
- Num = try binary_to_integer(Bin)
- catch
- 
-  % The binary could not be converted to integer
-  error:badarg ->
-   {error,not_an_integer}
- end,
- 
- % Depending on the result of the previous cast
- case Num of
-  {error,not_an_integer} ->
-  
-   % If an error was raised, just return it 
-   {error,not_an_integer};
-   
-  _ ->
-   
-   % Otherwise, check if the converted integer
-   % is greater or equal than MinValue
-   if
-   
-    % If it is, return it
-    Num >= MinValue ->
-	 Num;
-	 
-	% Otherwise, return an error
-	true ->
-	 {error,out_of_range}
-   end
- end.
-
 
 %% DESCRIPTION:  Converts a string to atom using the Erlang BIFs
 %%

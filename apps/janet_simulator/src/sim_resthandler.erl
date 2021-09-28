@@ -8,10 +8,18 @@
 -module(sim_resthandler).
 -behaviour(gen_server).
 
--export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2]).  % gen_server Behaviour Callback Functions
--export([init/2]).                                                       % Cowboy Callback Functions
+%% --------------------------------- GEN_SERVER CALLBACK FUNCTIONS --------------------------------- %%
+-export([start_link/0,init/1,terminate/2,handle_call/3,handle_cast/2]).
 
 %% SrvState: null (constant, stateless server)
+
+%% ------------------------------- REST HANDLERS CALLBACK FUNCTIONS ------------------------------- %%
+-export([init/2]).                  													% Cowboy root handler callback
+-export([res_loc_handler/1]).															% REST resource handlers
+-export([add_location_handler/2,update_loc_name_handler/2,delete_location_handler/2]).  % REST operation handlers
+
+-include("reqerror.hrl").           % REST error handler record
+
 
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
@@ -36,13 +44,13 @@ init(_) ->
  %
  Paths = [
           % add_location(), update_loc_name(), delete_location()
-          {"/location/:loc_id",sim_cowroute_loc,#{}},						
+          {"/location/:loc_id",?MODULE,res_loc_handler},						
 			 
 	      % update_subloc_name()
-		  {"/location/:loc_id/sublocation/:subloc:id",?MODULE,#{}},
+		  {"/location/:loc_id/sublocation/:subloc_id",?MODULE,res_loc_subloc_handler},
 			 
 		  % update_dev_name()
-		  {"/device/:dev_id",?MODULE,#{}}
+		  {"/device/:dev_id",?MODULE,res_dev_handler}
 	     ],
 			 
  % Initialize the list of Cowboy routes by merging the list of resource
@@ -100,64 +108,177 @@ terminate(_,_) ->
  % deregistering the sim_resthandler listener 
  ok = cowboy:stop_listener(sim_restserver).
 
-
 %%====================================================================================================================================
-%%                                               COWBOY REST SERVER CALLBACK FUNCTIONS                                                        
+%%                                                 REST HANDLERS CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-%% 0) INIT
-%% ------- 
-%% PURPOSE:     Initial HTTP Request callback
-%% MODIFIES:    -
-%% RETURNS:     Inform Cowboy to handle the request via its REST state machine
-%% IF NO MATCH: -
+%% ============================================================ INIT ============================================================ %%
+init(Req,ResHandlerName) ->
+
+ % Handle the HTTP request so to obtain the "ReplyReq"
+ % HTTP response to be returned to the client
+ ReplyReq = try rest_utils:handle_req(?MODULE,ResHandlerName,Req)
+ catch
+ 
+  % If an error was raised during the handling of the HTTP request, determine
+  % the HTTP error response to be returned to the client depending on whether
+  % the error was handled (i.e. it is structured as a 'reqerror' record) or not
+  
+  % Handled error
+  _:HandlerError when is_record(HandlerError,reqerror) -> 
+   rest_utils:get_error_response(HandlerError);
+
+  % Unhandled error (should NOT happen)
+  _:UnexpectedError ->
+   rest_utils:get_unexpected_error_response(UnexpectedError,Req)
+ end,
+ 
+ % Return the HTTP response to the client
+ {ok,ReplyReq,ResHandlerName}.
+
+
+%% ====================================================== RESOURCE HANDLERS ====================================================== %%
+
+%% RESOURCE:   /location/:loc_id
 %%
-init(Req,State) ->
-
- % Return an atom informing Cowboy to handle
- % the HTTP request via its REST state machine
- {cowboy_rest,Req,State}.
-
-
-%% 1) KNOWN_METHODS
-%% ---------------- 
-%% PURPOSE:       Defines the list of HTTP methods supported by the JANET Simulator REST Server
-%% MODIFIES:      -
-%% RETURNS:       The list of HTTP methods supported by the JANET Simulator REST Server
-%% MISMATCH RESP: 501 (NOT IMPLEMENTED)
+%% OPERATIONS: - PUT    -> add_location(Loc_id,Name,User,Port)
+%%             - POST   -> update_loc_name(Loc_id,Name)
+%%             - DELETE -> delete_location(Loc_id)
 %%
-known_methods(Req,State) ->
+res_loc_handler(Req) ->
+ 
+ % Define the binary list of HTTP methods allowed by this resource handler
+ Allowed_Methods = [<<"PUT">>,<<"POST">>,<<"DELETE">>],
+ 
+ % Ensure the HTTP request method to be included in the list of allowed methods
+ Method = rest_utils:get_check_method(Req,Allowed_Methods),
+ 
+ % Retrieve the "Loc_id" path binding parameter
+ Loc_id = rest_utils:get_check_int_binding(Req,loc_id,1),
 
- % Define the list of HTTP methods supported by the JANET Simulator REST Server
+ % Determine the name and the expected body parameters of the operation handler associated with
+ % the request from its HTTP method, with the latters being defined using the following syntax:
  %
- % NOTE: Cowboy provides a default implementation of
- %       the "OPTIONS" method which returns this list
- %
- Known_Methods = [<<"PUT">>,<<"POST">>,<<"DELETE">>,<<"OPTIONS">>],
+ % - List/String parameters: {ParamName,'list','required'/'optional'}  % Required or optional
+ % - Integer parameters:     {ParamName,'integer',MinValue}            % Always required and must be >= a MinValue
+ % 
+ {OpHandlerName,ExpBodyParams} =
+ case Method of
  
- % Return the list of known methods
- {Known_Methods, Req, State}.
- 
- 
-%% 2) ALLOWED_METHODS
-%% ------------------
-%% PURPOSE:       Defines the list of HTTP methods allowed by the JANET Simulator REST Server
-%% MODIFIES:      -
-%% RETURNS:       The list of HTTP methods allowed by the JANET Simulator REST Server
-%% MISMATCH RESP: 405 (METHOD NOT ALLOWED)
-%%
-allowed_methods(Req,State) ->
+  % PUT -> add_location(Loc_id,Name,User,Port)
+  <<"PUT">> ->
+   {add_location_handler,    % Operation handler name
+    [
+     {name,list,optional},   % "Name" parameter (optional)
+     {user,list,optional},   % "User" parameter (optional)
+     {port,integer,30000}    % "Port" parameter (>= 30000)
+	]
+   };
 
- % Define the list of HTTP methods allowed by the JANET Simulator REST Server
- %
- % NOTE: Cowboy provides a default implementation of
- %       the "OPTIONS" method which returns this list
- %
- Allowed_Methods = [<<"PUT">>,<<"POST">>,<<"DELETE">>,<<"OPTIONS">>],
+  % POST -> update_loc_name(Loc_id,Name)
+  <<"POST">> ->
+   {
+    update_loc_name_handler, % Operation handler name
+	[{name,list,required}]   % "Name" parameter (required)
+   };
+   
+  % DELETE -> delete_location(Loc_id)
+  <<"DELETE">> ->
+   {delete_location_handler, % Operation handler name
+    []                       % No body parameters required
+   }
+ end,
  
- % Return the list of allowed methods
- {Allowed_Methods, Req, State}.
+ % Return the name of the operation handler, the list of path bindings parameters and
+ % the list of expected parameters to be retrieved from the body of the HTTP request
+ {OpHandlerName,[Loc_id],ExpBodyParams}.
  
+ 
+%% ===================================================== OPERATION HANDLERS ===================================================== %%
+
+%% ADD_LOCATION (PUT /location/:loc_id)
+%% ============
+add_location_handler(Req,[Loc_id,Name,User,Port]) ->
+ 
+ % Attempt to add the location and start its associated controller node
+ case jsim:add_location(Loc_id,Name,User,Port) of
+  {ok,ok} ->
+   
+   % If the location was added and its controller node was started, report the success of the operation
+   io:format("[~p]: Added location (loc_id = ~w, name = ~p, user = ~p, port = ~w)~n",[?FUNCTION_NAME,Loc_id,Name,User,Port]),
+   
+   % Define the success HTTP response to be replied to the client
+   cowboy_req:reply(201,Req);
+  
+  %% --------------------------------- Operation Handler Errors --------------------------------- %   
+  
+  % Trying to add a location that already exists
+  {error,location_already_exists} ->
+   throw({location_already_exists,Loc_id});
+  
+  % Trying to add a location whose port is already assigned to another controller  
+  {error,port_already_taken} ->
+   throw({port_already_taken,Port});
+
+  % Trying to add a location whose port is currently unavailable in the host OS
+  {error,host_port_taken} ->
+   throw({host_port_taken,Port});
+   
+  % The location was added into the database, but an
+  % internal error occured in starting its controller node
+  {ok,Error} ->
+   throw({controller_not_started,Error}) 
+ end.
+ 
+ 
+%% UPDATE_LOC_NAME (POST /location/:loc_id)
+%% ===============
+update_loc_name_handler(Req,[Loc_id,Name]) ->
+ 
+ % Attempt to update the location name
+ case jsim:update_loc_name(Loc_id,Name) of
+  ok ->
+   
+   % If the location name was updated, report the success of the operation
+   io:format("[~p]: Updated location name (loc_id = ~w, name = ~p)~n",[?FUNCTION_NAME,Loc_id,Name]),
+   
+   % Define the success HTTP response to be replied to the client
+   cowboy_req:reply(204,Req);
+  
+  %% --------------------------------- Operation Handler Errors --------------------------------- %   
+  
+  % Trying to update the name of a location that does not exist
+  {error,location_not_exists} ->
+   throw({location_not_exists,Loc_id})
+ end.
+
+
+%% DELETE_LOCATION (DELETE /location/:loc_id)
+%% ===============
+delete_location_handler(Req,[Loc_id]) ->
+ 
+ % Attempt to delete the location, along with all its sublocations and
+ % devices, also stopping their associated controller and devices nodes
+ case jsim:delete_location(Loc_id) of
+  {ok,ok} ->
+   
+   % If the location was deleted, report the success of the operation
+   io:format("[~p]: Deleted Location (loc_id = ~w)~n",[?FUNCTION_NAME,Loc_id]),
+   
+   % Define the success HTTP response to be replied to the client
+   cowboy_req:reply(204,Req);
+  
+  %% --------------------------------- Operation Handler Errors --------------------------------- %   
+  
+  % Trying to delete a location that does not exist
+  {error,location_not_exists} ->
+   throw({location_not_exists,Loc_id});
+    
+  % The location along with all its sublocations and devices were deleted from 
+  % the database, but an internal error occured in stopping their associated nodes
+  {ok,Error} ->
+   throw({stop_location_nodes_error,Error}) 
+ end.
  
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
