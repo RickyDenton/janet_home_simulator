@@ -68,7 +68,8 @@ handle_continue(init,SrvState) ->
  % Prepare the Host, Name and Args parameters of the controller's node
  NodeHost = "localhost",
  NodeName = "ctr-" ++ Loc_id_str,
- NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_controller/ebin/ _build/default/lib/janet_simulator/ebin/",
+ NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_controller/ebin/ _build/default/lib/janet_simulator/ebin/ " ++
+            "_build/default/lib/cowboy/ebin/ _build/default/lib/cowlib/ebin/ _build/default/lib/ranch/ebin/ _build/default/lib/jsone/ebin/",
  
  % Instantiate the controller's node and link it to the manager
  {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),

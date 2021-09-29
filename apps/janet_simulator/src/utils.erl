@@ -3,7 +3,8 @@
 -module(utils).
 
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
-         check_merge_devconfigs/3,get_devtype_default_config/1,deprefix_dev_config/1]). 
+         check_merge_devconfigs/3,get_devtype_default_config/1,
+		 get_devtype_default_config_json/1,deprefix_dev_config/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
 -export([str_to_atom/1,sign/1]).                                                          % Conversions Utility Functions
@@ -45,8 +46,8 @@ is_valid_devtype(_) ->
 %%
 %% RETURNS:      - ok -> The device configuration is valid
 %% 
-%% THROWS:       - {error,invalid_devconfig} -> The device configuration is invalid
-%%               - {error,unknown_devtype}   -> The device type is invalid
+%% THROWS:       - {error,invalid_devconfig}     -> The device configuration is invalid
+%%               - {invalid_devtype,InvalidType} -> The device's type is invalid
 
 %% ------------------- Valid Fan Configuration ------------------- %%
 is_valid_devconfig(Config,fan) when 
@@ -129,8 +130,8 @@ is_valid_devconfig(_,ValidDev) when
  throw({error,invalid_devconfig});
 
 %% --------------------- Invalid Device Type --------------------- %%
-is_valid_devconfig(_,_) ->
- throw({error,unknown_devtype}).
+is_valid_devconfig(_,InvalidType) ->
+ throw({invalid_devtype,InvalidType}).
 
 
 %% DESCRIPTION:  Build and returns a device configuration record of the appropriate
@@ -156,9 +157,9 @@ is_valid_devconfig(_,_) ->
 %% RETURNS:      - Config#devtypecfg -> The device configuration record
 %%                                      associated with the {Config} arguments
 %% 
-%% THROWS:       - {error,invalid_devconfig} -> The passed {Config} arguments represent an
-%%                                              invalid configuration for the device Type
-%%               - {error,unknown_devtype}   -> The device type is invalid
+%% THROWS:       - {error,invalid_devconfig}     -> The passed {Config} arguments represent an
+%%                                                  invalid configuration for the device Type
+%%               - {invalid_devtype,InvalidType} -> The device's type is invalid
 
 %% ------------------- Valid Fan Configuration ------------------- %%
 build_dev_config_wildcard({OnOff,FanSpeed},fan) when 
@@ -239,8 +240,8 @@ build_dev_config_wildcard(_,ValidDev) when
  throw({error,invalid_devconfig});
 
 %% --------------------- Invalid Device Type --------------------- %%
-build_dev_config_wildcard(_,_) ->
- throw({error,unknown_devtype}).
+build_dev_config_wildcard(_,InvalidType) ->
+ throw({invalid_devtype,InvalidType}).
  
  
 %% DESCRIPTION:  Merges a device current configuration with an updated configuration considering
@@ -256,9 +257,9 @@ build_dev_config_wildcard(_,_) ->
 %%
 %% RETURNS:      - {ok,NewCfg} -> The resulting valid configuration to be applied to the device
 %% 
-%% THROWS:       - {error,invalid_devconfig} -> The passed {Config} arguments represent an
-%%                                              invalid configuration for the device Type
-%%               - {error,unknown_devtype}   -> The device type is invalid
+%% THROWS:       - {error,invalid_devconfig}     -> The passed {Config} arguments represent an
+%%                                                  invalid configuration for the device Type
+%%               - {invalid_devtype,InvalidType} -> The device's type is invalid
 %%
 check_merge_devconfigs(CurrCfg,UpdateCfg,Type) when element(1,CurrCfg) =:= element(1,UpdateCfg) ->
  
@@ -292,8 +293,8 @@ check_merge_devconfigs(_,_,ValidDev) when
  throw({error,invalid_devconfig});
 
 %% --------------------- Invalid Device Type --------------------- %% 
-check_merge_devconfigs(_,_,_) ->
- throw({error,unknown_devtype}).
+check_merge_devconfigs(_,_,InvalidType) ->
+ throw({invalid_devtype,InvalidType}).
  
 
 %% DESCRIPTION:  Returns a device's default configuration according to its type
@@ -302,7 +303,7 @@ check_merge_devconfigs(_,_,_) ->
 %%
 %% RETURNS:      - Config#devtypecfg -> The device default configuration as a record of the appropriate type
 %% 
-%% THROWS:       - {error,unknown_devtype} -> The device's type is invalid
+%% THROWS:       - {invalid_devtype,InvalidType} -> The device's type is invalid
 %%
 % Fan
 get_devtype_default_config(fan) ->
@@ -324,11 +325,44 @@ get_devtype_default_config(thermostat) ->
 get_devtype_default_config(conditioner) ->
  #condcfg{onoff = off, temp_target = 21, temp_current = 21, fanspeed = 50};
 
-% Unknown device
-get_devtype_default_config(_) ->
- throw(unknown_devtype).
+% Invalid device type
+get_devtype_default_config(InvalidType) ->
+ throw({invalid_devtype,InvalidType}).
 
 
+%% DESCRIPTION:  Returns a device's default configuration according to its type as a JSON-encoded list
+%%
+%% ARGUMENTS:    - DevType: The device's type (an atom)
+%%
+%% RETURNS:      - [Config#devtypecfg] -> The device default configuration as a JSON-encoded list
+%% 
+%% THROWS:       - {error,invalid_devtype} -> The device's type is invalid
+%%
+% Fan
+get_devtype_default_config_json(fan) ->
+ "{\"on\":false,\"fanSpeed\":50}";
+
+% Light
+get_devtype_default_config_json(light) ->
+ "{\"on\":false,\"brightness\":50,\"color\":\"white\"}";
+ 
+% Door
+get_devtype_default_config_json(door) ->
+ "{\"open\":false,\"lock\":false}";
+
+% Thermostat
+get_devtype_default_config_json(thermostat) ->
+ "{\"on\":false,\"thermostatTemperatureSetpoint\":21,\"thermostatTemperatureAmbient\":21}";
+ 
+% Conditioner
+get_devtype_default_config_json(conditioner) ->
+"{\"on\":false,\"thermostatTemperatureSetpoint\":21,\"thermostatTemperatureAmbient\":21,\"fanSpeed\":50}";
+
+% Invalid device type
+get_devtype_default_config_json(InvalidType) ->
+ throw({invalid_devtype,InvalidType}).
+ 
+ 
 %% DESCRIPTION:  Returns a device's configuration without the first 
 %%               "{devtypecfg," tuple element (prettier printing purposes)
 %%
@@ -336,7 +370,7 @@ get_devtype_default_config(_) ->
 %%
 %% RETURNS:      - The device's configuration without the first "{devtypecfg," tuple element
 %% 
-%% THROWS:       - {error,unknown_devtype} -> The device's type is invalid
+%% THROWS:       - {invalid_devtype,InvalidType} -> The device's type is invalid
 %%
 deprefix_dev_config(Config) ->
 
@@ -363,9 +397,9 @@ deprefix_dev_config(Config) ->
   condcfg ->
    {Config#condcfg.onoff,Config#condcfg.temp_target,Config#condcfg.temp_current,Config#condcfg.fanspeed};
    
-  % Unknown Devtype
-  _ ->
-   throw(unknown_devtype)
+  % Invalid Devtype
+  InvalidType ->
+   throw({invalid_devtype,InvalidType})
  end.
  
  

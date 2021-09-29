@@ -34,13 +34,24 @@ init_handler(_) ->
  % Paths = [{Path,CallbackModule,InitialState}]        
  %
  Paths = [
-          % add_location(), update_loc_name(), delete_location()
+          % RESOURCE: /location/:loc_id
+		  % ALLOWED METHODS: 
+          %   - PUT    -> add_location(Loc_id,Name,User,Port)
+          %   - POST   -> update_loc_name(Loc_id,Name)
+          %   - DELETE -> delete_location(Loc_id)
+		  %
           {"/location/:loc_id",?MODULE,res_loc_handler},						
-			 
-	      % update_subloc_name()
+		  
+          % RESOURCE: /location/:loc_id/sublocation/:subloc_id
+		  % ALLOWED METHODS: 
+          %   - POST   -> update_subloc_name({Loc_id,Subloc_id},Name)
+		  %		  
 		  {"/location/:loc_id/sublocation/:subloc_id",?MODULE,res_loc_subloc_handler},
-			 
-		  % update_dev_name()
+		
+          % RESOURCE: /device/:dev_id
+		  % ALLOWED METHODS: 
+          %   - POST   -> update_dev_name(Dev_id,Name)
+		  %		  		
 		  {"/device/:dev_id",?MODULE,res_dev_handler}
 	     ],
 			
@@ -74,10 +85,10 @@ err_to_code_msg({port_already_taken,Port}) ->
 % Trying to add a location whose port is currently unavailable in the host OS
 err_to_code_msg({host_port_taken,Port}) ->
  {412,io_lib:format("<ERROR> The specified \"port\" (~w) is currently unavailable in the host OS",[Port])};
- 
+
 % The location was added into the database, but an internal error occured in starting its controller node
-err_to_code_msg({controller_not_started,Error}) ->
- {500,io_lib:format("<SERVER ERROR> The location was added, but an internal error occured in starting its controller node: ~w",[Error])};
+err_to_code_msg({controller_not_started,InternalError}) ->
+ {500,io_lib:format("<SERVER ERROR> The location was added, but an internal error occured in starting its controller node: ~w",[InternalError])};
  
 %% UPDATE_LOC_NAME + DELETE_LOCATION (POST /location/:loc_id + DELETE /location/:loc_id)
 %% ---------------------------------    
@@ -206,11 +217,11 @@ add_location_handler(Req,[Loc_id,Name,User,Port]) ->
    
   % The location was added into the database, but an
   % internal error occured in starting its controller node
-  {ok,Error} ->
-   throw({controller_not_started,Error}) 
+  {ok,InternalError} ->
+   throw({controller_not_started,InternalError}) 
  end.
  
- 
+
 %% UPDATE_LOC_NAME (POST /location/:loc_id)
 %% ===============
 update_loc_name_handler(Req,[Loc_id,Name]) ->
@@ -267,7 +278,7 @@ delete_location_handler(Req,[Loc_id]) ->
  
 %% ALLOWED METHODS:
 %% ---------------
-%%   - POST   -> update_loc_name(Loc_id,Name)
+%%   - POST   -> update_subloc_name({Loc_id,Subloc_id},Name)
 %% 
 res_loc_subloc_handler(Req) ->
  

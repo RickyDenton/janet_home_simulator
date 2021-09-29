@@ -16,7 +16,7 @@
 %%               - CtrSublocTable: The serialized controller's 'ctr_sublocation' table ([{subloc_id,devlist}])
 %%               - CtrDeviceTable: The serialized controller's 'ctr_device' table      ([{dev_id,subloc_id,type,config,lastupdate,handler_pid}])
 %%               - MgrPid:         The PID of the manager associated to this controller in the Janet Simulator node 
-%%               - RestPort:       The port that will be used by the JANET Controller for binding its REST server on the host OS (>=30000)
+%%               - RESTPort:       The port that will be used by the JANET Controller for binding its REST server on the host OS (>=30000)
 %%               - RemoteHost:     The IP address of the host where JANET controller will forward state updates
 %%
 %% RETURNS:      - ok                      -> JANET Controller succesfully started
@@ -24,7 +24,7 @@
 %%               - {error,Reason}          -> Internal error in starting the application
 %%               - {error,badarg}          -> Invalid arguments
 %%
-run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RestPort,RemoteHost) when is_number(Loc_id), Loc_id>0, is_pid(MgrPid), is_number(RestPort), RestPort>=30000 ->
+run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RESTPort,RemoteHost) when is_number(Loc_id), Loc_id>0, is_pid(MgrPid), is_number(RESTPort), RESTPort>=30000 ->
  
  % Check if the JANET Controller is already running
  case utils:is_running(janet_controller) of
@@ -38,7 +38,7 @@ run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RestPort,RemoteHost) when is_num
    % Otherwise, initialize the JANET Controller configuration parameters as for the arguments
    application:set_env(janet_controller,loc_id,Loc_id),
    application:set_env(janet_controller,mgr_pid,MgrPid),
-   application:set_env(janet_controller,rest_port,RestPort),
+   application:set_env(janet_controller,rest_port,RESTPort),
    application:set_env(janet_controller,remote_host,RemoteHost),
    
    % Start Mnesia in disc-less and permanent mode and initialize

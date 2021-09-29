@@ -41,7 +41,7 @@ init(_) ->
 	 [locs_init]                        % Child Modules (For Release Handling Purposes)
     },
 	
-	%% ------------ The Janet Simulator's REST handler (sim_resthandler) ------------ %%
+	%% ------------- The JANET Simulator REST handler (sim_resthandler) ------------- %%
     {
      sim_resthandler,		            % ChildID
      {sim_resthandler,start_link,[]},   % Child Start Function

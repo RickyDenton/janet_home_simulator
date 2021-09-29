@@ -599,17 +599,8 @@ init(Parent,Module,Args) ->
     % process (sys debug facilities support)
     DbgStruct = sys:debug_options([]),
  
-    % Check if the Ranch TCP acceptor is running
-    ok = case utils:is_running(ranch) of
- 
-          % If it is, continue
-          true ->
-           ok;
-	  
-	      % If it is not, attempt to start it 
-          false ->
-           application:start(ranch)
-         end,
+    % Ensure that all Cowboy application dependencies are running
+	{ok, _StartedApps} = application:ensure_all_started(cowboy),
  
     % Call the init_handler() callback function with the Args passed by the
 	% start_link() function, which returns the following information as a tuple:
@@ -665,8 +656,6 @@ init(Parent,Module,Args) ->
   
  % Enter the process main loop
  loop(Parent,Dbg,ListenerName).
-	
-
 
 
 %% DESCRIPTION:  Called by the 'sys' module after parsing a message received via the
