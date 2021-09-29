@@ -3,11 +3,16 @@
 -module(sim_resthandler).
 -behaviour(gen_resthandler).                                     % Custom REST handler behaviour
 
+%% -------------------------- gen_resthandler BEHAVIOUR CALLBACK FUNCTIONS -------------------------- %%
 -export([start_link/0,init_handler/1,init/2,err_to_code_msg/1]). % gen_resthandler behaviour callback functions
--export([res_loc_handler/1]).								     % gen_resthandler resource handlers
--export([add_location_handler/2,update_loc_name_handler/2,       % gen_resthandler operation handlers
-         delete_location_handler/2]).  
 
+%% -------------------------------- RESOURCES AND OPERATIONS HANDLERS -------------------------------- %%
+-export([res_loc_handler/1,                                      % '/location/:loc_id' resource handler
+         add_location_handler/2,update_loc_name_handler/2,       %                     operation handlers
+		 delete_location_handler/2]).   
+-export([res_loc_subloc_handler/1,                               % '/location/:loc_id/sublocation/:subloc_id' resource handler
+         update_subloc_name_handler/2]).                         %                                            operation handlers
+                                                                 
 %%====================================================================================================================================
 %%                                                GEN_RESTHANDLER CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
@@ -85,21 +90,33 @@ err_to_code_msg({location_not_exists,Loc_id}) ->
 err_to_code_msg({stop_location_nodes_error,Error}) ->
  {500,io_lib:format("<SERVER ERROR> The location along with all its sublocations and devices were deleted from the database, but an internal error occured in stopping their associated nodes: ~w",[Error])};
 
+%% UPDATE_SUBLOC_NAME (POST /location/:loc_id/sublocation/:subloc_id)
+%% ------------------
+% Trying to update the name of a location that does not exist
+err_to_code_msg({sublocation_not_exists,{Loc_id,Subloc_id}}) ->
+ {404,io_lib:format("<ERROR> A sublocation with such \"sub_id\" ({~w,~w}) does not exist",[Loc_id,Subloc_id])};
+ 
 %% UNKNOWN ERROR
 %% ------------- 
 err_to_code_msg(UnknownError) ->
  {500,io_lib:format("<UNKNOWN SERVER ERROR> Unknown error: ~p",[UnknownError])}.
  
  
-%%====================================================================================================================================
-%%                                                 GEN_RESTHANDLER RESOURCE HANDLERS                                                        
-%%====================================================================================================================================
+%%==================================================================================================================================%
+%%                                                                                                                                  %
+%%                                          GEN_RESTHANDLER RESOURCES AND OPERATIONS HANDLERS                                       %
+%%                                                                                                                                  %
+%%==================================================================================================================================%
 
-%% RESOURCE:        /location/:loc_id
-%%
-%% ALLOWED METHODS: - PUT    -> add_location(Loc_id,Name,User,Port)
-%%                  - POST   -> update_loc_name(Loc_id,Name)
-%%                  - DELETE -> delete_location(Loc_id)
+%%=================================================================================================================================%%
+%%                                                    RESOURCE: /location/:loc_id                                                  %% 
+%%=================================================================================================================================%%
+
+%% ALLOWED METHODS:
+%% ---------------
+%%   - PUT    -> add_location(Loc_id,Name,User,Port)
+%%   - POST   -> update_loc_name(Loc_id,Name)
+%%   - DELETE -> delete_location(Loc_id)
 %%
 res_loc_handler(Req) ->
  
@@ -149,10 +166,8 @@ res_loc_handler(Req) ->
  % the list of expected parameters to be retrieved from the body of the HTTP request
  {OpHandlerName,[Loc_id],ExpBodyParams}.
  
-%%====================================================================================================================================
-%%                                                GEN_RESTHANDLER OPERATION HANDLERS                                                        
-%%====================================================================================================================================
-
+%% ===================================================== OPERATION HANDLERS ===================================================== %% 
+ 
 %% ADD_LOCATION (PUT /location/:loc_id)
 %% ============
 add_location_handler(Req,[Loc_id,Name,User,Port]) ->
@@ -235,6 +250,73 @@ delete_location_handler(Req,[Loc_id]) ->
   % the database, but an internal error occured in stopping their associated nodes
   {ok,Error} ->
    throw({stop_location_nodes_error,Error}) 
+ end. 
+ 
+ 
+%%=================================================================================================================================%%
+%%                                           RESOURCE: /location/:loc_id/sublocation/:subloc_id                                    %% 
+%%=================================================================================================================================%% 
+ 
+%% ALLOWED METHODS:
+%% ---------------
+%%   - POST   -> update_loc_name(Loc_id,Name)
+%% 
+res_loc_subloc_handler(Req) ->
+ 
+ % Define the binary list of HTTP methods allowed by this resource handler
+ Allowed_Methods = [<<"POST">>],
+ 
+ % Ensure the HTTP request method to be included in the list of allowed methods
+ Method = gen_resthandler:get_check_method(Req,Allowed_Methods),
+ 
+ % Retrieve the "Loc_id" path binding parameter
+ Loc_id = gen_resthandler:get_check_int_binding(Req,loc_id,1),
+ 
+ % Retrieve the "Subloc_id" path binding parameter
+ Subloc_id = gen_resthandler:get_check_int_binding(Req,subloc_id,1),  % "1" because the name of the default sublocation cannot be changed
+ 
+ % Determine the name and the expected body parameters of the operation handler associated with
+ % the request from its HTTP method, with the latters being defined using the following syntax:
+ %
+ % - List/String parameters: {ParamName,'list','required'/'optional'}  % Required or optional
+ % - Integer parameters:     {ParamName,'integer',MinValue}            % Always required and must be >= a MinValue
+ % 
+ {OpHandlerName,ExpBodyParams} =
+ case Method of
+ 
+  % POST -> update_subloc_name({Loc_id,Subloc_id},Name)
+  <<"POST">> ->
+   {
+    update_subloc_name_handler, % Operation handler name
+	[{name,list,required}]      % "Name" parameter (required)
+   }
+ end,
+ 
+ % Return the name of the operation handler, the list of path bindings parameters and
+ % the list of expected parameters to be retrieved from the body of the HTTP request
+ {OpHandlerName,[{Loc_id,Subloc_id}],ExpBodyParams}.
+
+%% ===================================================== OPERATION HANDLERS ===================================================== %% 
+ 
+%% UPDATE_SUBLOC_NAME (POST /location/:loc_id/sublocation/:subloc_id)
+%% ==================
+update_subloc_name_handler(Req,[{Loc_id,Subloc_id},Name]) ->
+ 
+ % Attempt to update the sublocation name
+ case jsim:update_subloc_name({Loc_id,Subloc_id},Name) of
+  ok ->
+   
+   % If the sublocation name was updated, report the success of the operation
+   io:format("[~p]: Updated sublocation name (sub_id = {~w,~w}, name = ~p)~n",[?FUNCTION_NAME,Loc_id,Subloc_id,Name]),
+   
+   % Define the success HTTP response to be replied to the client
+   cowboy_req:reply(204,Req);
+  
+  %% ------------------------------------ Operation Errors ------------------------------------ %  
+  
+  % Trying to update the name of a sublocation that does not exist
+  {error,sublocation_not_exists} ->
+   throw({sublocation_not_exists,{Loc_id,Subloc_id}})
  end.
 
 
