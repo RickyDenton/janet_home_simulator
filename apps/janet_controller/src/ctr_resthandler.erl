@@ -11,7 +11,9 @@
          add_sublocation_handler/2,             %                         operation handlers
 		 delete_sublocation_handler/2]).        %                         
 -export([res_dev_handler/1,                     % /device/:dev_id resource handler
-         add_device_handler/2]).                %                 operation handlers
+         add_device_handler/2,                  %                 operation handlers
+		 update_dev_subloc_handler/2,           %
+		 delete_device_handler/2]).             %   
 		    
 %%====================================================================================================================================
 %%                                                GEN_RESTHANDLER CALLBACK FUNCTIONS                                                        
@@ -74,8 +76,8 @@ init(Req,ResHandlerName) ->
 err_to_code_msg({sublocation_already_exists,{Loc_id,Subloc_id}}) ->
  {409,io_lib:format("<ERROR> A sublocation with such \"sub_id\" ({~w,~w}) already exists",[Loc_id,Subloc_id])};
  
-%% DELETE_SUBLOCATION + ADD_DEVICE (DELETE /sublocation/:subloc_id + PUT /device/:dev_id) 
-%% -------------------------------
+%% DELETE_SUBLOCATION + ADD_DEVICE + UPDATE_DEV_SUBLOC (DELETE /sublocation/:subloc_id + PUT /device/:dev_id + POST /device/:dev_id) 
+%% ---------------------------------------------------
 % Trying to operate on a sublocation that does not exist
 err_to_code_msg({sublocation_not_exists,{Loc_id,Subloc_id}}) ->
  {404,io_lib:format("<ERROR> A sublocation with such \"sub_id\" ({~w,~w}) does not exist",[Loc_id,Subloc_id])}; 
@@ -91,10 +93,42 @@ err_to_code_msg({device_already_exists,Dev_id}) ->
  {409,io_lib:format("<ERROR> A device with such \"dev_id\" (~w) already exists",[Dev_id])};
 
 % The device was added into the database, but an internal error occured in starting its node
-err_to_code_msg({device_not_started,InternalError}) ->
- {500,io_lib:format("<SERVER ERROR> The device was added, but an internal error occured in starting its node: ~p",[InternalError])};
+err_to_code_msg({device_not_started,Dev_id,InternalError}) ->
+ {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was added, but an internal error occured in starting its node: ~p",[Dev_id,InternalError])};
 
+% The device was added into the Simulator database, but internal errors occured in
+% starting its node and in adding it into the Controller database (should NEVER happen)
+err_to_code_msg({add_dev_start_ctrdb_fail,Dev_id,InternalSimError,CtrDBError}) ->
+ {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was added in the Simulator database, but internal errors occured in " ++
+                    "starting its node (~p) and in adding it into the Controller database (~p)",[Dev_id,InternalSimError,CtrDBError])};   
+
+%% UPDATE_DEV_SUBLOC + DELETE_DEVICE (POST /device/:dev_id + DELETE /device/:dev_id)
+%% ---------------------------------
+% Trying to operate on a device that does not exist
+err_to_code_msg({device_not_exists,Dev_id}) ->
+ {404,io_lib:format("<ERROR> A device with such \"dev_id\" (~w) does not exist",[Dev_id])};
+
+%% UPDATE_DEV_SUBLOC (POST /device/:dev_id)
+%% -----------------
+% The device sublocation was updated in the Simulator but
+% not in the Controller database (should NEVER happen)
+err_to_code_msg({ctrdb_update_dev_subloc_fail,Dev_id,CtrDBError}) ->
+ {500,io_lib:format("<SERVER ERROR> Sublocation of device with \"dev_id\" ~w was updated in the Simulator database, but "
+                    "an internal error occured in updating it in the Controller database (~p)",[Dev_id,CtrDBError])};   
+
+%% DELEVE_DEVICE (DELETE /device/:dev_id)
+%% -------------
+% The device was deleted, but an internal error occured in stopping its node
+err_to_code_msg({device_node_not_stopped,Dev_id,InternalError}) ->
+ {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was deleted, but an internal error occured in stopping its node (~p)",[Dev_id,InternalError])};   
    
+% The device was deleted from the Simulator database, but internal errors occured in
+% stopping its node and deleting it from the Controller database (should NEVER happen)
+err_to_code_msg({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError}) ->
+ {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was deleted from the Simulator database, but internal errors occured " ++
+                    "in stopping its node (~p) and deleting it from the Controller database (~p)",[Dev_id,InternalError,CtrDBError])};   
+   
+
 
 
 % Trying to add a location whose port is already assigned to another controller
@@ -122,11 +156,7 @@ err_to_code_msg({location_not_exists,Loc_id}) ->
 err_to_code_msg({stop_location_nodes_error,Error}) ->
  {500,io_lib:format("<SERVER ERROR> The location along with all its sublocations and devices were deleted from the database, but an internal error occured in stopping their associated nodes: ~w",[Error])};
  
-%% UPDATE_DEV_NAME (POST /device/:dev_id)
-%% ---------------
-% Trying to update the name of a device that does not exist
-err_to_code_msg({device_not_exists,Dev_id}) ->
- {404,io_lib:format("<ERROR> A device with such \"dev_id\" (~w) does not exist",[Dev_id])};
+
  
 %% UNKNOWN ERROR
 %% ------------- 
@@ -372,10 +402,126 @@ add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType]) ->
    
   % The device was added into the database, but an internal error occured in starting its node
   {ok,InternalError,ok} ->
-   throw({device_not_started,InternalError})
+   throw({device_not_started,Dev_id,InternalError});
+
+  % The device was added into the Simulator database, but an internal error occured
+  % starting its node AND in adding it into the Controller database (should NEVER happen)
+  {ok,InternalSimError,CtrDBError} ->
+   throw({add_dev_start_ctrdb_fail,Dev_id,InternalSimError,CtrDBError})
  end. 
  
+
+%% UPDATE_DEV_SUBLOC (POST /device/:dev_id)
+%% =================
+update_dev_subloc_handler(Req,[Dev_id,Subloc_id]) ->
  
+ % Retrieve the controller's location ID
+ {ok,Loc_id} = application:get_env(janet_controller,loc_id),
+ 
+ % Define the operation to be executed in the Simulator and Controller databases
+ DBFun = update_dev_subloc,
+ 
+ % Define the list of parameters of the operation in the Simulator database
+ SimArgsList = [Dev_id,{Loc_id,Subloc_id}],
+
+ % Define the list of parameters of the operation in the Controller database
+ CtrArgsList = [Dev_id,Subloc_id],
+  
+ % Attempt to execute the operation in the Simulator and Controller databases
+ case sim_db_sync(DBFun,SimArgsList,CtrArgsList) of
+  {ok,ok} ->
+   
+   % If the device sublocation was updated in both databases, report the success of the operation
+   io:format("[~p-~w]: Updated device sublocation (dev_id = ~w, sub_id = {~w,~w})~n",[?FUNCTION_NAME,Loc_id,Dev_id,Loc_id,Subloc_id]),
+ 
+   % Define the success HTTP response to be replied to the client
+   cowboy_req:reply(204,Req);
+  
+  %% ------------------------------------ Operation Errors ------------------------------------ %   
+
+  % Trying to update the sublocation of a device that does not exist
+  {error,device_not_exists} ->
+   throw({device_not_exists,Dev_id});
+
+  % Trying to move the device in a sublocation that does not exist
+  {error,sublocation_not_exists} ->
+   throw({sublocation_not_exists,{Loc_id,Subloc_id}});
+   
+  % Trying to update the sublocation of a device in a different location
+  % (throw that the device does not exist in the current location)
+  {error,different_locations} ->
+   throw({device_not_exists,Dev_id});
+   
+  % The device sublocation was updated in the Simulator but
+  % not in the Controller database (should NEVER happen)
+  {ok,CtrDBError} ->
+   throw({ctrdb_update_dev_subloc_fail,Dev_id,CtrDBError})
+ end. 
+
+
+%% DELETE_DEVICE (DELETE /device/:dev_id)
+%% =============
+delete_device_handler(Req,[Dev_id]) ->
+ 
+ % Ensure the device to belong to the current location
+ % (for preventing the deletion of devices in other locations)
+ case ctr_db:get_record(ctr_device,Dev_id) of
+  
+  % If the device was found in
+  % the current location, continue
+  {ok,_DevRecord} ->
+   ok;
+   
+  % If the device was NOT found in the
+  % current location, throw an error
+  {error,not_found} ->
+   throw({device_not_exists,Dev_id})
+ end,
+ 
+ % Retrieve the controller's location ID
+ {ok,Loc_id} = application:get_env(janet_controller,loc_id),
+ 
+ % Define the operation to be executed in the Simulator and Controller databases
+ DBFun = delete_device,
+ 
+ % Define the list of parameters of the operation in the Simulator database
+ SimArgsList = [Dev_id],
+
+ % Define the list of parameters of the operation in the Controller database
+ CtrArgsList = [Dev_id],
+  
+ % Attempt to execute the operation in the Simulator and Controller databases
+ case sim_db_sync(DBFun,SimArgsList,CtrArgsList) of
+  {ok,ok,ok} ->
+   
+   % If the device was deleted in both database and its node was stopped, report the success of the operation
+   io:format("[~p-~w]: Deleted device (dev_id = ~w)~n",[?FUNCTION_NAME,Loc_id,Dev_id]),
+ 
+   % Define the success HTTP response to be replied to the client
+   cowboy_req:reply(204,Req);
+  
+  %% ------------------------------------ Operation Errors ------------------------------------ %   
+
+  % Trying to delete a device that does not exist
+  {error,device_not_exists} ->
+   throw({device_not_exists,Dev_id});
+
+  % The device was deleted, but an internal error occured in stopping its node
+  {ok,InternalError,ok} ->
+   throw({device_node_not_stopped,Dev_id,InternalError});
+   
+  % The device was deleted from the Simulator database, but internal errors occured in
+  % stopping its node and deleting it from the Controller database (should NEVER happen)
+  {ok,InternalError,CtrDBError} ->
+   throw({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError})
+ end. 
+
+
+
+
+
+
+
 
 %% UPDATE_LOC_NAME (POST /location/:loc_id)
 %% ===============
