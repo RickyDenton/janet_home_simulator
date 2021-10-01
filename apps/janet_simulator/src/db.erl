@@ -468,6 +468,11 @@ print_tree(Tabletype,Id) when is_atom(Tabletype) ->
 	 print_tree_location(Location,""),
 	 io:format("~n")
    end;
+   
+  ctrmanager ->
+  
+   % FIX: reidirect to location
+   print_tree(location,Id);
  
   sublocation ->
   

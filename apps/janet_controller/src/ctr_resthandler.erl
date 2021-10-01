@@ -14,7 +14,12 @@
          add_device_handler/2,                  %                 operation handlers
 		 update_dev_subloc_handler/2,           %
 		 delete_device_handler/2]).             %   
-		    
+-export([res_devcommands_handler/1,             % /devcommands resource handler
+         devcommands_handler/2]).               %              operation handler
+
+-include("ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
+-include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
+
 %%====================================================================================================================================
 %%                                                GEN_RESTHANDLER CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
@@ -49,9 +54,11 @@ init_handler(_) ->
 		  %		
 		  {"/device/:dev_id",?MODULE,res_dev_handler},
 			 
-		  % Device commands
-		  %% [TODO]
-		  {"/device",?MODULE,res_devcommand_handler}
+          % RESOURCE: /devcommands
+		  % ALLOWED METHODS: 
+          %   - PATCH -> devcommands([{Dev_id,[Commands]}])
+		  %		
+		  {"/devcommands",?MODULE,res_devcommands_handler}
 	     ],
 			
  % Return the initialization tuple to the behaviour engine
@@ -116,7 +123,7 @@ err_to_code_msg({ctrdb_update_dev_subloc_fail,Dev_id,CtrDBError}) ->
  {500,io_lib:format("<SERVER ERROR> Sublocation of device with \"dev_id\" ~w was updated in the Simulator database, but "
                     "an internal error occured in updating it in the Controller database (~p)",[Dev_id,CtrDBError])};   
 
-%% DELEVE_DEVICE (DELETE /device/:dev_id)
+%% DELETE_DEVICE (DELETE /device/:dev_id)
 %% -------------
 % The device was deleted, but an internal error occured in stopping its node
 err_to_code_msg({device_node_not_stopped,Dev_id,InternalError}) ->
@@ -128,36 +135,23 @@ err_to_code_msg({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError}) -
  {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was deleted from the Simulator database, but internal errors occured " ++
                     "in stopping its node (~p) and deleting it from the Controller database (~p)",[Dev_id,InternalError,CtrDBError])};   
    
+%% DEVCOMMANDS (PATCH /device)
+%% -----------
+% HTTP request body could not be interpreted in JSON format
+err_to_code_msg(body_not_json) ->
+ {415,"<ERROR> Request body could not be interpreted in JSON format"}; 
 
+% The request body ("DevCommands") is not a list
+err_to_code_msg({not_a_list,devcommands}) ->
+ {400,"<ERROR> The request body could not be interpreted as a JSON list"};
 
+% The request body ("DevCommands") is empty
+err_to_code_msg({empty,devcommands}) ->
+ {400,"<ERROR> The list of device commands is empty"};
 
-% Trying to add a location whose port is already assigned to another controller
-err_to_code_msg({port_already_taken,Port}) ->
- {412,io_lib:format("<ERROR> The specified \"port\" (~w) is already assigned to another location controller",[Port])};
+% NOTE: The error handling of each individual device command is performed manually within the operation handler
+% ----
 
-% Trying to add a location whose port is currently unavailable in the host OS
-err_to_code_msg({host_port_taken,Port}) ->
- {412,io_lib:format("<ERROR> The specified \"port\" (~w) is currently unavailable in the host OS",[Port])};
- 
-% The location was added into the database, but an internal error occured in starting its controller node
-err_to_code_msg({controller_not_started,Error}) ->
- {500,io_lib:format("<SERVER ERROR> The location was added, but an internal error occured in starting its controller node: ~w",[Error])};
- 
-%% UPDATE_LOC_NAME + DELETE_LOCATION (POST /location/:loc_id + DELETE /location/:loc_id)
-%% ---------------------------------    
-% Trying to operate on a location that does not exist
-err_to_code_msg({location_not_exists,Loc_id}) ->
- {404,io_lib:format("<ERROR> A location with such \"loc_id\" (~w) does not exist",[Loc_id])};
-
-%% DELETE_LOCATION (DELETE /location/:loc_id)
-%% ---------------
-% The location along with all its sublocations and devices were deleted from 
-% the database, but an internal error occured in stopping their associated nodes
-err_to_code_msg({stop_location_nodes_error,Error}) ->
- {500,io_lib:format("<SERVER ERROR> The location along with all its sublocations and devices were deleted from the database, but an internal error occured in stopping their associated nodes: ~w",[Error])};
- 
-
- 
 %% UNKNOWN ERROR
 %% ------------- 
 err_to_code_msg(UnknownError) ->
@@ -517,32 +511,353 @@ delete_device_handler(Req,[Dev_id]) ->
  end. 
 
 
+%%=================================================================================================================================%%
+%%                                                      RESOURCE: /devcommands                                                     %% 
+%%=================================================================================================================================%%
 
-
-
-
-
-
-%% UPDATE_LOC_NAME (POST /location/:loc_id)
-%% ===============
-update_loc_name_handler(Req,[Loc_id,Name]) ->
+%% ALLOWED METHODS:
+%% ---------------
+%%   - PATCH -> devcommands([{Dev_id,[Commands]}])
+%%
+res_devcommands_handler(Req) ->
  
- % Attempt to update the location name
- case jsim:update_loc_name(Loc_id,Name) of
-  ok ->
+ % Define the binary list of HTTP methods allowed by this resource handler
+ Allowed_Methods = [<<"PATCH">>],
+ 
+ % Ensure the HTTP request method to be included in the list of allowed methods
+ Method = gen_resthandler:get_check_method(Req,Allowed_Methods),
+
+ % Determine the name and the expected body parameters of the
+ % operation handler associated with the request from its HTTP method
+ {OpHandlerName,ExpBodyParams} =
+ case Method of
+ 
+  % PATCH -> devcommands([{Dev_id,[Commands]}])
+  <<"PATCH">> ->
+   {
+    devcommands_handler,  % Operation handler name
+    custom                % Inform the gen_resthandler to return the binary body of the HTTP request        
+   }
+ end,
+ 
+ % Return the name of the operation handler, the list of path bindings parameters and
+ % the list of expected parameters to be retrieved from the body of the HTTP request
+ {OpHandlerName,[],ExpBodyParams}.
+ 
+
+%% DEVCOMMANDS (PATCH /devcommands)
+%% ===========
+devcommands_handler(Req,[BinBody]) ->
+ 
+ % Retrieve the list of device commands from the binary body
+ DevCommands = get_devcommands(BinBody),
+ 
+ % If it is, parse the received commands
+ ParsedCommands = parse_devcommands(DevCommands,[]),
    
-   % If the location name was updated, report the success of the operation
-   io:format("[~p]: Updated location name (loc_id = ~w, name = ~p)~n",[?FUNCTION_NAME,Loc_id,Name]),
+ io:format("ParsedCommands = ~p~n~n",[ParsedCommands]),
+			     
+ cowboy_req:reply(204,Req).
+ 
+ 
+%% -------------------------------------------- 
+get_devcommands(BinBody) ->
+     
+ % Interpret the binary body of the HTTP request as JSON
+ % and attempt to cast it into a list via the JSONE library
+ DevCommands = try jsone:decode(BinBody)
+               catch
+		   
+		        % If the body of the HTTP request could
+			    % not be interpred as JSON, throw an error
+		        error:badarg ->
+			     throw(body_not_json)
+		       end,
+ 
+ % Ensure that what was returned by
+ % the JSONE library is indeed a list
+ if
+  is_list(DevCommands) =:= false ->
    
-   % Define the success HTTP response to be replied to the client
-   cowboy_req:reply(204,Req);
+   % If it is not, throw an error
+   throw({not_a_list,devcommands});
+   
+  true ->
   
-  %% ------------------------------------ Operation Errors ------------------------------------ %  
-  
-  % Trying to update the name of a location that does not exist
-  {error,location_not_exists} ->
-   throw({location_not_exists,Loc_id})
+   % If it is, ensure it to contain at least one element
+   if
+   
+    % If it does, return the list of DevCommands
+    length(DevCommands) > 0 ->
+	 DevCommands;
+	
+    % Otherwise, throw an error	
+	true ->
+	 throw({empty,devcommands})
+   end
  end.
+ 
+ 
+%% -------------------------------------------- 
+% Base case (return the list of ParsedCommands
+parse_devcommands([],ParsedCommands) ->
+ ParsedCommands;
+ 
+% Recursive case (when a DevCommand was correctly interpreted as a map)  
+parse_devcommands([DevCommand|NextDevCommand],ParsedCommands) when is_map(DevCommand) ->
+
+ ParsedCommand =
+ try
+  
+  % Attempt to retrieve the "Dev_id" key from the DevCommand map
+  Dev_id = get_devcommand_dev_id(DevCommand),
+  
+  io:format("~nDev_id = ~w~n",[Dev_id]),
+  
+  try
+   
+   % Retrieve the DevComman actions' map
+   Actions = get_devcommand_actions(DevCommand),
+   
+   io:format("Actions = ~p~n",[Actions]),
+   
+   % Ensure device "Dev_id" to belong to the location and to be currently paired
+   % with the controller, also obtaining its Type and the PID of its 'ctr_devhandler'
+   {Type,HandlerPID} = get_devcommand_devinfo(Dev_id), 
+  
+   io:format("Type = ~w, HandlerPID = ~p~n",[Type,HandlerPID]),
+   
+   % Prepare the configuration command record of the
+   % appropriate #devtype by parsing the actions' map
+   CfgCommand = parse_devcommand_actions(Type,Actions),
+   
+   io:format("CfgCommand = ~p~n",[CfgCommand]),
+   
+   % Return the parsed DevCommand
+   #{dev_id => Dev_id, cfgcommand => CfgCommand, devhandler_pid => HandlerPID}
+   
+  catch
+   {missing_param,actions} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object is missing"});
+   {not_a_map,actions} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" parameter could not be interpreted as a JSON object"});
+   {empty,actions} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object is empty"});  
+   device_not_exists ->
+    throw(#{dev_id => Dev_id, status => 404, errorReason => "A device with such \"dev_id\" does not exist"});
+   device_offline ->
+    throw(#{dev_id => Dev_id, status => 307, errorReason => "The device is currently offline"});
+   {invalid_devtrait,Trait,InvalidValue} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => io_lib:format("Invalid value \"~p\" of trait \"~p\"",[InvalidValue,Trait])});
+   {empty_cfgcmd,DevType} ->
+    throw(#{dev_id => Dev_id, status => 00, errorReason => "The command would have no effect on the device according to its type (" ++ atom_to_list(DevType) ++ ")"});
+	
+   _:UnhandledErrorDev ->
+    io:format("unhandled error: ~p (dev_id: ~p)~n",[UnhandledErrorDev,Dev_id]),
+    throw(#{dev_id => Dev_id, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledErrorDev])})
+  end
+  
+ catch
+  {missing_param,dev_id} ->
+   #{dev_id => unknown, status => 400, errorReason => "Required parameter \"dev_id\" is missing"};
+  {not_an_integer,dev_id} ->
+   #{dev_id => invalid, status => 400, errorReason => "Parameter \"dev_id\" is not an integer"};
+  {out_of_range,dev_id,InvalidDevId} ->
+   io:format("is integer? ~w~n",[is_integer(InvalidDevId)]),
+   io:format("is list? ~w~n",[is_list(InvalidDevId)]),
+   #{dev_id => invalid, status => 400, errorReason => "Invalid value of parameter \"dev_id\" (" ++ integer_to_list(InvalidDevId) ++ ")"};
+  ErrorMap when is_map(ErrorMap) ->
+   ErrorMap;
+  _:UnhandledError ->
+   io:format("unhandled error: ~p~n",[UnhandledError]),
+   throw(#{dev_id => unknown, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledError])})
+ end,
+ 
+ % Parse the next DevCommand
+ parse_devcommands(NextDevCommand,ParsedCommands ++ [ParsedCommand]);
+ 
+% Recursive case where the DevCommand was not correctly interpreted as a map
+parse_devcommands([_|NextDevCommand],ParsedCommands) ->
+ parse_devcommands(NextDevCommand,ParsedCommands ++ [#{dev_id => unknown, status => 400, errorReason => "The device command could not be interpreted as a JSON object"}]).
+
+
+%% --------------------------------------------
+get_devcommand_dev_id(DevCommand) -> 
+
+ % Attempt to retrieve the "dev_id" key from the DevCommand map
+ Dev_id = try maps:get(<<"dev_id">>,DevCommand)
+          catch
+		
+		   % If the "dev_id" was not found, mark the
+		   % DevCommand as invalid by throwing an error
+ 	       error:{badkey,<<"dev_id">>} ->
+		    throw({missing_param,dev_id})
+		  end,
+
+ % Ensure the "Dev_id" to be an integer
+ if
+  
+  % If it is, ensure it to be >0
+  is_integer(Dev_id) ->
+   if
+    
+	% If it is, return the Dev_id
+	Dev_id > 0 ->
+     Dev_id;
+	 
+	% If it is not, throw an error
+	true ->
+	 throw({out_of_range,dev_id,Dev_id})
+   end;
+   
+  % If it is not an integer, throw an error
+  true ->
+   throw({not_an_integer,dev_id})
+ end.
+   
+   
+%% --------------------------------------------  
+get_devcommand_actions(DevCommand) ->
+  
+ % Attempt to retrieve the "actions" map from the DevCommand
+ Actions = try maps:get(<<"actions">>,DevCommand)
+           catch
+	 		 
+	        % If the "action" map was not found
+	        % in the DevCommand, throw an error
+	        error:{badkey,<<"actions">>} ->
+		     throw({missing_param,actions})
+	       end,
+
+ % Ensure "Actions" to be indeed a map
+ if
+  is_map(Actions) =:= true ->
+  
+   % If it is, ensure it to contain at least one element
+   if
+    map_size(Actions) > 0 ->
+   
+     % If it does, return the map
+	 Actions;
+	 
+	true ->
+	
+	 % Otherwise, throw an error
+	 throw({empty,actions})
+   end;
+  
+  true -> 
+  
+   % If it is not a map, throw an error
+   throw({not_a_map,actions})
+ end.  
+  
+  
+  
+  
+  
+  
+%% --------------------------------------------
+get_devcommand_devinfo(Dev_id) ->
+
+ % Ensure the device to belong to the location
+ case ctr_db:get_record(ctr_device,Dev_id) of 
+  {error,not_found} ->
+  
+   % If it does not, throw an error
+   throw(device_not_exists);
+   
+  {ok,CtrDevRecord} ->
+  
+   % If it does, ensure it to be currently paired
+   % with the controller via the 'handler_pid' field
+   case CtrDevRecord#ctr_device.handler_pid of
+	
+	% If the device is currently offline, throw an error
+	'-' ->
+	 throw(device_offline);
+	
+	% Otherwise if the device is currently
+	% paired, return its Type and HandlerPID
+	HandlerPID when is_pid(HandlerPID) ->
+	 {CtrDevRecord#ctr_device.type,HandlerPID}
+   end
+ end.
+ 
+
+ 
+
+
+parse_devcommand_actions(fan,Actions) ->
+ 
+ % OnOff trait
+ OnOff = parse_devcommand_trait(onoff,Actions),
+ 
+ % FanSpeed trait
+ FanSpeed = parse_devcommand_trait(fanspeed,Actions),
+ 
+ % Ensure that the resulting configuration command could have
+ % an effect, i.e. it's not composed only by '$keep' parameters
+ ok = check_cfgcmd_empty([OnOff,FanSpeed],fan),
+
+ % Return the configuration command of type "fan"
+ #fancfg{onoff = OnOff, fanspeed = FanSpeed}.
+ 
+ 
+
+
+
+check_cfgcmd_empty([],Type) ->
+
+ % Throw an error signaling that the resulting
+ % configuration command would not have any effect
+ throw({empty_cfgcmd,Type}); 
+ 
+check_cfgcmd_empty(['$keep'|NextTrait],Type) ->
+ 
+ % If the trait is '$keep', search the next one
+ check_cfgcmd_empty(NextTrait,Type);
+ 
+check_cfgcmd_empty(NoKeepTrait,_) ->
+ 
+ % If the trait is not '$keep', return ok
+ ok.
+ 
+ 
+ 
+ 
+ 
+parse_devcommand_trait(onoff,DevCommand=#{<<"onOff">> := OnOff}) when OnOff =:= <<"on">> orelse OnOff =:= <<"off">> ->
+ binary_to_atom(OnOff);
+parse_devcommand_trait(onoff,DevCommand=#{<<"onOff">> := InvalidOnOff}) ->
+ throw({invalid_devtrait,onoff,InvalidOnOff});
+ 
+parse_devcommand_trait(fanspeed,DevCommand=#{<<"setFanSpeed">> := FanSpeed}) when is_integer(FanSpeed), FanSpeed > 0, FanSpeed =< 100 ->
+ FanSpeed;
+parse_devcommand_trait(fanspeed,DevCommand=#{<<"setFanSpeed">> := InvalidFanSpeed}) ->
+ throw({invalid_devtrait,fanspeed,InvalidFanSpeed});
+ 
+parse_devcommand_trait(_,_) ->
+ '$keep'.
+ 
+ 
+
+
+
+
+
+
+%build_devhandler_command([],DevHandlerCommand) ->
+% DevHandlerCommand;
+%build_devhandler_command([Command=#{<<"command">> := <<"actions.devices.commands.onoff">>,<<"value">> := <<"on">>}|NextCommand],DevHandlerCommand) -> 
+% build_devhandler_command(NextCommand,DevHandlerCommand#{onoff => on});
+%build_devhandler_command([Command=#{<<"command">> := <<"actions.devices.commands.onoff">>,<<"value">> := <<"off">>}|NextCommand],DevHandlerCommand) -> 
+% build_devhandler_command(NextCommand,DevHandlerCommand#{onoff => off});
+%build_devhandler_command(_,DevHandlerCommand) -> 
+% io:format("build_devhandler_command error~n"),
+% DevHandlerCommand.
+ 
+
 
 
 %% DELETE_LOCATION (DELETE /location/:loc_id)

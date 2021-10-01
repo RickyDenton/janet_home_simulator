@@ -267,8 +267,15 @@ handle_req_try(CallbackModule,ResHandlerName,Req) ->
    %
    {PathParams,<<"<not_read>">>,Req};
 	
-  %% [TODO]: Insert "custom" here
+  custom ->
+  
+   % If the operation handler is to be given the
+   % binary body of the HTTP request, retrieve it
+   {ok,ReadBinBody,ReadReq} = cowboy_req:read_body(Req),
 	
+   % Return the required tuple
+   {PathParams ++ [ReadBinBody],ReadBinBody,ReadReq};
+
   _ ->
 
    % If there are parameters to be read from the body:
