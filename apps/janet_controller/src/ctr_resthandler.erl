@@ -17,7 +17,7 @@
 -export([res_devcommands_handler/1,             % /devcommands resource handler
          devcommands_handler/2]).               %              operation handler
 
--include("ctr_mnesia_tables_definitions.hrl").  % Janet Controller Mnesia Tables Records Definitions
+-include("ctr_mnesia_tables_definitions.hrl").        % Janet Controller Mnesia Tables Records Definitions
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %%====================================================================================================================================
@@ -553,9 +553,11 @@ devcommands_handler(Req,[BinBody]) ->
  DevCommands = get_devcommands(BinBody),
  
  % If it is, parse the received commands
- ParsedCommands = parse_devcommands(DevCommands,[]),
+ {ValidCommands,InvalidCommands} = parse_devcommands(DevCommands,[],[]),
    
- io:format("ParsedCommands = ~p~n~n",[ParsedCommands]),
+ io:format("ValidCommands = ~p~n",[ValidCommands]),
+ io:format("InvalidCommands = ~p~n",[InvalidCommands]),
+ 
 			     
  cowboy_req:reply(204,Req).
  
@@ -599,12 +601,12 @@ get_devcommands(BinBody) ->
  
  
 %% -------------------------------------------- 
-% Base case (return the list of ParsedCommands
-parse_devcommands([],ParsedCommands) ->
- ParsedCommands;
+% Base case (return the lists of valid and invalid commands)
+parse_devcommands([],ValidCommands,InvalidCommands) ->
+ {ValidCommands,InvalidCommands};
  
 % Recursive case (when a DevCommand was correctly interpreted as a map)  
-parse_devcommands([DevCommand|NextDevCommand],ParsedCommands) when is_map(DevCommand) ->
+parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) when is_map(DevCommand) ->
 
  ParsedCommand =
  try
@@ -612,20 +614,14 @@ parse_devcommands([DevCommand|NextDevCommand],ParsedCommands) when is_map(DevCom
   % Attempt to retrieve the "Dev_id" key from the DevCommand map
   Dev_id = get_devcommand_dev_id(DevCommand),
   
-  io:format("~nDev_id = ~w~n",[Dev_id]),
-  
   try
    
-   % Retrieve the DevComman actions' map
+   % Retrieve the DevCommand actions' map
    Actions = get_devcommand_actions(DevCommand),
-   
-   io:format("Actions = ~p~n",[Actions]),
    
    % Ensure device "Dev_id" to belong to the location and to be currently paired
    % with the controller, also obtaining its Type and the PID of its 'ctr_devhandler'
    {Type,HandlerPID} = get_devcommand_devinfo(Dev_id), 
-  
-   io:format("Type = ~w, HandlerPID = ~p~n",[Type,HandlerPID]),
    
    % Prepare the configuration command record of the
    % appropriate #devtype by parsing the actions' map
@@ -633,8 +629,8 @@ parse_devcommands([DevCommand|NextDevCommand],ParsedCommands) when is_map(DevCom
    
    io:format("CfgCommand = ~p~n",[CfgCommand]),
    
-   % Return the parsed DevCommand
-   #{dev_id => Dev_id, cfgcommand => CfgCommand, devhandler_pid => HandlerPID}
+   % Return the information associated with the successful DevCommand parsing
+   {ok,#{dev_id => Dev_id, cfgcommand => CfgCommand, devhandler_pid => HandlerPID}}
    
   catch
    {missing_param,actions} ->
@@ -642,43 +638,52 @@ parse_devcommands([DevCommand|NextDevCommand],ParsedCommands) when is_map(DevCom
    {not_a_map,actions} ->
     throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" parameter could not be interpreted as a JSON object"});
    {empty,actions} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object is empty"});  
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object is empty"});
+   {invalid,actions} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object contains invalid actions"});	
    device_not_exists ->
     throw(#{dev_id => Dev_id, status => 404, errorReason => "A device with such \"dev_id\" does not exist"});
    device_offline ->
     throw(#{dev_id => Dev_id, status => 307, errorReason => "The device is currently offline"});
-   {invalid_devtrait,Trait,InvalidValue} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => io_lib:format("Invalid value \"~p\" of trait \"~p\"",[InvalidValue,Trait])});
-   {empty_cfgcmd,DevType} ->
-    throw(#{dev_id => Dev_id, status => 00, errorReason => "The command would have no effect on the device according to its type (" ++ atom_to_list(DevType) ++ ")"});
-	
+   {invalid_devtrait,Trait,InvalidValueList} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "Invalid value \"" ++ InvalidValueList ++ "\" of trait \"" ++ atom_to_list(Trait) ++ "\""});
+   {invalid_state,door} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => "The state {\"open\",\"lock\"} is invalid for device type \"door\""});
+   {unknown_jsone_cast,ParamName} ->
+    throw(#{dev_id => Dev_id, status => 500, errorReason => "Invalid value of trait \""++ atom_to_list(ParamName) ++ "\" was cast to an unknown term() by the JSONE library"});
+   {invalid_db_devtype,InvalidDevType} ->
+    throw(#{dev_id => Dev_id, status => 500, errorReason => "Unknown device type (" ++ atom_to_list(InvalidDevType) ++ ")"});
    _:UnhandledErrorDev ->
-    io:format("unhandled error: ~p (dev_id: ~p)~n",[UnhandledErrorDev,Dev_id]),
+    io:format("parse_devcommands (inner): unhandled error: ~p (dev_id: ~p)~n",[UnhandledErrorDev,Dev_id]),
     throw(#{dev_id => Dev_id, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledErrorDev])})
   end
   
  catch
   {missing_param,dev_id} ->
-   #{dev_id => unknown, status => 400, errorReason => "Required parameter \"dev_id\" is missing"};
+   {error,#{dev_id => unknown, status => 400, errorReason => "Required parameter \"dev_id\" is missing"}};
   {not_an_integer,dev_id} ->
-   #{dev_id => invalid, status => 400, errorReason => "Parameter \"dev_id\" is not an integer"};
+   {error,#{dev_id => invalid, status => 400, errorReason => "Parameter \"dev_id\" is not an integer"}};
   {out_of_range,dev_id,InvalidDevId} ->
-   io:format("is integer? ~w~n",[is_integer(InvalidDevId)]),
-   io:format("is list? ~w~n",[is_list(InvalidDevId)]),
-   #{dev_id => invalid, status => 400, errorReason => "Invalid value of parameter \"dev_id\" (" ++ integer_to_list(InvalidDevId) ++ ")"};
+   {error,#{dev_id => invalid, status => 400, errorReason => "Invalid value of parameter \"dev_id\" (" ++ integer_to_list(InvalidDevId) ++ ")"}};
   ErrorMap when is_map(ErrorMap) ->
-   ErrorMap;
+   {error,ErrorMap};
   _:UnhandledError ->
-   io:format("unhandled error: ~p~n",[UnhandledError]),
-   throw(#{dev_id => unknown, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledError])})
+   io:format("parse_devcommands (outer): unhandled error: ~p~n",[UnhandledError]),
+   {error,throw(#{dev_id => unknown, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledError])})}
  end,
  
- % Parse the next DevCommand
- parse_devcommands(NextDevCommand,ParsedCommands ++ [ParsedCommand]);
+ % Depending on the outcome of its processing append the DevCommand in
+ % the valid or unvalid commands list and proceed with the next DevCommand
+ case ParsedCommand of
+  {ok,ValidCommand} ->
+   parse_devcommands(NextDevCommand,ValidCommands ++ [ValidCommand],InvalidCommands);
+  {error,InvalidCommand} ->
+   parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [InvalidCommand])
+ end;
  
 % Recursive case where the DevCommand was not correctly interpreted as a map
-parse_devcommands([_|NextDevCommand],ParsedCommands) ->
- parse_devcommands(NextDevCommand,ParsedCommands ++ [#{dev_id => unknown, status => 400, errorReason => "The device command could not be interpreted as a JSON object"}]).
+parse_devcommands([_|NextDevCommand],ValidCommands,InvalidCommands) ->
+ parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [#{dev_id => unknown, status => 400, errorReason => "The device command could not be interpreted as a JSON object"}]).
 
 
 %% --------------------------------------------
@@ -785,174 +790,172 @@ get_devcommand_devinfo(Dev_id) ->
  end.
  
 
- 
 
 
-parse_devcommand_actions(fan,Actions) ->
+parse_devcommand_actions(Type,Actions) ->
+
+ {CfgCommand,EmptyActions} = build_cfgcommand(Type,Actions),
+
+ % Ensure the resulting "actions" map to be empty, i.e.
+ % there were not estraneous or duplicate actions in it
+ if
+  map_size(EmptyActions) =:= 0 ->
+  
+   % If it is, return the configuration command
+   CfgCommand;
+   
+  true ->
+  
+   % If it is not, throw an error
+   throw({invalid,actions})
+ end.
+
+
+
+build_cfgcommand(fan,Actions) ->
  
  % OnOff trait
- OnOff = parse_devcommand_trait(onoff,Actions),
+ {OnOff,Actions1} = get_trait_value(onoff,Actions),
  
  % FanSpeed trait
- FanSpeed = parse_devcommand_trait(fanspeed,Actions),
+ {FanSpeed,Actions2} = get_trait_value(fanspeed,Actions1),
  
- % Ensure that the resulting configuration command could have
- % an effect, i.e. it's not composed only by '$keep' parameters
- ok = check_cfgcmd_empty([OnOff,FanSpeed],fan),
+ % Return the configuration command of the appropriate
+ % #devcfg type and the updated "Actions" map
+ {#fancfg{onoff = OnOff, fanspeed = FanSpeed},Actions2};
+ 
+ 
+build_cfgcommand(light,Actions) ->
+ 
+ % OnOff trait
+ {OnOff,Actions1} = get_trait_value(onoff,Actions),
+ 
+ % Brightness trait
+ {Brightness,Actions2} = get_trait_value(brightness,Actions1),
+ 
+ % Colorsetting trait
+ {ColorSetting,Actions3} = get_trait_value(colorsetting,Actions2),
 
- % Return the configuration command of type "fan"
- #fancfg{onoff = OnOff, fanspeed = FanSpeed}.
- 
- 
+ % Return the configuration command of the appropriate
+ % #devcfg type and the updated "Actions" map
+ {#lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = ColorSetting},Actions3};
 
-
-
-check_cfgcmd_empty([],Type) ->
-
- % Throw an error signaling that the resulting
- % configuration command would not have any effect
- throw({empty_cfgcmd,Type}); 
+build_cfgcommand(door,Actions) ->
  
-check_cfgcmd_empty(['$keep'|NextTrait],Type) ->
+ % OpenClose trait
+ {OpenClose,Actions1} = get_trait_value(openclose,Actions),
  
- % If the trait is '$keep', search the next one
- check_cfgcmd_empty(NextTrait,Type);
+ % LockUnlock trait
+ {LockUnlock,Actions2} = get_trait_value(lockunlock,Actions1),
  
-check_cfgcmd_empty(NoKeepTrait,_) ->
- 
- % If the trait is not '$keep', return ok
- ok.
- 
- 
- 
- 
- 
-parse_devcommand_trait(onoff,DevCommand=#{<<"onOff">> := OnOff}) when OnOff =:= <<"on">> orelse OnOff =:= <<"off">> ->
- binary_to_atom(OnOff);
-parse_devcommand_trait(onoff,DevCommand=#{<<"onOff">> := InvalidOnOff}) ->
- throw({invalid_devtrait,onoff,InvalidOnOff});
- 
-parse_devcommand_trait(fanspeed,DevCommand=#{<<"setFanSpeed">> := FanSpeed}) when is_integer(FanSpeed), FanSpeed > 0, FanSpeed =< 100 ->
- FanSpeed;
-parse_devcommand_trait(fanspeed,DevCommand=#{<<"setFanSpeed">> := InvalidFanSpeed}) ->
- throw({invalid_devtrait,fanspeed,InvalidFanSpeed});
- 
-parse_devcommand_trait(_,_) ->
- '$keep'.
- 
- 
-
-
-
-
-
-
-%build_devhandler_command([],DevHandlerCommand) ->
-% DevHandlerCommand;
-%build_devhandler_command([Command=#{<<"command">> := <<"actions.devices.commands.onoff">>,<<"value">> := <<"on">>}|NextCommand],DevHandlerCommand) -> 
-% build_devhandler_command(NextCommand,DevHandlerCommand#{onoff => on});
-%build_devhandler_command([Command=#{<<"command">> := <<"actions.devices.commands.onoff">>,<<"value">> := <<"off">>}|NextCommand],DevHandlerCommand) -> 
-% build_devhandler_command(NextCommand,DevHandlerCommand#{onoff => off});
-%build_devhandler_command(_,DevHandlerCommand) -> 
-% io:format("build_devhandler_command error~n"),
-% DevHandlerCommand.
- 
-
-
-
-%% DELETE_LOCATION (DELETE /location/:loc_id)
-%% ===============
-delete_location_handler(Req,[Loc_id]) ->
- 
- % Attempt to delete the location, along with all its sublocations and
- % devices, also stopping their associated controller and devices nodes
- case jsim:delete_location(Loc_id) of
-  {ok,ok} ->
-   
-   % If the location was deleted, report the success of the operation
-   io:format("[~p]: Deleted location (loc_id = ~w)~n",[?FUNCTION_NAME,Loc_id]),
-   
-   % Define the success HTTP response to be replied to the client
-   cowboy_req:reply(204,Req);
+ % Ensure the resulting configuration not to
+ % consist in the invalid state {open,lock}
+ if
+  OpenClose =:= 'open' andalso LockUnlock =:= 'lock' ->
   
-  %% ------------------------------------ Operation Errors ------------------------------------ %   
-  
-  % Trying to delete a location that does not exist
-  {error,location_not_exists} ->
-   throw({location_not_exists,Loc_id});
-    
-  % The location along with all its sublocations and devices were deleted from 
-  % the database, but an internal error occured in stopping their associated nodes
-  {ok,Error} ->
-   throw({stop_location_nodes_error,Error}) 
- end. 
+   % If it does, throw an error
+   throw({invalid_state,door});
+   
+  true ->
  
- 
-%%=================================================================================================================================%%
-%%                                           RESOURCE: /location/:loc_id/sublocation/:subloc_id                                    %% 
-%%=================================================================================================================================%% 
- 
-%% ALLOWED METHODS:
-%% ---------------
-%%   - POST   -> update_loc_name(Loc_id,Name)
-%% 
-res_loc_subloc_handler(Req) ->
- 
- % Define the binary list of HTTP methods allowed by this resource handler
- Allowed_Methods = [<<"POST">>],
- 
- % Ensure the HTTP request method to be included in the list of allowed methods
- Method = gen_resthandler:get_check_method(Req,Allowed_Methods),
- 
- % Retrieve the "Loc_id" path binding parameter
- Loc_id = gen_resthandler:get_check_int_binding(Req,loc_id,1),
- 
- % Retrieve the "Subloc_id" path binding parameter
- Subloc_id = gen_resthandler:get_check_int_binding(Req,subloc_id,1),  % "1" because the name of the default sublocation cannot be changed
- 
- % Determine the name and the expected body parameters of the operation handler associated with
- % the request from its HTTP method, with the latters being defined using the following syntax:
- %
- % - List/String parameters: {ParamName,'list','required'/'optional'}  % Required or optional
- % - Integer parameters:     {ParamName,'integer',MinValue}            % Always required and must be >= a MinValue
- % 
- {OpHandlerName,ExpBodyParams} =
- case Method of
- 
-  % POST -> update_subloc_name({Loc_id,Subloc_id},Name)
-  <<"POST">> ->
-   {
-    update_subloc_name_handler, % Operation handler name
-	[{name,list,required}]      % "Name" parameter (required)
-   }
- end,
- 
- % Return the name of the operation handler, the list of path bindings parameters and
- % the list of expected parameters to be retrieved from the body of the HTTP request
- {OpHandlerName,[{Loc_id,Subloc_id}],ExpBodyParams}.
+  % Otherwise return the configuration command of the 
+  % appropriate #devcfg type and the updated "Actions" map
+  {#doorcfg{openclose = OpenClose, lockunlock = LockUnlock},Actions2}
+ end;
 
-%% ===================================================== OPERATION HANDLERS ===================================================== %% 
+build_cfgcommand(thermostat,Actions) ->
  
-%% UPDATE_SUBLOC_NAME (POST /location/:loc_id/sublocation/:subloc_id)
-%% ==================
-update_subloc_name_handler(Req,[{Loc_id,Subloc_id},Name]) ->
+ % OnOff trait
+ {OnOff,Actions1} = get_trait_value(onoff,Actions),
  
- % Attempt to update the sublocation name
- case jsim:update_subloc_name({Loc_id,Subloc_id},Name) of
-  ok ->
-   
-   % If the sublocation name was updated, report the success of the operation
-   io:format("[~p]: Updated sublocation name (sub_id = {~w,~w}, name = ~p)~n",[?FUNCTION_NAME,Loc_id,Subloc_id,Name]),
-   
-   % Define the success HTTP response to be replied to the client
-   cowboy_req:reply(204,Req);
-  
-  %% ------------------------------------ Operation Errors ------------------------------------ %  
-  
-  % Trying to update the name of a sublocation that does not exist
-  {error,sublocation_not_exists} ->
-   throw({sublocation_not_exists,{Loc_id,Subloc_id}})
- end.
+ % TempTarget trait
+ {TempTarget,Actions2} = get_trait_value(temp_target,Actions1),
+
+ % NOTE: The 'temp_current' trait cannot be changed via a command
+
+ % Return the configuration command of the appropriate
+ % #devcfg type and the updated "Actions" map
+ {#thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep'},Actions2};
+ 
+build_cfgcommand(conditioner,Actions) ->
+ 
+ % OnOff trait
+ {OnOff,Actions1} = get_trait_value(onoff,Actions),
+ 
+ % TempTarget trait
+ {TempTarget,Actions2} = get_trait_value(temp_target,Actions1),
+ 
+ % NOTE: The 'temp_current' trait cannot be changed via a command 
+ 
+ % FanSpeed trait
+ {FanSpeed,Actions3} = get_trait_value(fanspeed,Actions2),
+ 
+ % Return the configuration command of the appropriate
+ % #devcfg type and the updated "Actions" map
+ {#condcfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep', fanspeed = FanSpeed},Actions3}; 
+ 
+build_cfgcommand(InvalidDevType,_) ->
+ 
+ % If the device type is invalid, throw an error
+ throw({invalid_db_devtype,InvalidDevType}).
+ 
+
+ 
+ 
+% OnOff trait 
+get_trait_value(onoff,Action=#{<<"onOff">> := OnOff}) when OnOff =:= <<"on">> orelse OnOff =:= <<"off">> ->
+ {binary_to_atom(OnOff),maps:remove(<<"onOff">>,Action)};
+get_trait_value(onoff,#{<<"onOff">> := InvalidOnOff}) ->
+ throw({invalid_devtrait,onoff,utils:jsone_term_to_list(InvalidOnOff,onoff)});
+ 
+% FanSpeed Trait
+get_trait_value(fanspeed,Action=#{<<"fanSpeed">> := FanSpeed}) when is_integer(FanSpeed), FanSpeed > 0, FanSpeed =< 100 ->
+ {FanSpeed,maps:remove(<<"fanSpeed">>,Action)};
+get_trait_value(fanspeed,#{<<"fanSpeed">> := InvalidFanSpeed}) ->
+ throw({invalid_devtrait,fanspeed,utils:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
+ 
+% Brightness Trait
+get_trait_value(brightness,Action=#{<<"brightness">> := Brightness}) when is_integer(Brightness), Brightness > 0, Brightness =< 100 ->
+ {Brightness,maps:remove(<<"brightness">>,Action)};
+get_trait_value(brightness,#{<<"brightness">> := InvalidBrightness}) ->
+ throw({invalid_devtrait,brightness,utils:jsone_term_to_list(InvalidBrightness,brightness)});
+ 
+% Color Trait
+get_trait_value(colorsetting,Action=#{<<"color">> := Color}) ->
+ {utils:jsone_term_to_list(Color,colorsetting),maps:remove(<<"color">>,Action)};
+ 
+% OpenClose Trait
+get_trait_value(openclose,Action=#{<<"openClose">> := OpenClose}) when OpenClose =:= <<"open">> orelse OpenClose =:= <<"close">> ->
+ {binary_to_atom(OpenClose),maps:remove(<<"openClose">>,Action)};
+get_trait_value(openclose,#{<<"openClose">> := InvalidOpenClose}) ->
+ throw({invalid_devtrait,openclose,utils:jsone_term_to_list(InvalidOpenClose,openclose)});
+ 
+% LockUnlock Trait
+get_trait_value(lockunlock,Action=#{<<"lockUnlock">> := LockUnlock}) when LockUnlock =:= <<"lock">> orelse LockUnlock =:= <<"unlock">> ->
+ {binary_to_atom(LockUnlock),maps:remove(<<"lockUnlock">>,Action)};
+get_trait_value(lockunlock,#{<<"lockUnlock">> := InvalidLockUnlock}) ->
+ throw({invalid_devtrait,lockunlock,utils:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
+ 
+% TempTarget Trait
+get_trait_value(temp_target,Action=#{<<"tempTarget">> := TempTarget}) when is_integer(TempTarget), TempTarget >= 0, TempTarget =< 50 ->
+ {TempTarget,maps:remove(<<"tempTarget">>,Action)};
+get_trait_value(temp_target,#{<<"tempTarget">> := InvalidTempTarget}) ->
+ throw({invalid_devtrait,temp_target,utils:jsone_term_to_list(InvalidTempTarget,temp_target)});
+ 
+% Trait not found
+get_trait_value(_,Action) ->
+ {'$keep',Action}.
+ 
+ 
+ 
+ 
+ 
+ 
+
+ 
+ 
+
+
 
 
 %%====================================================================================================================================

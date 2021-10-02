@@ -7,7 +7,7 @@
 		 get_devtype_default_config_json/1,deprefix_dev_config/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
--export([str_to_atom/1,sign/1]).                                                          % Conversions Utility Functions
+-export([jsone_term_to_list/2,str_to_atom/1,sign/1]).                                     % Conversions Utility Functions
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -567,6 +567,35 @@ resolve_appname_shorthand(AppShorthand) ->
 %%====================================================================================================================================
 %%                                                  CONVERSIONS UTILITY FUNCTIONS
 %%==================================================================================================================================== 
+
+%% DESCRIPTION:  Converts a term() returned by the jsone:decode(Json_Object) function to list 
+%%
+%% ARGUMENTS:    - Param:     The term() to be converted to list
+%%               - ParamName: The atom() name associated with the term()
+%%
+%% RETURNS:      - ParamList -> The term() converted to stringThe string converted to atom 
+%% 
+%% THROWS:       - {unknown_jsone_cast,ParamName,Param} -> The parameter was cast to an unknown
+%%                                                         term() type by the JSONE library
+%%
+jsone_term_to_list(Param,_) when is_binary(Param) ->
+ binary_to_list(Param);
+jsone_term_to_list(Param,_) when is_integer(Param) ->
+ integer_to_list(Param);
+jsone_term_to_list(Param,_) when is_float(Param) ->
+ float_to_list(Param);
+jsone_term_to_list(Param,_) when is_tuple(Param) ->
+ tuple_to_list(Param);
+jsone_term_to_list(Param,_) when is_atom(Param) ->
+ atom_to_list(Param);
+jsone_term_to_list(Param,_) when is_list(Param) ->
+ Param;
+
+% If the parameter was mapped by the JSONE library to an
+% unknown Erlang type (which should NOT happen), throw an error
+jsone_term_to_list(_,ParamName)  ->
+ throw({unknown_jsone_cast,ParamName}).
+ 
 
 %% DESCRIPTION:  Converts a string to atom using the Erlang BIFs
 %%

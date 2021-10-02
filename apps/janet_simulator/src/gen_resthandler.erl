@@ -414,7 +414,7 @@ extract_expected_bodymap_params([{ParamName,ParamType,ParamConstraint}|NextParam
 			   % If the parameter is expected to be a list,
 			   % ensure it to be depending on the type on
 			   % which it was mapped by the JSONE library
-               force_bodyparam_to_list(Param,ParamName);
+               utils:jsone_term_to_list(Param,ParamName);
 		  
 		      integer ->
 		        
@@ -427,27 +427,6 @@ extract_expected_bodymap_params([{ParamName,ParamType,ParamConstraint}|NextParam
  % BodyParams and extract the next expected parameter
  extract_expected_bodymap_params(NextParam,BodyParams ++ [BodyParam],BodyMap).
 		  
-
-%% Casts a term of undeterminate type to a list (get_expected_body_params(BinBody,ExpBodyParams) ->
-%% extract_expected_bodymap_params([{ParamName,ParamType,ParamConstraint}|NextParam],BodyParams,BodyMap) helper function)
-force_bodyparam_to_list(Param,_) when is_binary(Param) ->
- binary_to_list(Param);
-force_bodyparam_to_list(Param,_) when is_integer(Param) ->
- integer_to_list(Param);
-force_bodyparam_to_list(Param,_) when is_float(Param) ->
- float_to_list(Param);
-force_bodyparam_to_list(Param,_) when is_tuple(Param) ->
- tuple_to_list(Param);
-force_bodyparam_to_list(Param,_) when is_atom(Param) ->
- atom_to_list(Param);
-force_bodyparam_to_list(Param,_) when is_list(Param) ->
- Param;
-
-% If the parameter was mapped by the JSONE library to an
-% unknown Erlang type (which should NOT happen), throw an error
-force_bodyparam_to_list(Param,ParamName)  ->
- throw({unknown_jsone_cast,ParamName,Param}).
-
 
 %% Ensures a body parameter to be an integer and >= MinValue (get_expected_body_params(BinBody,ExpBodyParams) ->
 %% extract_expected_bodymap_params([{ParamName,ParamType,ParamConstraint}|NextParam],BodyParams,BodyMap) helper function)
@@ -570,8 +549,8 @@ err_to_code_msg({missing_param,ParamName}) ->
  {400,io_lib:format("<ERROR> Required parameter \"~s\" is missing",[ParamName])}; 
 
 % A body list parameter was cast to an unknown Erlang type by the JSONE library
-err_to_code_msg({unknown_jsone_cast,ParamName,Param}) ->
- {500,io_lib:format("<SERVER ERROR> Unknown JSONE type for parameter \"~s\" (value = ~s)",[ParamName,Param])};
+err_to_code_msg({unknown_jsone_cast,ParamName}) ->
+ {500,io_lib:format("<SERVER ERROR> Unknown JSONE type for parameter \"~s\"",[ParamName])};
 
 % <UNKNOWN ERROR> 
 err_to_code_msg(UnknownError) ->
