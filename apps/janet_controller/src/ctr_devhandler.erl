@@ -49,7 +49,7 @@ init({Dev_id,DevSrvPid}) ->
 
 %% DEV_CONFIG_CHANGE
 %% -----------------
-%% SENDER:    The controller's 'ctr_restserver' [TODO]: Double-check
+%% SENDER:    The controller's REST handler 'ctr_resthandler'
 %% WHEN:      -
 %% PURPOSE:   Change the state machine configuration in the handled device
 %% CONTENTS:  The requested new configuration of the device's state machine (whose validity is not checked for here)
@@ -62,7 +62,7 @@ init({Dev_id,DevSrvPid}) ->
 handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when node(ReqPid) =:= node() ->
  
  % Forward the configuration change command to the device's 'dev_server', waiting for its response up to a predefined timeout
- CfgChangeRes = try gen_server:call(SrvState#devhandlerstate.dev_srv_pid,{dev_config_change,NewCfg},4800)
+ CfgChangeRes = try gen_server:call(SrvState#devhandlerstate.dev_srv_pid,{dev_config_change,NewCfg},4500)
  catch
   exit:{timeout,_} ->
   
@@ -86,7 +86,7 @@ handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when node(ReqPid) =:
     {error,Reason} ->
        
 	 % If there was an error in updating the device configuration and timestamp, return it
-     {reply,{mnesia_error,Reason},SrvState};
+     {reply,{error,{mnesia,Reason}},SrvState};
 		
 	ok ->
 	  
@@ -172,8 +172,9 @@ terminate(_,SrvState) ->
  % Attempt to deregister the handler's PID from the 'ctr_device' table 
  deregister_handler(SrvState#devhandlerstate.dev_id),
  
- % Remove the monitor towards the device's 'dev_server' process, if it is still active
- demonitor(SrvState#devhandlerstate.dev_srv_mon),
+ % If it is still active, remove the monitor towards the device's 'dev_server'
+ % process, also flushing any possible notification from the message queue  
+ demonitor(SrvState#devhandlerstate.dev_srv_mon,[flush]),
  
  % Terminate
  ok. 

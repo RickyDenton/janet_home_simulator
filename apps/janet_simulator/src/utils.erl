@@ -4,7 +4,7 @@
 
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
          check_merge_devconfigs/3,get_devtype_default_config/1,
-		 get_devtype_default_config_json/1,deprefix_dev_config/1]). 
+		 get_devtype_default_config_json/1,deprefix_dev_config/1,devconfig_to_map/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
 -export([jsone_term_to_list/2,str_to_atom/1,sign/1]).                                     % Conversions Utility Functions
@@ -401,6 +401,23 @@ deprefix_dev_config(Config) ->
   InvalidType ->
    throw({invalid_devtype,InvalidType})
  end.
+ 
+ 
+%% TODO: Check if everything must be converted to list...
+devconfig_to_map(Cfg) when is_record(Cfg,fancfg) ->
+ #{onOff => Cfg#fancfg.onoff, fanSpeed => Cfg#fancfg.fanspeed};
+devconfig_to_map(Cfg) when is_record(Cfg,lightcfg) ->
+ #{onOff => Cfg#lightcfg.onoff, brightness => Cfg#lightcfg.brightness, color => Cfg#lightcfg.colorsetting};
+devconfig_to_map(Cfg) when is_record(Cfg,doorcfg) ->
+ #{openClose => Cfg#doorcfg.openclose, lockUnlock => Cfg#doorcfg.lockunlock}; 
+devconfig_to_map(Cfg) when is_record(Cfg,thermocfg) ->
+ #{onOff => Cfg#thermocfg.onoff, tempTarget => Cfg#thermocfg.temp_target, tempCurrent => Cfg#thermocfg.temp_current};
+devconfig_to_map(Cfg) when is_record(Cfg,condcfg) ->
+ #{onOff => Cfg#condcfg.onoff, tempTarget => Cfg#condcfg.temp_target, tempCurrent => Cfg#condcfg.temp_current, fanSpeed => Cfg#condcfg.fanspeed};
+ 
+% Invalid
+devconfig_to_map(_) ->
+ throw({error,invalid_devtype}).
  
  
 %%====================================================================================================================================

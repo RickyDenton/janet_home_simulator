@@ -17,6 +17,21 @@
 -export([res_devcommands_handler/1,             % /devcommands resource handler
          devcommands_handler/2]).               %              operation handler
 
+%% ---------------------------- DEVICE COMMANDS UTILITIES (PATCH /device) ---------------------------- %%
+
+%% Device commands multicall timeout
+-define(Devcommands_timeout,4700).    % Default: 4700 (4.7 seconds)
+
+%% This records represents the information associated with
+%% a valid comand to be issued to a device (PATCH /device)
+-record(valdevcmd,
+        {
+		 dev_id,         % The 'dev_id' of the device node the command must be issued to
+		 cfgcommand,     % The configuration command to be issued
+		 devhandler_pid, % The PID of the device's 'dev_handler' where to issue the command
+		 devhandler_ref  % A reference used for issuing the command to the 'dev_handler'
+		}).
+		
 -include("ctr_mnesia_tables_definitions.hrl").        % Janet Controller Mnesia Tables Records Definitions
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -554,13 +569,28 @@ devcommands_handler(Req,[BinBody]) ->
  
  % If it is, parse the received commands
  {ValidCommands,InvalidCommands} = parse_devcommands(DevCommands,[],[]),
-   
+ 
  io:format("ValidCommands = ~p~n",[ValidCommands]),
  io:format("InvalidCommands = ~p~n",[InvalidCommands]),
  
-			     
- cowboy_req:reply(204,Req).
+ % Issue the ValidCommands to the devices receive
+ % the lists of valid and unvalid responses
+ {ValidResponses,InvalidResponses} = issue_devcommands(ValidCommands),
  
+ io:format("ValidResponses = ~p~n",[ValidResponses]),
+ io:format("InvalidResponses = ~p~n",[InvalidResponses]),
+ 
+ % Retrieve the HTTP status code and body to be returned to the client
+ {RespCode,RespBody} = build_devcommands_reply(ValidResponses,InvalidResponses,InvalidCommands),
+ 
+ % Reply the client
+ cowboy_req:reply(
+                  RespCode,                                         % HTTP Response Code
+	              #{<<"content-type">> => <<"application/json">>},  % "Content Type" header
+		          RespBody,                                         % Response Body
+			      Req                                               % Associated HTTP Request
+			     ).
+ 				 
  
 %% -------------------------------------------- 
 get_devcommands(BinBody) ->
@@ -629,8 +659,12 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
    
    io:format("CfgCommand = ~p~n",[CfgCommand]),
    
-   % Return the information associated with the successful DevCommand parsing
-   {ok,#{dev_id => Dev_id, cfgcommand => CfgCommand, devhandler_pid => HandlerPID}}
+   % Initialize a reference that will be used for issuing the
+   % command to the dev_handler associated with the device
+   HandlerRef = make_ref(),
+   
+   % Return the #valdevcmd record associated with the successfully parsed DevCommand
+   {ok,#valdevcmd{dev_id = Dev_id, cfgcommand = CfgCommand, devhandler_pid = HandlerPID, devhandler_ref = HandlerRef}}
    
   catch
    {missing_param,actions} ->
@@ -947,13 +981,292 @@ get_trait_value(_,Action) ->
  {'$keep',Action}.
  
  
+%% --------------------------------------------------------------------------------------------------------------------------------------------
+ 
+issue_devcommands(ValidCommands) ->
+
+ Devresponses = 
+ try
+ 
+  ParentPID = self(),
+  
+  % Spawn an intermediate "CmdClient" process
+  % for sending and DevCommands in multicall
+  % and receiving the devices' responses
+  CmdClientPid = proc_lib:spawn(fun() -> devcommand_client(ParentPID,ValidCommands) end), 
+
+  % Create a monitor towards the CmdClient
+  CmdClientRef = monitor(process,CmdClientPid),
+  
+  % Wait for the CmdClient to return the devices'
+  % responses up to a predefined timeout
+  receive
+ 
+   % The CmdClient has returned all responses
+   {devresponses_ready,CmdClientPid} ->
+    ok;
+	    
+   % The CmdClient has terminated normally
+   {'DOWN',CmdClientRef,process,CmdClientPid,normal} ->
+    ok;
+   
+   % If the monitor CmdClient monitor reports
+   % that it has crashed, throw an error
+   {'DOWN',CmdClientRef,process,CmdClientPid,CmdClientCrashReason} ->
+    throw({cmdclient_crash,CmdClientCrashReason})
+
+  % Multicall timeout
+  after ?Devcommands_timeout ->
+   
+    % At the multicall timeout
+	% expiration, kill the CmdClient
+	exit(CmdClientPid,shutdown)
+	
+  end,
+  
+  % If it is still active, remove the monitor towards the CmdClient,
+  % also flushing any possible notification from the message queue  
+  demonitor(CmdClientRef,[flush]),
+ 
+  % Process the response and return the valid and invalid responses
+  {ValidDevResponses,InvalidDevResponses} = get_devcommands_responses(ValidCommands,[],[]),
+  
+  % Return ok and the responses
+  {ok,ValidDevResponses,InvalidDevResponses}
+  
+ catch
+  {cmdclient_crash,Reason} ->
+   {error,{cmdclient_crash,Reason}};
+  _:UnhandledError ->
+   {error,{unhandled,UnhandledError}}
+ end,
+ 
+ % Depending on whether the devresponses were correctly received
+ case Devresponses of
+ 
+  % If they were, return them
+  {ok,ValidResponses,InvalidResponses} ->
+   {ValidResponses,InvalidResponses};
+  
+  % If they were not, convert all ValidCommands in
+  % InvalidResponses of the given ErrorReason and return them
+  {error,ErrorReason} ->
+   io:format("issue_devcommands error: ~p~n",[ErrorReason]),
+   {[],issue_devcommands_error(ValidCommands,[],ErrorReason)}
+ end.
  
  
+   
+  
+  
+issue_devcommands_error([],InvalidResponses,_) ->
+ InvalidResponses;
+issue_devcommands_error([ValidCommand|NextValidCommand],InvalidResponses,UnhandledError) ->
+ InvalidResponse = #{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => lists:flatten(io_lib:format("Server error in issuing the command to the device: ~p",[UnhandledError]))},
+ issue_devcommands_error(NextValidCommand, InvalidResponses ++ [InvalidResponse], UnhandledError).
+  
+  
+  
+
+get_devcommands_responses([],ValidResponses,InvalidResponses) ->
+
+ % Return the valid and Invalid responses
+ {ValidResponses,InvalidResponses};
+
+get_devcommands_responses([ValidCommand|NextValidCommand],ValidResponses,InvalidResponses) ->
+
+ % Retrieve the Dev_id associated with the current command
+ Dev_id = ValidCommand#valdevcmd.dev_id,
  
+ ReceivedResponse =
+ try 
+  
+  receive
+ 
+   % If a reply was received
+   {devresponse,Dev_id,Devhandler_Reply} ->
+  
+    % Depending on the Devhandler_Reply
+    case Devhandler_Reply of
+   
+     % The devcommand was performed correctly
+     {ok,{UpdatedCfg,Timestamp}} ->
+	
+	  % Convert the received updated device configuration to a map
+	  UpdatedCfgMap = utils:devconfig_to_map(UpdatedCfg),
+	 
+	  % Return the valid command response
+	  {ok,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 200, state => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))}};
+	 
+     % An invalid configuration was issued to the device
+     {error,invalid_devconfig} ->
+	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 406, errorReason => "The command was rejected by the device for it is invalid in its current state"}};
+   
+     % Device node timeout
+     {error,dev_timeout} ->
+	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 504, errorReason => "Timeout in issuing the command to the device node"}};
+	 
+	 % Device state machine timeout
+	 {error,statem_timeout} ->
+	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 504, errorReason => "Timeout in processing the command in the device's state machine"}};
+	 
+	 % Error in pushing the device updated configuration to the Mnesia database
+     {error,{mnesia,MnesiaError}} ->
+	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => io_lib:format("Error in mirroring the device updated configuration in the Mnesia database: ~p",[MnesiaError])}};
+	
+ 	 % Unknown devhandler response
+	 UnexpectedReply ->
+      io:format("get_devcommands_responses: unexpected command response: ~p~n",[UnexpectedReply]),
+      {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => io_lib:format("An unexpected command response was received: ~p",[UnexpectedReply])}}
+   
+    end
+ 
+  after
+  
+   % If a reply was not received from the CmdClient (or it did not receive any from the associated 'ctr_devhandler'), there is a probable error in the logic
+   0 ->
+    io:format("[get_devcommands_responses]: missing command response (dev_id = ~p)~n",[ValidCommand#valdevcmd.dev_id]),
+    {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => "The result of issuing the device command is missing (controller overload or error in its logic)"}}
+	
+  end
+
+ catch
+ 
+  % The returned UpdatedCfg is malformed (or error in utils:devconfig_to_map)
+  {error,invalid_devtype} ->
+    {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => "The updated state returned by the device is malformed"}};
+
+  % Unhandled error
+  _:UnhandledError ->
+   io:format("get_devcommands_responses: unhandled error: ~p~n",[UnhandledError]),
+   {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => io_lib:format("Unhandled server error when receiving the command responses: ~p",[UnhandledError])}}
+ end,  
+   
+ % Depending on the outcome of its processing append the response in the
+ % valid or unvalid responses list and proceed with the next response
+ case ReceivedResponse of
+  {ok,ValidResponse} ->
+   get_devcommands_responses(NextValidCommand,ValidResponses ++ [ValidResponse],InvalidResponses);
+  {error,InvalidResponse} ->
+   get_devcommands_responses(NextValidCommand,ValidResponses,InvalidResponses ++ [InvalidResponse])
+ end.
  
 
+  
+devcommand_client(ParentPID,ValidCommands) ->
+
+ % Create a monitor towards the
+ % parent 'ctr_resthandler' process
+ monitor(process,ParentPID),
  
+ % Send the devcommands in multicall
+ send_devcommands(ValidCommands),
  
+ % Retrieve the devices responses and forward
+ % them to the 'ctr_resthandler' parent process
+ receive_devresponses(ValidCommands,ParentPID).
+ 
+
+send_devcommands([]) ->
+ ok;
+send_devcommands([ValDevCmd|NextValDevCmd]) ->
+ erlang:send(ValDevCmd#valdevcmd.devhandler_pid,{'$gen_call',{self(),ValDevCmd#valdevcmd.devhandler_ref},{dev_config_change,ValDevCmd#valdevcmd.cfgcommand}}),
+ send_devcommands(NextValDevCmd).
+  
+% If all devresponses have been received, inform the
+% 'ctr_resthandler' parent process that they are ready
+receive_devresponses([],ParentPID) ->
+ ParentPID ! {devresponses_ready,self()};
+ 
+receive_devresponses(ValidCommands,ParentPID) ->
+
+ NewValidCommands = 
+ receive
+ 
+  % If the parent process has crashed,
+  % log the error and exit normally
+  {'DOWN',_Ref,process,_Parent,_Reason} ->
+   io:format("[ctr_cmdclient]: <ERROR> The 'ctr_resthandler' parent has crashed, exiting~n"),
+   exit(normal);
+   
+  {Devhandler_Ref,Devhandler_Reply} ->
+  
+   % Extract the DevCommand associated with
+   % Devhandler_ref from the list of valid commands 
+   case lists:keytake(Devhandler_Ref,5,ValidCommands) of
+   
+	% If a reply not associated with any devcommand
+	% was received, use the same list of DevCommands
+    false ->
+	 io:format("[ctr_cmdclient]: <ERROR> An unknown device response was received: {~p,~p}~n",[Devhandler_Ref,Devhandler_Reply]),
+	 ValidCommands;
+   
+    % If a response is associated with a devcommand,
+	% forward it to the 'ctr_resthandler' parent process
+    {value,RepliedDevCommand,NewValidCommands_} ->
+     ParentPID ! {devresponse,RepliedDevCommand#valdevcmd.dev_id,Devhandler_Reply},
+	 NewValidCommands_ 
+   end
+ end,
+ receive_devresponses(NewValidCommands,ParentPID).
+
+
+
+ 
+
+% Retrieve the HTTP status code and body to be returned to the client
+build_devcommands_reply(ValidResponses,InvalidResponses,InvalidCommands) ->
+ 
+ % Define the list of invalid results as the concatenation
+ % of the lists of invalid responses and invalid commands:
+ InvalidResults = InvalidResponses ++ InvalidCommands,
+ 
+ % Convert the set of Valid and Invalid results to JSON format
+ ResBody = try jsone:encode(ValidResponses ++ InvalidResults)
+           catch
+		   
+		    % If the results could not be encoded
+		    % in JSON format, throw an error
+		    error:badarg ->
+		 	 throw(jsone_encode_error)
+		   end,
+
+ io:format("Resbody = ~p~n",[ResBody]),
+ 
+ io:format("Valid Responses = ~p~n",[ValidResponses]),
+ io:format("Invalid Results = ~p~n",[InvalidResults]),
+ 
+ % Determine the status code to be replied to the client
+ ResCode = get_devcommands_statuscode(ValidResponses,InvalidResults),
+			    
+ % Return the HTTP status code and body to be replied to the client
+ {ResCode,ResBody}.
+
+
+
+% All valid responses -> 200
+get_devcommands_statuscode(_ValidResponses,[]) ->
+ 200;
+
+% All invalid results -> the highest error code
+get_devcommands_statuscode([],InvalidResults) ->
+
+ case lists:foldl(fun(#{status := ErrCode},MaxCode) -> max(ErrCode,MaxCode) end,0,InvalidResults) of 
+ 
+  % Error in the expression above
+  0 ->
+   500;
+ 
+  HTTPCode when is_number(HTTPCode) ->
+   HTTPCode
+ end;
+ 
+% Mixed -> 202
+get_devcommands_statuscode(_ValidResponses,_InvalidResults) ->
+ 202.
+ 
+
+
 
 
 

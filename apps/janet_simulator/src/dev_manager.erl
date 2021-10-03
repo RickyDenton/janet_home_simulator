@@ -133,7 +133,7 @@ handle_call({dev_config_change,NewCfg},{CommPid,_},SrvState) when SrvState#devmg
 									     	    				  node(CommPid) =:= node() ->
 							
  % Forward the configuration change command to the device's 'dev_server', waiting for its response up to a predefined timeout
- CfgChangeRes = try gen_server:call(SrvState#devmgrstate.dev_srv_pid,{dev_config_change,NewCfg},4800)
+ CfgChangeRes = try gen_server:call(SrvState#devmgrstate.dev_srv_pid,{dev_config_change,NewCfg},4500)
  catch
   exit:{timeout,_} ->
   
@@ -157,7 +157,7 @@ handle_call({dev_config_change,NewCfg},{CommPid,_},SrvState) when SrvState#devmg
     {error,Reason} ->
        
 	 % If there was an error in updating the device configuration and timestamp, return it
-     {reply,{mnesia_error,Reason},SrvState};
+     {reply,{error,{mnesia,Reason}},SrvState};
 		
 	ok ->
 	  
@@ -310,11 +310,12 @@ handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= S
 %% 3) The 'dev_server' process on the managed device node stops (Reason = 'device_node_stopped')
 %%
 terminate(_,SrvState) ->
-  
- % Deregister the monitor to the device's 'dev_server' process, if present
+ 
+ % If it is still active, remove the monitor towards the device's 'dev_server'
+ % process, also flushing any possible notification from the message queue  
  if
   is_reference(SrvState#devmgrstate.dev_srv_mon) ->
-   demonitor(SrvState#devmgrstate.dev_srv_mon);
+   demonitor(SrvState#devmgrstate.dev_srv_mon,[flush]);
   true ->
    ok
  end,
