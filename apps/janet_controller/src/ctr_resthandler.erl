@@ -1,26 +1,26 @@
 %% This module represents the REST handler in the JANET Controller application %%
 
 -module(ctr_resthandler).
--behaviour(gen_resthandler).  % Custom REST handler behaviour
+-behaviour(gen_resthandler).                          % Custom REST handler behaviour
+
+-include("ctr_mnesia_tables_definitions.hrl").        % Janet Controller Mnesia Tables Records Definitions
+-include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %% -------------------------- gen_resthandler BEHAVIOUR CALLBACK FUNCTIONS -------------------------- %%
--export([start_link/0,init_handler/1,init/2,err_to_code_msg/1]). % gen_resthandler behaviour callback functions
+-export([start_link/0,init_handler/1,init/2,err_to_code_msg/1]).
 
 %% -------------------------------- RESOURCES AND OPERATIONS HANDLERS -------------------------------- %%
--export([res_subloc_handler/1,                  % /sublocation/:subloc_id resource handler
-         add_sublocation_handler/2,             %                         operation handlers
-		 delete_sublocation_handler/2]).        %                         
--export([res_dev_handler/1,                     % /device/:dev_id resource handler
-         add_device_handler/2,                  %                 operation handlers
-		 update_dev_subloc_handler/2,           %
-		 delete_device_handler/2]).             %   
--export([res_devcommands_handler/1,             % /devcommands resource handler
-         devcommands_handler/2]).               %              operation handler
+-export([res_subloc_handler/1,              % /sublocation/:subloc_id resource handler
+         add_sublocation_handler/2,         %                         operation handlers
+		 delete_sublocation_handler/2]).    %                         
+-export([res_dev_handler/1,                 % /device/:dev_id resource handler
+         add_device_handler/2,              %                 operation handlers
+		 update_dev_subloc_handler/2,       %
+		 delete_device_handler/2]).         %   
+-export([res_devcommands_handler/1,         % /devcommands resource handler
+         devcommands_handler/2]).           %              operation handler
 
 %% ---------------------------- DEVICE COMMANDS UTILITIES (PATCH /device) ---------------------------- %%
-
-%% Device commands multicall timeout
--define(Devcommands_timeout,4700).    % Default: 4700 (4.7 seconds)
 
 %% This records represents the information associated with
 %% a valid comand to be issued to a device (PATCH /device)
@@ -31,9 +31,10 @@
 		 devhandler_pid, % The PID of the device's 'dev_handler' where to issue the command
 		 devhandler_ref  % A reference used for issuing the command to the 'dev_handler'
 		}).
-		
--include("ctr_mnesia_tables_definitions.hrl").        % Janet Controller Mnesia Tables Records Definitions
--include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
+
+%% Maximum time for collecting the device commands' responses
+-define(Devresponses_timeout,4700).    % Default: 4700 (4.7 seconds)
+
 
 %%====================================================================================================================================
 %%                                                GEN_RESTHANDLER CALLBACK FUNCTIONS                                                        
@@ -156,15 +157,19 @@ err_to_code_msg({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError}) -
 err_to_code_msg(body_not_json) ->
  {415,"<ERROR> Request body could not be interpreted in JSON format"}; 
 
-% The request body ("DevCommands") is not a list
+% The binary body of the HTTP request was not cast to a JSON list by the JSONE library
 err_to_code_msg({not_a_list,devcommands}) ->
  {400,"<ERROR> The request body could not be interpreted as a JSON list"};
 
-% The request body ("DevCommands") is empty
+% The list of device commands is empty
 err_to_code_msg({empty,devcommands}) ->
  {400,"<ERROR> The list of device commands is empty"};
 
-% NOTE: The error handling of each individual device command is performed manually within the operation handler
+% The device commands' results could not be encoded in JSON format
+err_to_code_msg(jsone_encode_error) ->
+ {500,"<SERVER ERROR> The device commands' results could not be encoded in JSON format"};
+
+% NOTE: The per-devcommand error handling is performed manually within the operation handler
 % ----
 
 %% UNKNOWN ERROR
@@ -567,23 +572,32 @@ devcommands_handler(Req,[BinBody]) ->
  % Retrieve the list of device commands from the binary body
  DevCommands = get_devcommands(BinBody),
  
- % If it is, parse the received commands
+ % Parse the list of device commands, obtaining
+ % the lists of valid and invalid commands
  {ValidCommands,InvalidCommands} = parse_devcommands(DevCommands,[],[]),
  
- io:format("ValidCommands = ~p~n",[ValidCommands]),
- io:format("InvalidCommands = ~p~n",[InvalidCommands]),
+ %% [TODO]: Remove
+ %io:format("ValidCommands = ~p~n",[ValidCommands]),
+ %io:format("InvalidCommands = ~p~n",[InvalidCommands]),
  
- % Issue the ValidCommands to the devices receive
- % the lists of valid and unvalid responses
- {ValidResponses,InvalidResponses} = issue_devcommands(ValidCommands),
+ % Issue the valid commands to their respective devices,
+ % obtaining the lists of successful and failed device commands
+ {SuccessfulCommands,FailedCommands} = issue_devcommands(ValidCommands),
  
- io:format("ValidResponses = ~p~n",[ValidResponses]),
- io:format("InvalidResponses = ~p~n",[InvalidResponses]),
+ %% [TODO]: Remove
+ %io:format("SuccessfulCommands = ~p~n",[SuccessfulCommands]),
+ %io:format("FailedCommands = ~p~n",[FailedCommands]),
  
- % Retrieve the HTTP status code and body to be returned to the client
- {RespCode,RespBody} = build_devcommands_reply(ValidResponses,InvalidResponses,InvalidCommands),
+ % Retrieve the status code and body of the HTTP response to be returned to the client
+ {RespCode,RespBody} = build_devcommands_response(SuccessfulCommands,FailedCommands,InvalidCommands),
  
- % Reply the client
+ % Print a summary of the operation
+ print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode),
+ 
+ %% [TODO]: Remove
+ %io:format("RespCode = ~p, RespBody = ~p~n",[RespCode,RespBody]),
+ 
+ % Return the HTTP response to the client
  cowboy_req:reply(
                   RespCode,                                         % HTTP Response Code
 	              #{<<"content-type">> => <<"application/json">>},  % "Content Type" header
@@ -592,22 +606,34 @@ devcommands_handler(Req,[BinBody]) ->
 			     ).
  				 
  
-%% -------------------------------------------- 
+%% ===================================================== COMMANDS PARSING ========================================================== %% 
+
+%% DESCRIPTION:  Retrieves the list of device commands (DevCommands) from the binary body of an HTTP request
+%%
+%% ARGUMENTS:    - BinBody: The binary body of the HTTP request from which retrieve the list of device commands
+%%
+%% RETURNS:      - DevCommands -> The list of device commands
+%%
+%% THROWS:       - body_not_json            -> The binary body could not be interpreted in JSON format
+%%               - {not_a_list,devcommands} -> The binary body of the HTTP request was not
+%%                                             cast to a JSON list by the JSONE library
+%%               - {empty,devcommands}      -> The list of device commands is empty
+%%
 get_devcommands(BinBody) ->
-     
- % Interpret the binary body of the HTTP request as JSON
- % and attempt to cast it into a list via the JSONE library
+    
+ % Interpret the binary body of the HTTP
+ % request as JSON via the JSONE library	
  DevCommands = try jsone:decode(BinBody)
                catch
 		   
-		        % If the body of the HTTP request could
-			    % not be interpred as JSON, throw an error
+		        % If the binary body could not be
+				% interpred as JSON, throw an error
 		        error:badarg ->
 			     throw(body_not_json)
 		       end,
  
- % Ensure that what was returned by
- % the JSONE library is indeed a list
+ % Ensure that the binary body was
+ % cast to a list by the JSONE library 
  if
   is_list(DevCommands) =:= false ->
    
@@ -616,48 +642,55 @@ get_devcommands(BinBody) ->
    
   true ->
   
-   % If it is, ensure it to contain at least one element
+   % If it is, ensure it not to be empty
    if
    
-    % If it does, return the list of DevCommands
+    % If it is not, return the
+	% list of device commands
     length(DevCommands) > 0 ->
 	 DevCommands;
 	
-    % Otherwise, throw an error	
+    % If it is, throw an error	
 	true ->
 	 throw({empty,devcommands})
    end
  end.
  
  
-%% -------------------------------------------- 
-% Base case (return the lists of valid and invalid commands)
+%% DESCRIPTION:  Parses a list of device commands, returning the map lists of valid and invalid commands
+%%
+%% ARGUMENTS:    - DevCommands:     The list of device commands to be parsed
+%%               - ValidCommands:   The list of valid device commands (accumulator)
+%%               - InvalidCommands: The list of invalid device commands (accumulator)
+%%
+%% RETURNS:      - {ValidCommands,InvalidCommands} -> The list of valid and invalid device commands
+%%
+% Base case (return the lists of valid and invalid device commands)
 parse_devcommands([],ValidCommands,InvalidCommands) ->
  {ValidCommands,InvalidCommands};
  
-% Recursive case (when a DevCommand was correctly interpreted as a map)  
+% Recursive case when a device command was correctly cast to a map by the JSONE library
 parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) when is_map(DevCommand) ->
 
+ % Parse the device command map
  ParsedCommand =
  try
   
-  % Attempt to retrieve the "Dev_id" key from the DevCommand map
+  % Attempt to retrieve the "dev_id" key from the device command
   Dev_id = get_devcommand_dev_id(DevCommand),
   
   try
    
-   % Retrieve the DevCommand actions' map
+   % Attempt to retrieve the "actions" map from the device command
    Actions = get_devcommand_actions(DevCommand),
-   
+     
    % Ensure device "Dev_id" to belong to the location and to be currently paired
-   % with the controller, also obtaining its Type and the PID of its 'ctr_devhandler'
+   % with the controller, and obtain its Type and the PID of its 'ctr_devhandler'
    {Type,HandlerPID} = get_devcommand_devinfo(Dev_id), 
    
-   % Prepare the configuration command record of the
-   % appropriate #devtype by parsing the actions' map
-   CfgCommand = parse_devcommand_actions(Type,Actions),
-   
-   io:format("CfgCommand = ~p~n",[CfgCommand]),
+   % Parse the "actions" map according to the device type so to obtain the configuration
+   % command record of the appropriate #devtype to be issued to the device 
+   CfgCommand = build_cfgcommand(Actions,Type),
    
    % Initialize a reference that will be used for issuing the
    % command to the dev_handler associated with the device
@@ -667,68 +700,118 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
    {ok,#valdevcmd{dev_id = Dev_id, cfgcommand = CfgCommand, devhandler_pid = HandlerPID, devhandler_ref = HandlerRef}}
    
   catch
+  
+   %% ----------------------------------- Command Parsing Inner Errors (with "Dev_id") ----------------------------------- %
+   
+   % The "actions" map is missing
    {missing_param,actions} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object is missing"});
+    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The 'actions' object is missing in the device command">>});
+	
+   % The "actions" parameter was not interpreted as a map
    {not_a_map,actions} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" parameter could not be interpreted as a JSON object"});
+    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The 'actions' parameter could not be interpreted as a JSON object">>});
+   
+   % The "actions" map is empty
    {empty,actions} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object is empty"});
-   {invalid,actions} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "The \"actions\" object contains invalid actions"});	
+    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The 'actions' object is empty">>});
+	
+   % Device "Dev_id" does not belong to the controller's location
    device_not_exists ->
-    throw(#{dev_id => Dev_id, status => 404, errorReason => "A device with such \"dev_id\" does not exist"});
+    throw(#{dev_id => Dev_id, status => 404, errorReason => <<"A device with such 'dev_id' does not exist">>});
+   
+   % The device is currently not paired with the controller
    device_offline ->
-    throw(#{dev_id => Dev_id, status => 307, errorReason => "The device is currently offline"});
-   {invalid_devtrait,Trait,InvalidValueList} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "Invalid value \"" ++ InvalidValueList ++ "\" of trait \"" ++ atom_to_list(Trait) ++ "\""});
+    throw(#{dev_id => Dev_id, status => 307, errorReason => <<"The device is currently offline">>});
+   
+   % Invalid trait value in action
+   {invalid_trait,Trait,InvalidValue} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => list_to_binary("Invalid value '" ++ InvalidValue ++ "' of trait '" ++ atom_to_list(Trait) ++ "'")});   
+	
+   % Invalid state (door)
    {invalid_state,door} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => "The state {\"open\",\"lock\"} is invalid for device type \"door\""});
-   {unknown_jsone_cast,ParamName} ->
-    throw(#{dev_id => Dev_id, status => 500, errorReason => "Invalid value of trait \""++ atom_to_list(ParamName) ++ "\" was cast to an unknown term() by the JSONE library"});
+    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The state {'open','lock'} is invalid for device type 'door'">>});
+	
+   % Invalid actions (keys) in the "actions" map for the associated device type
+   {invalid_actions,DevType} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => list_to_binary("The 'actions' object contains invalid actions for the associated device type (" ++ atom_to_list(DevType) ++ ")")});
+	
+   % An invalid trait value was cast to an unknown Erlang term() by the JSONE library
+   {unknown_jsone_cast,InvalidTrait} ->
+    throw(#{dev_id => Dev_id, status => 500, errorReason => list_to_binary("Invalid value of trait '"++ atom_to_list(InvalidTrait) ++ "' was cast to an unknown term() by the JSONE library")});
+   
+   % The device type in the controller Mnesia database is invalid
    {invalid_db_devtype,InvalidDevType} ->
-    throw(#{dev_id => Dev_id, status => 500, errorReason => "Unknown device type (" ++ atom_to_list(InvalidDevType) ++ ")"});
-   _:UnhandledErrorDev ->
-    io:format("parse_devcommands (inner): unhandled error: ~p (dev_id: ~p)~n",[UnhandledErrorDev,Dev_id]),
-    throw(#{dev_id => Dev_id, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledErrorDev])})
+    throw(#{dev_id => Dev_id, status => 500, errorReason => list_to_binary("The device type in the controller database (" ++ atom_to_list(InvalidDevType) ++ ") is invalid")});
+   
+   % Unhandled Error
+   _:UnhandledErrorInner ->
+    io:format("[parse_devcommands (inner)]: Unhandled error: ~p (dev_id: ~p)~n",[UnhandledErrorInner,Dev_id]),
+    throw(#{dev_id => Dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Unhandled server error while parsing the command: ~p",[UnhandledErrorInner])))})
   end
   
  catch
+ 
+  %% ------------------ Command Parsing Outer Errors (without "Dev_id", or already parsed inner error) ------------------ %
+  
+  % "Dev_id" missing
   {missing_param,dev_id} ->
-   {error,#{dev_id => unknown, status => 400, errorReason => "Required parameter \"dev_id\" is missing"}};
-  {not_an_integer,dev_id} ->
-   {error,#{dev_id => invalid, status => 400, errorReason => "Parameter \"dev_id\" is not an integer"}};
+   {error,#{dev_id => unknown, status => 400, errorReason => <<"Required parameter 'dev_id' is missing">>}};
+  
+  % "Dev_id" not an integer
+  {not_an_integer,InvalidDevId} ->
+   {error,#{dev_id => invalid, status => 400, errorReason => list_to_binary(lists:flatten(io_lib:format("Parameter 'dev_id' is not an integer (~s)",[catch(utils:jsone_term_to_list(InvalidDevId))])))}};
+  
+  % "Dev_id" <= 0
   {out_of_range,dev_id,InvalidDevId} ->
-   {error,#{dev_id => invalid, status => 400, errorReason => "Invalid value of parameter \"dev_id\" (" ++ integer_to_list(InvalidDevId) ++ ")"}};
+   {error,#{dev_id => invalid, status => 400, errorReason => list_to_binary("Invalid value of parameter 'dev_id' (" ++ integer_to_list(InvalidDevId) ++ ")")}};
+  
+  % Already parsed inner error
   ErrorMap when is_map(ErrorMap) ->
    {error,ErrorMap};
-  _:UnhandledError ->
-   io:format("parse_devcommands (outer): unhandled error: ~p~n",[UnhandledError]),
-   {error,throw(#{dev_id => unknown, status => 500, errorReason => io_lib:format("Unhandled server error: ~p",[UnhandledError])})}
+   
+  % Unhandled Error
+  _:UnhandledErrorOuter ->
+   io:format("[parse_devcommands (outer)]: Unhandled Error: ~p~n",[UnhandledErrorOuter]),
+   {error,throw(#{dev_id => unknown, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Unhandled server error while parsing the command: ~p",[UnhandledErrorOuter])))})}
  end,
  
- % Depending on the outcome of its processing append the DevCommand in
- % the valid or unvalid commands list and proceed with the next DevCommand
+ % Depending on whether the command was successfully parsed
  case ParsedCommand of
+ 
+  % If it was, append it into the list of valid commands and parse the next one
   {ok,ValidCommand} ->
    parse_devcommands(NextDevCommand,ValidCommands ++ [ValidCommand],InvalidCommands);
+   
+  % Otherwise append it into the list of invalid commands and parse the next one
   {error,InvalidCommand} ->
    parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [InvalidCommand])
  end;
  
-% Recursive case where the DevCommand was not correctly interpreted as a map
+% Recursive case when a device command was NOT cast to a map by the JSONE library
 parse_devcommands([_|NextDevCommand],ValidCommands,InvalidCommands) ->
- parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [#{dev_id => unknown, status => 400, errorReason => "The device command could not be interpreted as a JSON object"}]).
+
+ % Appent the command in the list of invalid commands and parse the next one
+ parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [#{dev_id => unknown, status => 400, errorReason => <<"The device command could not be interpreted as a JSON object">>}]).
 
 
-%% --------------------------------------------
+%% DESCRIPTION:  Returns the 'dev_id' associated with a device command
+%%
+%% ARGUMENTS:    - DevCommand: The device command map
+%%
+%% RETURNS:      - Dev_id -> The 'dev_id' associated with the command
+%%
+%% THROWS:       - {missing_param,dev_id}  -> The "dev_id" key was not found in the device command map
+%%               - {not_an_integer,dev_id} -> The "dev_id" is not an integer
+%%               - {out_of_range,dev_id}   -> The "dev_id" is <= 0
+%%
 get_devcommand_dev_id(DevCommand) -> 
 
- % Attempt to retrieve the "dev_id" key from the DevCommand map
+ % Attempt to retrieve the value of key "dev_id" from the device command map
  Dev_id = try maps:get(<<"dev_id">>,DevCommand)
           catch
 		
-		   % If the "dev_id" was not found, mark the
-		   % DevCommand as invalid by throwing an error
+		   % If the "dev_id" key was
+		   % not found, throw an error
  	       error:{badkey,<<"dev_id">>} ->
 		    throw({missing_param,dev_id})
 		  end,
@@ -736,11 +819,11 @@ get_devcommand_dev_id(DevCommand) ->
  % Ensure the "Dev_id" to be an integer
  if
   
-  % If it is, ensure it to be >0
+  % If it is, ensure it to be > 0
   is_integer(Dev_id) ->
    if
     
-	% If it is, return the Dev_id
+	% If it is, return it
 	Dev_id > 0 ->
      Dev_id;
 	 
@@ -751,37 +834,47 @@ get_devcommand_dev_id(DevCommand) ->
    
   % If it is not an integer, throw an error
   true ->
-   throw({not_an_integer,dev_id})
+   throw({not_an_integer,Dev_id})
  end.
    
    
-%% --------------------------------------------  
+%% DESCRIPTION:  Returns the "actions" map of a device command
+%%
+%% ARGUMENTS:    - DevCommand: The device command which to retrieve the "action" map
+%%
+%% RETURNS:      - Actions -> The device command "action" map
+%%
+%% THROWS:       - {missing_param,actions} -> The "actions" key was not found in the device command map
+%%               - {not_a_map,actions}     -> The "actions" parameter was not
+%%                                            interpreted as a map by the JSONE library
+%%               - {empty,actions}         -> The "actions" map is empty
+%%
 get_devcommand_actions(DevCommand) ->
   
- % Attempt to retrieve the "actions" map from the DevCommand
+ % Attempt to retrieve the value of key "actions" from the device command map
  Actions = try maps:get(<<"actions">>,DevCommand)
            catch
 	 		 
-	        % If the "action" map was not found
-	        % in the DevCommand, throw an error
+		    % If the "actions" key was
+		    % not found, throw an error
 	        error:{badkey,<<"actions">>} ->
 		     throw({missing_param,actions})
 	       end,
 
- % Ensure "Actions" to be indeed a map
+ % Ensure "Actions" to be a map
  if
   is_map(Actions) =:= true ->
   
-   % If it is, ensure it to contain at least one element
+   % If it is, ensure it not to be empty
    if
     map_size(Actions) > 0 ->
    
-     % If it does, return the map
+     % If it not, return the "actions" map
 	 Actions;
 	 
 	true ->
 	
-	 % Otherwise, throw an error
+	 % If it is, throw an error
 	 throw({empty,actions})
    end;
   
@@ -791,12 +884,17 @@ get_devcommand_actions(DevCommand) ->
    throw({not_a_map,actions})
  end.  
   
-  
-  
-  
-  
-  
-%% --------------------------------------------
+
+%% DESCRIPTION:  Ensures a device "Dev_id" to belong to the location and to be currently paired with
+%%               the controller, and returns its type and the PID of its 'ctr_devhandler' process
+%%
+%% ARGUMENTS:    - Dev_id: The "Dev_id" of the device to check
+%%
+%% RETURNS:      - {Type,HandlerPID} -> The device's type and the PID of its 'ctr_devhandler' process
+%%
+%% THROWS:       - device_not_exists -> Device "Dev_id" does not belong to the controller location
+%%               - device_offline    -> Device "Dev_id" is currently not paired with the controller
+%%
 get_devcommand_devinfo(Dev_id) ->
 
  % Ensure the device to belong to the location
@@ -812,462 +910,733 @@ get_devcommand_devinfo(Dev_id) ->
    % with the controller via the 'handler_pid' field
    case CtrDevRecord#ctr_device.handler_pid of
 	
-	% If the device is currently offline, throw an error
+	% If the device is currently not paired
+	% with the controller, throw an error	
 	'-' ->
 	 throw(device_offline);
 	
-	% Otherwise if the device is currently
-	% paired, return its Type and HandlerPID
+	% Otherwise return the device Type and HandlerPID
 	HandlerPID when is_pid(HandlerPID) ->
 	 {CtrDevRecord#ctr_device.type,HandlerPID}
    end
  end.
- 
+   
 
+%% DESCRIPTION:  Parses the "actions" map of a device command and returns the configuration
+%%               command record of the appropriate #devtype to be issued to the device
+%%
+%% ARGUMENTS:    - Actions: The "actions" map associated with the device command
+%%               - Type:    The device type (atom)
+%%
+%% RETURNS:      - CfgCommand -> The configuration command record of the
+%%                               appropriate #devtype to be issued to the device
+%%
+%% THROWS:       - {invalid_trait,Trait,InvalidValue}  -> Device trait "Trait" is of invalid value "InvalidValue"
+%%               - {invalid_state,door}                -> The configuration command would set the device
+%%                                                        of type 'door' in the invalid state {open,lock}
+%%               - {invalid_actions,Type}              -> The "actions" map contains invalid actions for the device Type
+%%               - {unknown_jsone_cast,InvalidTrait}   -> An invalid trait value was cast to an
+%%                                                        unknown Erlang term() by the JSONE library 
+%%               - {invalid_db_devtype,InvalidDevType} -> The device type in the controller Mnesia database is invalid
+%%
+%% NOTE:         No duplicate actions (keys) can be present since the JSONE library only returns the first
+%%               occurence of each key in a map (https://github.com/sile/jsone/blob/master/doc/jsone.md#types)
+%%
+build_cfgcommand(Actions,Type) ->
 
+ % Build the configuration command according to the device type,
+ % also obtaining the residual contents of the "actions" map
+ {CfgCommand,EmptyActions} = build_cfgcommand_type(Actions,Type),
 
-parse_devcommand_actions(Type,Actions) ->
-
- {CfgCommand,EmptyActions} = build_cfgcommand(Type,Actions),
-
- % Ensure the resulting "actions" map to be empty, i.e.
- % there were not estraneous or duplicate actions in it
+ % Ensure the residual "actions" map to be empty, meaning that
+ % were no invalid actions for the associated device type
  if
   map_size(EmptyActions) =:= 0 ->
   
-   % If it is, return the configuration command
+   % If no invalid actions were found,
+   % return the configuration command
    CfgCommand;
    
   true ->
   
-   % If it is not, throw an error
-   throw({invalid,actions})
+   % If invalid actions were
+   % found, throw an error
+   throw({invalid_actions,Type})
  end.
 
 
-
-build_cfgcommand(fan,Actions) ->
+%% Retrieves the device traits' values from an "action" map and returns the configuration command record of the appropriate 
+%% #devtype as well as the residual contents of the "actions" map (parse_devcommand_actions(Actions,Type) helper function)
+%%
+%% NOTE: The residual "actions" map is derived by removing from it each device-specific action being processed
+%%
+%% ---------------- Build Fan Configuration Command ---------------- %%
+build_cfgcommand_type(Actions,fan) ->
  
- % OnOff trait
+ % 'onoff' trait ('on'|'off')
  {OnOff,Actions1} = get_trait_value(onoff,Actions),
  
- % FanSpeed trait
+ % 'fanspeed' trait	(0 < fanspeed <= 100) 
  {FanSpeed,Actions2} = get_trait_value(fanspeed,Actions1),
  
- % Return the configuration command of the appropriate
- % #devcfg type and the updated "Actions" map
+ % Return the configuration command and the residual "Actions" map
  {#fancfg{onoff = OnOff, fanspeed = FanSpeed},Actions2};
  
+%% --------------- Build Light Configuration Command --------------- %%
+build_cfgcommand_type(Actions,light) ->
  
-build_cfgcommand(light,Actions) ->
- 
- % OnOff trait
+ % 'onoff' trait ('on'|'off')
  {OnOff,Actions1} = get_trait_value(onoff,Actions),
  
- % Brightness trait
+ % 'brightness' trait (0 < brightness <= 100)
  {Brightness,Actions2} = get_trait_value(brightness,Actions1),
  
- % Colorsetting trait
+ % "colorsetting" trait (any list/string)
  {ColorSetting,Actions3} = get_trait_value(colorsetting,Actions2),
 
- % Return the configuration command of the appropriate
- % #devcfg type and the updated "Actions" map
+ % Return the configuration command and the residual "Actions" map
  {#lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = ColorSetting},Actions3};
 
-build_cfgcommand(door,Actions) ->
+%% ---------------- Build Door Configuration Command ---------------- %%
+build_cfgcommand_type(Actions,door) ->
  
- % OpenClose trait
+ % 'openclose' trait ('open'|'close')
  {OpenClose,Actions1} = get_trait_value(openclose,Actions),
  
- % LockUnlock trait
+ % 'lockunlock' trait ('lock'|'unlock')
  {LockUnlock,Actions2} = get_trait_value(lockunlock,Actions1),
  
- % Ensure the resulting configuration not to
- % consist in the invalid state {open,lock}
+ % Ensure that the resulting configuration command would
+ % not set the door in the invalid state {open,lock}
  if
   OpenClose =:= 'open' andalso LockUnlock =:= 'lock' ->
   
-   % If it does, throw an error
+   % If it would, throw an error
    throw({invalid_state,door});
    
   true ->
  
-  % Otherwise return the configuration command of the 
-  % appropriate #devcfg type and the updated "Actions" map
+  % Otherwise return the configuration command and the residual "Actions" map
   {#doorcfg{openclose = OpenClose, lockunlock = LockUnlock},Actions2}
  end;
 
-build_cfgcommand(thermostat,Actions) ->
+%% ------------- Build Thermostat Configuration Command ------------- %%
+build_cfgcommand_type(Actions,thermostat) ->
  
- % OnOff trait
+ % 'onoff' trait ('on'|'off')
  {OnOff,Actions1} = get_trait_value(onoff,Actions),
  
- % TempTarget trait
+ % 'temp_target' trait (0 <= temp_target <= 50)
  {TempTarget,Actions2} = get_trait_value(temp_target,Actions1),
 
- % NOTE: The 'temp_current' trait cannot be changed via a command
+ % NOTE: The 'temp_current' trait cannot be changed via a device command
 
- % Return the configuration command of the appropriate
- % #devcfg type and the updated "Actions" map
+ % Return the configuration command and the residual "Actions" map
  {#thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep'},Actions2};
  
-build_cfgcommand(conditioner,Actions) ->
+%% ------------ Build Conditioner Configuration Command ------------ %%
+build_cfgcommand_type(Actions,conditioner) ->
  
- % OnOff trait
+ % 'onoff' trait ('on'|'off')
  {OnOff,Actions1} = get_trait_value(onoff,Actions),
  
- % TempTarget trait
+ % 'temp_target' trait (0 <= temp_target <= 50)
  {TempTarget,Actions2} = get_trait_value(temp_target,Actions1),
  
- % NOTE: The 'temp_current' trait cannot be changed via a command 
+ % NOTE: The 'temp_current' trait cannot be changed via a device command 
  
- % FanSpeed trait
+ % 'fanspeed' trait	(0 < fanspeed <= 100) 
  {FanSpeed,Actions3} = get_trait_value(fanspeed,Actions2),
  
- % Return the configuration command of the appropriate
- % #devcfg type and the updated "Actions" map
+ % Return the configuration command and the residual "Actions" map
  {#condcfg{onoff = OnOff, temp_target = TempTarget, temp_current = '$keep', fanspeed = FanSpeed},Actions3}; 
+
+%% ---------------------- Invalid Device Type ---------------------- %%
+build_cfgcommand_type(_,InvalidDevType) ->
  
-build_cfgcommand(InvalidDevType,_) ->
- 
- % If the device type is invalid, throw an error
+ % If the device type in the controller's
+ % database is invalid, throw an error
  throw({invalid_db_devtype,InvalidDevType}).
  
 
- 
- 
-% OnOff trait 
+%% Returns the value of a device trait to be used in a configuration command, which is obtained by
+%% extracting its associated action from the "actions" map (if present) or set to '$keep' otherwise,
+%% also returning the residual "actions" map (build_cfgcommand_type(Actions,Type) helper function) 
+%%
+%% ---------------- "onOff" action -> 'onoff' trait ---------------- %%
+% Valid "OnOff" action ("on"|"off")
 get_trait_value(onoff,Action=#{<<"onOff">> := OnOff}) when OnOff =:= <<"on">> orelse OnOff =:= <<"off">> ->
  {binary_to_atom(OnOff),maps:remove(<<"onOff">>,Action)};
+
+% Invalid "OnOff" action 
 get_trait_value(onoff,#{<<"onOff">> := InvalidOnOff}) ->
- throw({invalid_devtrait,onoff,utils:jsone_term_to_list(InvalidOnOff,onoff)});
- 
-% FanSpeed Trait
+ throw({invalid_trait,onoff,utils:jsone_term_to_list(InvalidOnOff,onoff)});
+
+%% ------------- "fanSpeed" action -> 'fanspeed' trait ------------- %%
+% Valid "fanSpeed" action (0 < fanSpeed <= 100)
 get_trait_value(fanspeed,Action=#{<<"fanSpeed">> := FanSpeed}) when is_integer(FanSpeed), FanSpeed > 0, FanSpeed =< 100 ->
  {FanSpeed,maps:remove(<<"fanSpeed">>,Action)};
+  
+% Invalid "fanSpeed" action
 get_trait_value(fanspeed,#{<<"fanSpeed">> := InvalidFanSpeed}) ->
- throw({invalid_devtrait,fanspeed,utils:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
+ throw({invalid_trait,fanspeed,utils:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
  
-% Brightness Trait
+%% ----------- "brightness" action -> 'brightness' trait ----------- %%
+% Valid "brightness" action (0 < brightness <= 100)
 get_trait_value(brightness,Action=#{<<"brightness">> := Brightness}) when is_integer(Brightness), Brightness > 0, Brightness =< 100 ->
  {Brightness,maps:remove(<<"brightness">>,Action)};
+
+% Invalid "brightness" action
 get_trait_value(brightness,#{<<"brightness">> := InvalidBrightness}) ->
- throw({invalid_devtrait,brightness,utils:jsone_term_to_list(InvalidBrightness,brightness)});
- 
-% Color Trait
+ throw({invalid_trait,brightness,utils:jsone_term_to_list(InvalidBrightness,brightness)});
+  
+%% ------------- "color" action -> 'colorsetting' trait ------------- %% 
+% Valid "color" action (any)
 get_trait_value(colorsetting,Action=#{<<"color">> := Color}) ->
  {utils:jsone_term_to_list(Color,colorsetting),maps:remove(<<"color">>,Action)};
  
-% OpenClose Trait
+% NOTE: The "color" action cannot be invalid, with its value always being interpreted as a list
+
+%% ------------- "openClose" action -> 'openclose' trait ------------- %% 
+% Valid "openClose" action ("open"|"close")
 get_trait_value(openclose,Action=#{<<"openClose">> := OpenClose}) when OpenClose =:= <<"open">> orelse OpenClose =:= <<"close">> ->
  {binary_to_atom(OpenClose),maps:remove(<<"openClose">>,Action)};
-get_trait_value(openclose,#{<<"openClose">> := InvalidOpenClose}) ->
- throw({invalid_devtrait,openclose,utils:jsone_term_to_list(InvalidOpenClose,openclose)});
  
-% LockUnlock Trait
+% Invalid "openClose" action
+get_trait_value(openclose,#{<<"openClose">> := InvalidOpenClose}) ->
+ throw({invalid_trait,openclose,utils:jsone_term_to_list(InvalidOpenClose,openclose)});
+ 
+%% ------------ "lockUnlock" action -> 'lockunlock' trait ------------ %%  
+% Valid "lockUnlock" action ("lock"|"unlock")
 get_trait_value(lockunlock,Action=#{<<"lockUnlock">> := LockUnlock}) when LockUnlock =:= <<"lock">> orelse LockUnlock =:= <<"unlock">> ->
  {binary_to_atom(LockUnlock),maps:remove(<<"lockUnlock">>,Action)};
-get_trait_value(lockunlock,#{<<"lockUnlock">> := InvalidLockUnlock}) ->
- throw({invalid_devtrait,lockunlock,utils:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
  
-% TempTarget Trait
+% Invalid "lockUnlock" action
+get_trait_value(lockunlock,#{<<"lockUnlock">> := InvalidLockUnlock}) ->
+ throw({invalid_trait,lockunlock,utils:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
+
+%% ------------ "tempTarget" action -> 'temp_target' trait ------------ %%  
+
+% Valid "tempTarget" action (0 <= tempTarget <= 50)
 get_trait_value(temp_target,Action=#{<<"tempTarget">> := TempTarget}) when is_integer(TempTarget), TempTarget >= 0, TempTarget =< 50 ->
  {TempTarget,maps:remove(<<"tempTarget">>,Action)};
+
+% Invalid "tempTarget" action
 get_trait_value(temp_target,#{<<"tempTarget">> := InvalidTempTarget}) ->
- throw({invalid_devtrait,temp_target,utils:jsone_term_to_list(InvalidTempTarget,temp_target)});
+ throw({invalid_trait,temp_target,utils:jsone_term_to_list(InvalidTempTarget,temp_target)});
  
-% Trait not found
+%% NOTE: The 'temp_current' trait has no associated action (it cannot be changed via a command)
+
+%% ------------- Trait action not found action -> '$keep' ------------- %%   
 get_trait_value(_,Action) ->
  {'$keep',Action}.
+
+
+%% ===================================================== COMMANDS ISSUING ========================================================== %% 
+
+%% DESCRIPTION:  Issues a list of valid commands to their respective devices, processing
+%%               their responses and returning the lists of successful and failed commands
+%%
+%% ARGUMENTS:    - ValidCommands: The list of valid commands to be issued to their respective devices
+%%
+%% RETURNS:      - {SuccessfulCommands,FailedCommands} -> The lists of successful and failed device commands
+%%
+issue_devcommands([]) ->
  
+ % If no valid command was passed, directly return the empty lists of successful and failed commands
+ {[],[]};
  
-%% --------------------------------------------------------------------------------------------------------------------------------------------
- 
+% If at least a valid device command was passed
 issue_devcommands(ValidCommands) ->
 
+ % Issue the command to their respective devices and process their responses
  Devresponses = 
  try
  
+  % Retrieve the process PID
   ParentPID = self(),
   
-  % Spawn an intermediate "CmdClient" process
-  % for sending and DevCommands in multicall
-  % and receiving the devices' responses
-  CmdClientPid = proc_lib:spawn(fun() -> devcommand_client(ParentPID,ValidCommands) end), 
+  % Spawn a "CmdClient" process for issuing the commands to their respective
+  % devices via non-blocking calls and collecting their responses
+  CmdClientPid = proc_lib:spawn(fun() -> cmdclient(ParentPID,ValidCommands) end), 
 
   % Create a monitor towards the CmdClient
   CmdClientRef = monitor(process,CmdClientPid),
-  
+
   % Wait for the CmdClient to return the devices'
   % responses up to a predefined timeout
   receive
  
-   % The CmdClient has returned all responses
+   % All devices' responses were collected by the CmdClient
    {devresponses_ready,CmdClientPid} ->
     ok;
 	    
-   % The CmdClient has terminated normally
+   % The CmdClient has terminated normally (which
+   % implies that all devices' responses were collected)
    {'DOWN',CmdClientRef,process,CmdClientPid,normal} ->
     ok;
    
-   % If the monitor CmdClient monitor reports
-   % that it has crashed, throw an error
+   % If the CmdClient has crashed, throw an error
    {'DOWN',CmdClientRef,process,CmdClientPid,CmdClientCrashReason} ->
     throw({cmdclient_crash,CmdClientCrashReason})
 
-  % Multicall timeout
-  after ?Devcommands_timeout ->
-   
-    % At the multicall timeout
-	% expiration, kill the CmdClient
-	exit(CmdClientPid,shutdown)
+  % If the device responses timeout
+  % expires, kill the CmdClient process
+  after ?Devresponses_timeout ->
+   exit(CmdClientPid,shutdown)
 	
   end,
   
-  % If it is still active, remove the monitor towards the CmdClient,
-  % also flushing any possible notification from the message queue  
+  % If still active, remove the monitor towards the CmdClient,
+  % also flushing possible notifications from the message queue  
   demonitor(CmdClientRef,[flush]),
  
-  % Process the response and return the valid and invalid responses
-  {ValidDevResponses,InvalidDevResponses} = get_devcommands_responses(ValidCommands,[],[]),
+  % Retrieve and parse the device commands' responses,
+  % obtaining the lists of successful and failed commands
+  {SuccessfulDevCommands,FailedDevCommands} = parse_devcommands_responses(ValidCommands,[],[]),
   
-  % Return ok and the responses
-  {ok,ValidDevResponses,InvalidDevResponses}
+  % Return the lists of successful and failed device commands
+  {ok,SuccessfulDevCommands,FailedDevCommands}
   
  catch
-  {cmdclient_crash,Reason} ->
-   {error,{cmdclient_crash,Reason}};
+ 
+  % If the CmdClient has crashed, return an error notifying
+  % that the devices' responses could not be parsed
+  {cmdclient_crash,CrashReason} ->
+   {error,{cmdclient_crash,CrashReason}};
+   
+  % If an unhandled error occurs, return that the
+  % the devices' responses could not be parsed     
   _:UnhandledError ->
    {error,{unhandled,UnhandledError}}
  end,
  
- % Depending on whether the devresponses were correctly received
+ % Depending on whether the devices' responses were correctly parsed
  case Devresponses of
  
-  % If they were, return them
-  {ok,ValidResponses,InvalidResponses} ->
-   {ValidResponses,InvalidResponses};
+  % If they were, return the lists of
+  % successful and failed device commands
+  {ok,SuccessfulCommands,FailedCommands} ->
+   {SuccessfulCommands,FailedCommands};
   
-  % If they were not, convert all ValidCommands in
-  % InvalidResponses of the given ErrorReason and return them
-  {error,ErrorReason} ->
-   io:format("issue_devcommands error: ~p~n",[ErrorReason]),
-   {[],issue_devcommands_error(ValidCommands,[],ErrorReason)}
+  % If they were not, convert all valid in failed
+  % commands with the same error Reason and return them 
+  {error,Reason} ->
+   io:format("[issue_devcommands]: error: ~p~n",[Reason]),
+   {[],issue_devcommands_failure(ValidCommands,[],Reason)}
  end.
  
  
-   
-  
-  
-issue_devcommands_error([],InvalidResponses,_) ->
- InvalidResponses;
-issue_devcommands_error([ValidCommand|NextValidCommand],InvalidResponses,UnhandledError) ->
- InvalidResponse = #{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => lists:flatten(io_lib:format("Server error in issuing the command to the device: ~p",[UnhandledError]))},
- issue_devcommands_error(NextValidCommand, InvalidResponses ++ [InvalidResponse], UnhandledError).
-  
-  
-  
+%% Converts all valid in failed commands with the same error Reason( issue_devcommands(ValidCommands) helper function)
+issue_devcommands_failure([],FailedCommands,_) ->
 
-get_devcommands_responses([],ValidResponses,InvalidResponses) ->
-
- % Return the valid and Invalid responses
- {ValidResponses,InvalidResponses};
-
-get_devcommands_responses([ValidCommand|NextValidCommand],ValidResponses,InvalidResponses) ->
-
- % Retrieve the Dev_id associated with the current command
- Dev_id = ValidCommand#valdevcmd.dev_id,
+ % Base case (return the list of failed commands)
+ FailedCommands;
  
- ReceivedResponse =
- try 
+issue_devcommands_failure([ValidCommand|NextValidCommand],FailedCommands,ErrorReason) ->
+ 
+ % Convert the valid command to failed specifying the error Reason
+ FailedCommand = #{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Server error in issuing the device commands: ~p",[ErrorReason])))},
+ 
+ % Proceed with the next command
+ issue_devcommands_failure(NextValidCommand, FailedCommands ++ [FailedCommand], ErrorReason).
   
+  
+%% DESCRIPTION:  Retrieves and parses the device commands responses and
+%%               returns the lists of successful and failed commands
+%%
+%% ARGUMENTS:    - ValidCommands: The list of valid commands that were issued
+%%
+%% RETURNS:      - {SuccessfulCommands,FailedCommands} -> The lists of successful and failed device commands
+%%  
+parse_devcommands_responses([],SuccessfulCommands,FailedCommands) ->
+
+ % Return the lists of successful and failed device commands
+ {SuccessfulCommands,FailedCommands};
+
+parse_devcommands_responses([IssuedCommand|NextIssuedCommand],SuccessfulCommands,FailedCommands) ->
+
+ % Retrieve the "Dev_id" associated with the current command
+ Dev_id = IssuedCommand#valdevcmd.dev_id,
+ 
+ % Retrieve the command response of device "Dev_id"
+ % and determine whether it was successful or not 
+ CommandResponse =
+ try 
   receive
  
-   % If a reply was received
+   % If the command response of device "Dev_id" was received
    {devresponse,Dev_id,Devhandler_Reply} ->
   
-    % Depending on the Devhandler_Reply
+    % Depending on the response returned by the
+	% 'ctr_devhandler' associated with the device
     case Devhandler_Reply of
-   
-     % The devcommand was performed correctly
+
+     %% ---------------------------------- Device Command Successful ---------------------------------- %
+	 
+     % If the device command was successfully executed
      {ok,{UpdatedCfg,Timestamp}} ->
-	
-	  % Convert the received updated device configuration to a map
+
+	  % Convert the returned updated device configuration into a map
 	  UpdatedCfgMap = utils:devconfig_to_map(UpdatedCfg),
 	 
-	  % Return the valid command response
-	  {ok,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 200, state => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))}};
+	  % Return the successful device command
+	  {ok,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 200, state => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))}};
 	 
-     % An invalid configuration was issued to the device
+	 %% ------------------------------------ Device Command Failed ------------------------------------ %
+
+	 % The device rejected the configuration command
      {error,invalid_devconfig} ->
-	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 406, errorReason => "The command was rejected by the device for it is invalid in its current state"}};
+	  {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 406, errorReason => <<"The command was rejected by the device for it is invalid in its current state">>}};
    
      % Device node timeout
      {error,dev_timeout} ->
-	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 504, errorReason => "Timeout in issuing the command to the device node"}};
+	  {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 504, errorReason => <<"The device node is not responding">>}};
 	 
 	 % Device state machine timeout
 	 {error,statem_timeout} ->
-	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 504, errorReason => "Timeout in processing the command in the device's state machine"}};
+	  {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 504, errorReason => <<"The device state machine is not responding">>}};
 	 
-	 % Error in pushing the device updated configuration to the Mnesia database
+	 % Error in mirroring the updated device configuration in the controller's database
      {error,{mnesia,MnesiaError}} ->
-	  {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => io_lib:format("Error in mirroring the device updated configuration in the Mnesia database: ~p",[MnesiaError])}};
+	  {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Error in mirroring the updated device configuration in the controller's database: ~p",[MnesiaError])))}};
 	
- 	 % Unknown devhandler response
-	 UnexpectedReply ->
-      io:format("get_devcommands_responses: unexpected command response: ~p~n",[UnexpectedReply]),
-      {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => io_lib:format("An unexpected command response was received: ~p",[UnexpectedReply])}}
-   
+ 	 % An unexpected response was received from the devhandler
+	 UnexpectedResponse ->
+      io:format("[parse_devcommands_responses]: An unexpected device command response was returned by the devhandler of device \"~p\": ~p",[Dev_id,UnexpectedResponse]),
+      {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("An unexpected device command response was received: ~p",[UnexpectedResponse])))}}
     end
  
+ 
+  % Otherwise if a command response from device "Dev_id" was not received, which may happen from reasons ranging from the device and/or
+  % the controller being overloaded, the device/handler stopped inbetween the command processing, etc, set the command as failed
   after
-  
-   % If a reply was not received from the CmdClient (or it did not receive any from the associated 'ctr_devhandler'), there is a probable error in the logic
    0 ->
-    io:format("[get_devcommands_responses]: missing command response (dev_id = ~p)~n",[ValidCommand#valdevcmd.dev_id]),
-    {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => "The result of issuing the device command is missing (controller overload or error in its logic)"}}
-	
+    io:format("[parse_devcommands_responses]: Missing command response of device \"~p\"~n",[IssuedCommand#valdevcmd.dev_id]),
+    {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 504, errorReason => <<"No command response was returned from the device">>}}
   end
 
  catch
  
-  % The returned UpdatedCfg is malformed (or error in utils:devconfig_to_map)
+  % The updated configuration returned by the device is malformed
   {error,invalid_devtype} ->
-    {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => "The updated state returned by the device is malformed"}};
+    {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 500, errorReason => <<"The updated state returned by the device is malformed">>}};
 
-  % Unhandled error
+  % Unhandled error in parsing the device command response
   _:UnhandledError ->
-   io:format("get_devcommands_responses: unhandled error: ~p~n",[UnhandledError]),
-   {error,#{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => io_lib:format("Unhandled server error when receiving the command responses: ~p",[UnhandledError])}}
+   io:format("[parse_devcommands_responses]: Unhandled error: ~p~n",[UnhandledError]),
+   {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Unhandled server error in parsing the command response: ~p",[UnhandledError])))}}
+ 
  end,  
+ 
+ % Depending on whether the command towards device "Dev_id" was successful or not
+ case CommandResponse of
+ 
+  % If it was, append it into the list of successful commands and proceed with the next issued command
+  {ok,SuccessfulCommand} ->
+   parse_devcommands_responses(NextIssuedCommand,SuccessfulCommands ++ [SuccessfulCommand],FailedCommands);
    
- % Depending on the outcome of its processing append the response in the
- % valid or unvalid responses list and proceed with the next response
- case ReceivedResponse of
-  {ok,ValidResponse} ->
-   get_devcommands_responses(NextValidCommand,ValidResponses ++ [ValidResponse],InvalidResponses);
-  {error,InvalidResponse} ->
-   get_devcommands_responses(NextValidCommand,ValidResponses,InvalidResponses ++ [InvalidResponse])
+  % If it was not, append it into the list of failed commands and proceed with the next issued command
+  {error,FailedCommand} ->
+   parse_devcommands_responses(NextIssuedCommand,SuccessfulCommands,FailedCommands ++ [FailedCommand])
  end.
  
 
-  
-devcommand_client(ParentPID,ValidCommands) ->
+%% ------------------------------------------------------- CMDCLIENT PROCESS ------------------------------------------------------- %% 
+
+%% DESCRIPTION:  Body function of the "CmdClient" process spawned by the 'ctr_resthandler' for issuing the
+%%               commands to their respective devices via non-blocking calls and collecting their responses
+%%
+%% ARGUMENTS:    - ParentPID:     The PID of the parent 'ctr_resthandler' process
+%%               - ValidCommands: The list of valid commands to be issued to their respective devices
+%%
+%% RETURNS:      none
+%%    
+cmdclient(ParentPID,ValidCommands) ->
 
  % Create a monitor towards the
- % parent 'ctr_resthandler' process
+ % 'ctr_resthandler' parent process
  monitor(process,ParentPID),
  
- % Send the devcommands in multicall
- send_devcommands(ValidCommands),
+ % Send the commands to their
+ % respective devices in multicall 
+ ok = cmdclient_send_devcommands(ValidCommands),
+ 
+ % Retrieve the device commands responses
+ % and forward them to the '
  
  % Retrieve the devices responses and forward
  % them to the 'ctr_resthandler' parent process
- receive_devresponses(ValidCommands,ParentPID).
- 
-
-send_devcommands([]) ->
- ok;
-send_devcommands([ValDevCmd|NextValDevCmd]) ->
- erlang:send(ValDevCmd#valdevcmd.devhandler_pid,{'$gen_call',{self(),ValDevCmd#valdevcmd.devhandler_ref},{dev_config_change,ValDevCmd#valdevcmd.cfgcommand}}),
- send_devcommands(NextValDevCmd).
+ cmdclient_receive_devresponses(ValidCommands,ParentPID).
   
-% If all devresponses have been received, inform the
-% 'ctr_resthandler' parent process that they are ready
-receive_devresponses([],ParentPID) ->
+  
+%% Sends a list of device commands to their respective device handlers via
+%% non-blocking calls (cmdclient(ParentPID,ValidCommands) helper function)
+cmdclient_send_devcommands([]) ->
+
+ % All device commands were sent
+ ok;
+ 
+cmdclient_send_devcommands([ValDevCmd|NextValDevCmd]) ->
+
+ % Forward the command to the 'ctr_devhandler' associated with the device via a low-level non-blocking call
+ erlang:send(ValDevCmd#valdevcmd.devhandler_pid,{'$gen_call',{self(),ValDevCmd#valdevcmd.devhandler_ref},{dev_config_change,ValDevCmd#valdevcmd.cfgcommand}}),
+ 
+ % Proceed with the next command
+ cmdclient_send_devcommands(NextValDevCmd).
+  
+  
+%% Retrieves the device commands' responses and forwards them to the 'ctr_resthandler'
+%% parent process (cmdclient(ParentPID,ValidCommands) helper function)  
+cmdclient_receive_devresponses([],ParentPID) ->
+ 
+ % If all device responses were forwarded to the 'ctr_resthandler'
+ % parent process, signal it that they are ready to be collected
  ParentPID ! {devresponses_ready,self()};
  
-receive_devresponses(ValidCommands,ParentPID) ->
+cmdclient_receive_devresponses(PendingCmdResponses,ParentPID) ->
 
- NewValidCommands = 
+ % Wait for a device command response so to determine
+ % the new list of commands pending a response
+ NewPendingCmdResponses = 
  receive
  
-  % If the parent process has crashed,
-  % log the error and exit normally
+  % If the 'ctr_resthandler' parent process
+  % has crashed, report the error and exit
   {'DOWN',_Ref,process,_Parent,_Reason} ->
    io:format("[ctr_cmdclient]: <ERROR> The 'ctr_resthandler' parent has crashed, exiting~n"),
    exit(normal);
    
+  % If a device command response has been received
   {Devhandler_Ref,Devhandler_Reply} ->
   
-   % Extract the DevCommand associated with
-   % Devhandler_ref from the list of valid commands 
-   case lists:keytake(Devhandler_Ref,5,ValidCommands) of
-   
-	% If a reply not associated with any devcommand
-	% was received, use the same list of DevCommands
+   % Attempt to match the response to its source command via the 'devhandler_ref' field
+   case lists:keytake(Devhandler_Ref,5,PendingCmdResponses) of 
     false ->
-	 io:format("[ctr_cmdclient]: <ERROR> An unknown device response was received: {~p,~p}~n",[Devhandler_Ref,Devhandler_Reply]),
-	 ValidCommands;
+	
+	 % If the response did not match any command, report the error
+	 % and return the same list of commands pending a response
+	 io:format("[ctr_cmdclient]: <ERROR> An unexpected command response with reference \"~p\" was received: ~p~n",[Devhandler_Ref,Devhandler_Reply]),
+	 PendingCmdResponses;
    
-    % If a response is associated with a devcommand,
-	% forward it to the 'ctr_resthandler' parent process
-    {value,RepliedDevCommand,NewValidCommands_} ->
-     ParentPID ! {devresponse,RepliedDevCommand#valdevcmd.dev_id,Devhandler_Reply},
-	 NewValidCommands_ 
+    {value,MatchedCommand,NewPendingCmdResponses_} ->
+	
+	 % If the response was successfully matched to its source
+ 	 % command, forward it to the 'ctr_resthandler' parent process
+     ParentPID ! {devresponse,MatchedCommand#valdevcmd.dev_id,Devhandler_Reply},
+	 
+	 % Return the updated list of commands pending a response
+	 NewPendingCmdResponses_ 
    end
  end,
- receive_devresponses(NewValidCommands,ParentPID).
-
-
-
  
+ % Wait for the next response using the updated list of commands pending a response
+ cmdclient_receive_devresponses(NewPendingCmdResponses,ParentPID).
 
-% Retrieve the HTTP status code and body to be returned to the client
-build_devcommands_reply(ValidResponses,InvalidResponses,InvalidCommands) ->
+
+%% ================================================= HTTP RESPONSE GENERATION ====================================================== %%
+
+%% DESCRIPTION:  Determines and returns the status code and body of the HTTP response
+%%               to be returned to the client that issued a list of device commands
+%%
+%% ARGUMENTS:    - SuccessfulCommands: The list of successful device commands
+%%               - FailedCommands:     The list of failed device commands
+%%               - InvalidCommands:    The list of invalid device commands
+%%
+%% RETURNS:      - {RespCode,RespBody} -> The status code and body of the HTTP response to be
+%%                                        returned to the client, the latter encoded in JSON
+%% THROWS:       - jsone_encode_error -> The lists of device commands results
+%%                                       could not be encoded in JSON format
+%%
+build_devcommands_response(SuccessfulCommands,FailedCommands,InvalidCommands) ->
  
  % Define the list of invalid results as the concatenation
- % of the lists of invalid responses and invalid commands:
- InvalidResults = InvalidResponses ++ InvalidCommands,
+ % of the lists of failed and invalid commands
+ InvalidResults = FailedCommands ++ InvalidCommands,
  
- % Convert the set of Valid and Invalid results to JSON format
- ResBody = try jsone:encode(ValidResponses ++ InvalidResults)
+ % Set the body of the HTTP response to be returned to the client as the encode in JSON
+ % format of the concatenation of the lists of successful commands and invalid results
+ ResBody = try jsone:encode(SuccessfulCommands ++ InvalidResults)
            catch
 		   
-		    % If the results could not be encoded
-		    % in JSON format, throw an error
+		    % If the concatenation of the two lists could
+			% not be encoded in JSON format, throw an error
 		    error:badarg ->
 		 	 throw(jsone_encode_error)
 		   end,
-
- io:format("Resbody = ~p~n",[ResBody]),
  
- io:format("Valid Responses = ~p~n",[ValidResponses]),
- io:format("Invalid Results = ~p~n",[InvalidResults]),
- 
- % Determine the status code to be replied to the client
- ResCode = get_devcommands_statuscode(ValidResponses,InvalidResults),
-			    
- % Return the HTTP status code and body to be replied to the client
+ % Determine the HTTP status code to be replied to the client
+ ResCode = get_devcommands_statuscode(SuccessfulCommands,InvalidResults),
+			
+ % Return the status code and the body of the
+ % HTTP response to be replied to the client
  {ResCode,ResBody}.
 
 
+%% Determines the HTTP status code to be replied to a client that issued a list of device commands
+%% (build_devcommands_response(SuccessfulCommands,InvalidResponses,InvalidCommands) helper function)
+get_devcommands_statuscode(_SuccessfulCommands,[]) ->
 
-% All valid responses -> 200
-get_devcommands_statuscode(_ValidResponses,[]) ->
+ % If all commands were successful, return 200 (OK)
  200;
 
-% All invalid results -> the highest error code
 get_devcommands_statuscode([],InvalidResults) ->
 
- case lists:foldl(fun(#{status := ErrCode},MaxCode) -> max(ErrCode,MaxCode) end,0,InvalidResults) of 
+ % If all results are invalid, return the highest among their error codes
+ lists:foldl(fun(#{status := ErrCode},MaxCode) -> max(ErrCode,MaxCode) end,0,InvalidResults);
  
-  % Error in the expression above
-  0 ->
-   500;
- 
-  HTTPCode when is_number(HTTPCode) ->
-   HTTPCode
- end;
- 
-% Mixed -> 202
 get_devcommands_statuscode(_ValidResponses,_InvalidResults) ->
+ 
+ % If there are both successful and invalid results, return 202 (ACCEPTED)
  202.
  
 
+%% DESCRIPTION:  Prints a summary of the device commands issuing
+%%
+%% ARGUMENTS:    - SuccessfulCommands: The list of successful device commands
+%%               - FailedCommands:     The list of failed device commands
+%%               - ValidCommands:      The list of valid device commands
+%%               - InvalidCommands:    The list of invalid device commands
+%%
+%% RETURNS:      ok -> A summary of the operation was printed
+%%
+print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode) ->
+
+ % Retrieve the controller's location ID
+ {ok,Loc_id} = application:get_env(janet_controller,loc_id),
+
+ % Print a summary of the device commands issuing
+ print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id).
+
+%% ---------------------- Single Device Command ---------------------- %%
+
+% Successful command
+print_devcommands_summary([#{dev_id := Dev_id, state := NewState}],[],[ValidCommand],[],200,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
+ io:format("[devcommands_handler-~w]: <SUCCESS> dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,NewState]);
+
+% Failed command
+print_devcommands_summary([],[#{dev_id := Dev_id, errorReason := ErrorReason}],[ValidCommand],[],RespCode,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
+ io:format("[devcommands_handler-~w]: <FAILED> dev_id = ~w, command = ~200p, errorReason = ~200p (RespCode = ~w)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,ErrorReason,RespCode]);
+ 
+% Invalid command
+print_devcommands_summary([],[],[],[#{dev_id := Dev_id, errorReason := ErrorReason}],RespCode,Loc_id) ->
+ io:format("[devcommands_handler-~w]: <INVALID> dev_id = ~p, errorReason = ~200p (RespCode = ~w)~n",[Loc_id,Dev_id,ErrorReason,RespCode]);
+ 
+%% ----------------------- Multi Device Command ----------------------- %%
+print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id) ->
+
+ % Print the header of the device commands summary
+ io:format("[devcommands_handler-~w]: Issued multiple device commands (RespCode = ~w)~n",[Loc_id,RespCode]),
+ 
+ % Print the list of successful device commands indented as a tree, also obtaining the list of valid but failed commands
+ ValidFailedCommands = print_successful_devcommands(SuccessfulCommands,ValidCommands,devcommands_summary_indent(FailedCommands++InvalidCommands)),
+  
+ % Print the list of failed device commands indented as a tree
+ print_failed_devcommands(FailedCommands,ValidFailedCommands,devcommands_summary_indent(InvalidCommands)),
+ 
+ % Print the list of invalid device commands indented as a tree
+ print_invalid_devcommands(InvalidCommands,"   ").
+ 
+
+%% ---------------------------------------------
+print_successful_devcommands([],ValidFailedCommands,_Indent) ->
+
+ % If there are no successful command, directly
+ % return the list of valid but failed commands
+ ValidFailedCommands;
+ 
+print_successful_devcommands(SuccessfulCommands,ValidCommands,Indent) ->
+ 
+  % Print the successful commands tree header
+  io:format("|--[Successful Commands]~n"),
+ 
+  % Print the list of successful commands indented as a tree
+  print_successful_devcommands_tree(SuccessfulCommands,ValidCommands,Indent).
+ 
+print_successful_devcommands_tree([],ValidFailedCommands,_Indent) ->
+
+ % The residual list of valid commands
+ % represents the valid but failed commands
+ ValidFailedCommands;
+ 
+print_successful_devcommands_tree([#{dev_id := Dev_id, state := NewState}|NextSuccessCommand],ValidCommands,Indent) ->
+
+ % Match the successful to its associated valid command
+ {value,MatchValidCommand,NewValidCommands} = lists:keytake(Dev_id,2,ValidCommands),
+ 
+ % Print a summary of the successful command
+ io:format("~s|-- dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Indent,Dev_id,MatchValidCommand#valdevcmd.cfgcommand,NewState]),
+ 
+ % Proceed with the next successful command
+ print_successful_devcommands_tree(NextSuccessCommand,NewValidCommands,Indent).
 
 
+%% ---------------------------------------------
+print_failed_devcommands([],_ValidFailedCommands,_Indent) ->
+
+ % If there are no failed commands, return
+ ok;
+ 
+print_failed_devcommands(FailedCommands,ValidFailedCommands,Indent) ->
+
+ % Print the failed commands tree header
+ io:format("|--[Failed Commands]~n"),
+ 
+ % Print the list of failed commands indented as a tree
+ print_failed_devcommands_tree(FailedCommands,ValidFailedCommands,Indent).
+
+print_failed_devcommands_tree([],_ValidFailedCommands,_Indent) ->
+
+ % When there are no more failed
+ % commands to print, return
+ ok;
+ 
+print_failed_devcommands_tree([#{dev_id := Dev_id, status := Status, errorReason := ErrorReason}|NextFailedCommand],ValidFailedCommands,Indent) ->
+
+ % Match the failed to its associated valid command
+ {value,MatchValidCommand,NewValidFailedCommands} = lists:keytake(Dev_id,2,ValidFailedCommands),
+ 
+ % Print a summary of the failed command
+ io:format("~s|-- dev_id = ~w, command = ~200p, errorReason = ~200p (RespCode = ~w)~n",[Indent,Dev_id,MatchValidCommand#valdevcmd.cfgcommand,ErrorReason,Status]),
+ 
+ % Proceed with the next failed command
+ print_failed_devcommands_tree(NextFailedCommand,NewValidFailedCommands,Indent).
+ 
+ 
+%% ---------------------------------------------
+print_invalid_devcommands([],_Indent) ->
+
+ % If there are no invalid commands, return
+ ok;
+ 
+print_invalid_devcommands(InvalidCommands,Indent) ->
+
+ % Print the invalid commands tree header
+ io:format("|--[Invalid Commands]~n"),
+ 
+ % Print the list of invalid commands indented as a tree
+ print_invalid_devcommands_tree(InvalidCommands,Indent).
+
+print_invalid_devcommands_tree([],_Indent) ->
+ 
+ % When there are no more invalid
+ % commands to print, return
+ ok;
+ 
+print_invalid_devcommands_tree([#{dev_id := Dev_id, status := Status, errorReason := ErrorReason}|NextInvalidCommand],Indent) ->
+
+ % Print a summary of the invalid command
+ io:format("~s|-- dev_id = ~p, errorReason = ~200p (RespCode = ~w)~n",[Indent,Dev_id,ErrorReason,Status]),
+ 
+ % Proceed with the next invalid command
+ print_invalid_devcommands_tree(NextInvalidCommand,Indent).
+ 
+ 
+%% ---------------------------------------------
+devcommands_summary_indent(List) when is_list(List), length(List) > 0 ->
+ "|  ";
+devcommands_summary_indent(List) when is_list(List) ->
+ "   ".
 
 
 

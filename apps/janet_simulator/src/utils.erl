@@ -403,19 +403,35 @@ deprefix_dev_config(Config) ->
  end.
  
  
-%% TODO: Check if everything must be converted to list...
+%% DESCRIPTION:  Converts a device's configuration record into a map
+%%
+%% ARGUMENTS:    - Cfg: The device configuration record to be converted into a map
+%%
+%% RETURNS:      - CfgMap -> The device's configuration as a map
+%% 
+%% THROWS:       - {error,invalid_devtype} -> The device type is invalid
+%%
+% Fan
 devconfig_to_map(Cfg) when is_record(Cfg,fancfg) ->
  #{onOff => Cfg#fancfg.onoff, fanSpeed => Cfg#fancfg.fanspeed};
+
+% Light
 devconfig_to_map(Cfg) when is_record(Cfg,lightcfg) ->
  #{onOff => Cfg#lightcfg.onoff, brightness => Cfg#lightcfg.brightness, color => Cfg#lightcfg.colorsetting};
+
+% Door
 devconfig_to_map(Cfg) when is_record(Cfg,doorcfg) ->
  #{openClose => Cfg#doorcfg.openclose, lockUnlock => Cfg#doorcfg.lockunlock}; 
+
+% Thermostat
 devconfig_to_map(Cfg) when is_record(Cfg,thermocfg) ->
  #{onOff => Cfg#thermocfg.onoff, tempTarget => Cfg#thermocfg.temp_target, tempCurrent => Cfg#thermocfg.temp_current};
+
+% Conditioner
 devconfig_to_map(Cfg) when is_record(Cfg,condcfg) ->
  #{onOff => Cfg#condcfg.onoff, tempTarget => Cfg#condcfg.temp_target, tempCurrent => Cfg#condcfg.temp_current, fanSpeed => Cfg#condcfg.fanspeed};
  
-% Invalid
+% Invalid device type
 devconfig_to_map(_) ->
  throw({error,invalid_devtype}).
  

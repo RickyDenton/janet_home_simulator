@@ -231,8 +231,8 @@ handle_info({'DOWN',MonRef,process,CtrSrvPid,Reason},SrvState) when MonRef =:= S
 %%
 terminate(_,SrvState) ->
  
- % If it is still active, remove the monitor towards the controller's 'ctr_simserver'
- % process, also flushing any possible notification from the message queue  
+ % If still active, remove the monitor towards the controller's 'ctr_simserver'
+ % process, also flushing possible notifications from the message queue  
  if
   is_reference(SrvState#ctrmgrstate.ctr_srv_mon) ->
    demonitor(SrvState#ctrmgrstate.ctr_srv_mon,[flush]);

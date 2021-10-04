@@ -172,8 +172,8 @@ terminate(_,SrvState) ->
  % Attempt to deregister the handler's PID from the 'ctr_device' table 
  deregister_handler(SrvState#devhandlerstate.dev_id),
  
- % If it is still active, remove the monitor towards the device's 'dev_server'
- % process, also flushing any possible notification from the message queue  
+ % If still active, remove the monitor towards the device's 'dev_server'
+ % process, also flushing possible notifications from the message queue  
  demonitor(SrvState#devhandlerstate.dev_srv_mon,[flush]),
  
  % Terminate
