@@ -574,28 +574,17 @@ devcommands_handler(Req,[BinBody]) ->
  
  % Parse the list of device commands, obtaining
  % the lists of valid and invalid commands
- {ValidCommands,InvalidCommands} = parse_devcommands(DevCommands,[],[]),
- 
- %% [TODO]: Remove
- %io:format("ValidCommands = ~p~n",[ValidCommands]),
- %io:format("InvalidCommands = ~p~n",[InvalidCommands]),
+ {ValidCommands,InvalidCommands} = parse_devcommands(DevCommands,[],[],[]),
  
  % Issue the valid commands to their respective devices,
  % obtaining the lists of successful and failed device commands
  {SuccessfulCommands,FailedCommands} = issue_devcommands(ValidCommands),
- 
- %% [TODO]: Remove
- %io:format("SuccessfulCommands = ~p~n",[SuccessfulCommands]),
- %io:format("FailedCommands = ~p~n",[FailedCommands]),
  
  % Retrieve the status code and body of the HTTP response to be returned to the client
  {RespCode,RespBody} = build_devcommands_response(SuccessfulCommands,FailedCommands,InvalidCommands),
  
  % Print a summary of the operation
  print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode),
- 
- %% [TODO]: Remove
- %io:format("RespCode = ~p, RespBody = ~p~n",[RespCode,RespBody]),
  
  % Return the HTTP response to the client
  cowboy_req:reply(
@@ -604,8 +593,73 @@ devcommands_handler(Req,[BinBody]) ->
 		          RespBody,                                         % Response Body
 			      Req                                               % Associated HTTP Request
 			     ).
- 				 
+
+
+%%====================================================================================================================================%
+%%                                                                                                                                    %
+%%                                                     PRIVATE HELPER FUNCTIONS                                                       %
+%%                                                                                                                                    %
+%%====================================================================================================================================%
+
+%%====================================================================================================================================
+%%                                             SIMULATOR DATABASE BRIDGE HELPER FUNCTIONS
+%%==================================================================================================================================== 
+
+%% Attempts to perform an operation in the JANET Simulator database and,
+%% if successful, attempts to mirror it in the controller's database
+sim_db_sync(DBFun,SimArgsList,CtrArgsList) ->
+
+ % Attempt to perform the "DBFun" function with "SimArgsList" arguments in the JANET Simulator database
+ % by routing the request via the 'ctr_simserver' to the 'ctr_manager' associated with the controller
+ case gen_sim_command(db,DBFun,SimArgsList) of
  
+  {error,Error} ->
+  
+   % If an error was raised in performing the operation, whether it occured in the JANET Simulator database or
+   % within the communication, return it without attempting to mirror the operation on the controller's database
+   {error,Error};
+   
+  SimDBRes ->
+   
+   % If the JANET Simulator database operation was successful, regardless of the results of its
+   % side-effects, if any (which are carried in the "SimDBRes" variable), attempt to mirror such
+   % operation in the location controller, concatenating in order the results of the two operations
+   print_sim_db_sync_result(SimDBRes,apply(ctr_db,DBFun,CtrArgsList))
+ end.
+   
+   
+%% Concatenates the result of a database operation in the JANET Simulator with the result of its mirroring
+%% in the controller's database into a tuple (sim_db_sync(DBFun,SimArgsList,CtrArgsList) helper function) 
+print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_atom(CtrDBRes) ->
+ {SimDBRes,CtrDBRes};
+print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_tuple(CtrDBRes) ->
+ list_to_tuple([SimDBRes] ++ [CtrDBRes]);
+print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_atom(CtrDBRes) ->
+ list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]);
+print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_tuple(CtrDBRes) ->
+ list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]).
+
+ 
+%% Attempts to synchronously execute a command on the JANET Simulator by routing the request
+%% via the 'ctr_simserver' to the 'ctr_manager' associated with this controller, returning
+%% the result of the operation (sim_db_sync(DBFun,SimArgsList,CtrArgsList) helper function) 
+gen_sim_command(Module,Function,ArgsList) ->
+ 
+ % Route the command via the 'ctr_simserver' to the 'ctr_manager' associated
+ % with this controller and wait for a response up to a predefined timeout
+ try gen_server:call(ctr_simserver,{sim_command,Module,Function,ArgsList},5000)
+ catch
+    exit:{timeout,_} ->
+	   
+     % Command timeout
+	 {error,request_timeout}
+ end.
+
+
+%%====================================================================================================================================
+%%                                              DEVICE COMMANDS ISSUING HELPER FUNCTIONS
+%%====================================================================================================================================  
+
 %% ===================================================== COMMANDS PARSING ========================================================== %% 
 
 %% DESCRIPTION:  Retrieves the list of device commands (DevCommands) from the binary body of an HTTP request
@@ -662,15 +716,17 @@ get_devcommands(BinBody) ->
 %% ARGUMENTS:    - DevCommands:     The list of device commands to be parsed
 %%               - ValidCommands:   The list of valid device commands (accumulator)
 %%               - InvalidCommands: The list of invalid device commands (accumulator)
+%%               - ValDevIds:       The list of "Dev_id"s associated with already parsed valid commands
+%%                                  (used for checking duplicate commands towards the same "Dev_id")
 %%
 %% RETURNS:      - {ValidCommands,InvalidCommands} -> The list of valid and invalid device commands
 %%
 % Base case (return the lists of valid and invalid device commands)
-parse_devcommands([],ValidCommands,InvalidCommands) ->
+parse_devcommands([],ValidCommands,InvalidCommands,_ValDevIds) ->
  {ValidCommands,InvalidCommands};
  
 % Recursive case when a device command was correctly cast to a map by the JSONE library
-parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) when is_map(DevCommand) ->
+parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands,ValDevIds) when is_map(DevCommand) ->
 
  % Parse the device command map
  ParsedCommand =
@@ -681,9 +737,12 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
   
   try
    
+   % Ensure that a valid command towards such "Dev_id" was not already parsed
+   ok = check_devcommand_duplicate(Dev_id,ValDevIds), 
+   
    % Attempt to retrieve the "actions" map from the device command
-   Actions = get_devcommand_actions(DevCommand),
-     
+   Actions = get_devcommand_actions(DevCommand), 
+   
    % Ensure device "Dev_id" to belong to the location and to be currently paired
    % with the controller, and obtain its Type and the PID of its 'ctr_devhandler'
    {Type,HandlerPID} = get_devcommand_devinfo(Dev_id), 
@@ -703,9 +762,13 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
   
    %% ----------------------------------- Command Parsing Inner Errors (with "Dev_id") ----------------------------------- %
    
+   % A valid command towards such "Dev_id" was already parsed
+   {duplicate,devid} ->	
+    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"A valid command towards such device was already issued">>});
+	
    % The "actions" map is missing
    {missing_param,actions} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The 'actions' object is missing in the device command">>});
+    throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The 'actions' object is missing">>});
 	
    % The "actions" parameter was not interpreted as a map
    {not_a_map,actions} ->
@@ -723,17 +786,17 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
    device_offline ->
     throw(#{dev_id => Dev_id, status => 307, errorReason => <<"The device is currently offline">>});
    
-   % Invalid trait value in action
-   {invalid_trait,Trait,InvalidValue} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => list_to_binary("Invalid value '" ++ InvalidValue ++ "' of trait '" ++ atom_to_list(Trait) ++ "'")});   
+   % Invalid action valiue
+   {invalid_action,Action,InvalidValue} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => list_to_binary("Invalid value '" ++ InvalidValue ++ "' of action '" ++ Action ++ "'")});   
+
+   % Invalid actions (keys) in the "actions" map for the associated device type
+   {invalid_actions,DevType} ->
+    throw(#{dev_id => Dev_id, status => 400, errorReason => list_to_binary("The 'actions' object contains invalid actions for the associated device type (" ++ atom_to_list(DevType) ++ ")")});
 	
    % Invalid state (door)
    {invalid_state,door} ->
     throw(#{dev_id => Dev_id, status => 400, errorReason => <<"The state {'open','lock'} is invalid for device type 'door'">>});
-	
-   % Invalid actions (keys) in the "actions" map for the associated device type
-   {invalid_actions,DevType} ->
-    throw(#{dev_id => Dev_id, status => 400, errorReason => list_to_binary("The 'actions' object contains invalid actions for the associated device type (" ++ atom_to_list(DevType) ++ ")")});
 	
    % An invalid trait value was cast to an unknown Erlang term() by the JSONE library
    {unknown_jsone_cast,InvalidTrait} ->
@@ -745,7 +808,12 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
    
    % Unhandled Error
    _:UnhandledErrorInner ->
-    io:format("[parse_devcommands (inner)]: Unhandled error: ~p (dev_id: ~p)~n",[UnhandledErrorInner,Dev_id]),
+   
+    % Retrieve the controller's location ID for logging purposes
+    {ok,Loc_id_in} = application:get_env(janet_controller,loc_id),
+	
+	% Log and throw the unhandled error
+    io:format("[parse_devcommands (inner)-~w]: Unhandled error: ~p (dev_id: ~p)~n",[Loc_id_in,UnhandledErrorInner,Dev_id]),
     throw(#{dev_id => Dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Unhandled server error while parsing the command: ~p",[UnhandledErrorInner])))})
   end
   
@@ -759,7 +827,7 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
   
   % "Dev_id" not an integer
   {not_an_integer,InvalidDevId} ->
-   {error,#{dev_id => invalid, status => 400, errorReason => list_to_binary(lists:flatten(io_lib:format("Parameter 'dev_id' is not an integer (~s)",[catch(utils:jsone_term_to_list(InvalidDevId))])))}};
+   {error,#{dev_id => invalid, status => 400, errorReason => list_to_binary(lists:flatten(io_lib:format("Parameter 'dev_id' is not an integer (~s)",[catch(utils:jsone_term_to_list(InvalidDevId,dev_id))])))}};
   
   % "Dev_id" <= 0
   {out_of_range,dev_id,InvalidDevId} ->
@@ -771,27 +839,33 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands) whe
    
   % Unhandled Error
   _:UnhandledErrorOuter ->
-   io:format("[parse_devcommands (outer)]: Unhandled Error: ~p~n",[UnhandledErrorOuter]),
+  
+   % Retrieve the controller's location ID for logging purposes
+   {ok,Loc_id_out} = application:get_env(janet_controller,loc_id),
+	
+   % Log and throw the unhandled error
+   io:format("[parse_devcommands (outer)-~w]: Unhandled Error: ~p~n",[Loc_id_out,UnhandledErrorOuter]),
    {error,throw(#{dev_id => unknown, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Unhandled server error while parsing the command: ~p",[UnhandledErrorOuter])))})}
  end,
  
  % Depending on whether the command was successfully parsed
  case ParsedCommand of
  
-  % If it was, append it into the list of valid commands and parse the next one
+  % If it was, append it and the "Dev_id" of its associated device in the
+  % "ValidCommands" and "ValDevIds" lists and parse the next device command
   {ok,ValidCommand} ->
-   parse_devcommands(NextDevCommand,ValidCommands ++ [ValidCommand],InvalidCommands);
-   
+   parse_devcommands(NextDevCommand,ValidCommands ++ [ValidCommand],InvalidCommands,ValDevIds ++ [ValidCommand#valdevcmd.dev_id]);
+  
   % Otherwise append it into the list of invalid commands and parse the next one
   {error,InvalidCommand} ->
-   parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [InvalidCommand])
+   parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [InvalidCommand],ValDevIds)
  end;
  
 % Recursive case when a device command was NOT cast to a map by the JSONE library
-parse_devcommands([_|NextDevCommand],ValidCommands,InvalidCommands) ->
+parse_devcommands([_|NextDevCommand],ValidCommands,InvalidCommands,ValDevIds) ->
 
  % Appent the command in the list of invalid commands and parse the next one
- parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [#{dev_id => unknown, status => 400, errorReason => <<"The device command could not be interpreted as a JSON object">>}]).
+ parse_devcommands(NextDevCommand,ValidCommands,InvalidCommands ++ [#{dev_id => unknown, status => 400, errorReason => <<"The device command could not be interpreted as a JSON object">>}],ValDevIds).
 
 
 %% DESCRIPTION:  Returns the 'dev_id' associated with a device command
@@ -837,7 +911,32 @@ get_devcommand_dev_id(DevCommand) ->
    throw({not_an_integer,Dev_id})
  end.
    
-   
+
+%% DESCRIPTION:  Ensures that a valid command towards a given "Dev_id" was not already parsed
+%%
+%% ARGUMENTS:    - Dev_id:    The "Dev_id" to be checked for duplicate commands
+%%               - ValDevIds: The list of "Dev_id"s associated with valid commands already parsed
+%%
+%% RETURNS:      - ok -> No valid command towards such "Dev_id" was already parsed
+%%
+%% THROWS:       - {duplicate,devid} -> A valid command towards such "Dev_id" was already parsed
+%%
+check_devcommand_duplicate(Dev_id,ValDevIds) ->
+
+ % Check if ""Dev_id" belongs to the list of "ValDevIds"
+ % associated with valid commands already parsed
+ case lists:member(Dev_id,ValDevIds) of
+ 
+  % If it does, throw an error
+  true ->
+   throw({duplicate,devid});
+  
+  % Otherwise return 'ok'
+  false ->
+   ok
+ end.
+ 
+ 
 %% DESCRIPTION:  Returns the "actions" map of a device command
 %%
 %% ARGUMENTS:    - DevCommand: The device command which to retrieve the "action" map
@@ -883,7 +982,7 @@ get_devcommand_actions(DevCommand) ->
    % If it is not a map, throw an error
    throw({not_a_map,actions})
  end.  
-  
+
 
 %% DESCRIPTION:  Ensures a device "Dev_id" to belong to the location and to be currently paired with
 %%               the controller, and returns its type and the PID of its 'ctr_devhandler' process
@@ -931,13 +1030,13 @@ get_devcommand_devinfo(Dev_id) ->
 %% RETURNS:      - CfgCommand -> The configuration command record of the
 %%                               appropriate #devtype to be issued to the device
 %%
-%% THROWS:       - {invalid_trait,Trait,InvalidValue}  -> Device trait "Trait" is of invalid value "InvalidValue"
-%%               - {invalid_state,door}                -> The configuration command would set the device
-%%                                                        of type 'door' in the invalid state {open,lock}
-%%               - {invalid_actions,Type}              -> The "actions" map contains invalid actions for the device Type
-%%               - {unknown_jsone_cast,InvalidTrait}   -> An invalid trait value was cast to an
-%%                                                        unknown Erlang term() by the JSONE library 
-%%               - {invalid_db_devtype,InvalidDevType} -> The device type in the controller Mnesia database is invalid
+%% THROWS:       - {invalid_action,Action,InvalidValue} -> Action "Action" is of invalid value "InvalidValue"
+%%               - {invalid_actions,Type}               -> The "actions" map contains invalid actions for the device Type
+%%               - {invalid_state,door}                 -> The configuration command would set the device
+%%                                                         of type 'door' in the invalid state {open,lock}
+%%               - {unknown_jsone_cast,InvalidTrait}    -> An invalid trait value was cast to an
+%%                                                         unknown Erlang term() by the JSONE library 
+%%               - {invalid_db_devtype,InvalidDevType}  -> The device type in the controller Mnesia database is invalid
 %%
 %% NOTE:         No duplicate actions (keys) can be present since the JSONE library only returns the first
 %%               occurence of each key in a map (https://github.com/sile/jsone/blob/master/doc/jsone.md#types)
@@ -1070,7 +1169,7 @@ get_trait_value(onoff,Action=#{<<"onOff">> := OnOff}) when OnOff =:= <<"on">> or
 
 % Invalid "OnOff" action 
 get_trait_value(onoff,#{<<"onOff">> := InvalidOnOff}) ->
- throw({invalid_trait,onoff,utils:jsone_term_to_list(InvalidOnOff,onoff)});
+ throw({invalid_action,"onOff",utils:jsone_term_to_list(InvalidOnOff,onoff)});
 
 %% ------------- "fanSpeed" action -> 'fanspeed' trait ------------- %%
 % Valid "fanSpeed" action (0 < fanSpeed <= 100)
@@ -1079,7 +1178,7 @@ get_trait_value(fanspeed,Action=#{<<"fanSpeed">> := FanSpeed}) when is_integer(F
   
 % Invalid "fanSpeed" action
 get_trait_value(fanspeed,#{<<"fanSpeed">> := InvalidFanSpeed}) ->
- throw({invalid_trait,fanspeed,utils:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
+ throw({invalid_action,"fanSpeed",utils:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
  
 %% ----------- "brightness" action -> 'brightness' trait ----------- %%
 % Valid "brightness" action (0 < brightness <= 100)
@@ -1088,7 +1187,7 @@ get_trait_value(brightness,Action=#{<<"brightness">> := Brightness}) when is_int
 
 % Invalid "brightness" action
 get_trait_value(brightness,#{<<"brightness">> := InvalidBrightness}) ->
- throw({invalid_trait,brightness,utils:jsone_term_to_list(InvalidBrightness,brightness)});
+ throw({invalid_action,"brightness",utils:jsone_term_to_list(InvalidBrightness,brightness)});
   
 %% ------------- "color" action -> 'colorsetting' trait ------------- %% 
 % Valid "color" action (any)
@@ -1104,7 +1203,7 @@ get_trait_value(openclose,Action=#{<<"openClose">> := OpenClose}) when OpenClose
  
 % Invalid "openClose" action
 get_trait_value(openclose,#{<<"openClose">> := InvalidOpenClose}) ->
- throw({invalid_trait,openclose,utils:jsone_term_to_list(InvalidOpenClose,openclose)});
+ throw({invalid_action,"openClose",utils:jsone_term_to_list(InvalidOpenClose,openclose)});
  
 %% ------------ "lockUnlock" action -> 'lockunlock' trait ------------ %%  
 % Valid "lockUnlock" action ("lock"|"unlock")
@@ -1113,7 +1212,7 @@ get_trait_value(lockunlock,Action=#{<<"lockUnlock">> := LockUnlock}) when LockUn
  
 % Invalid "lockUnlock" action
 get_trait_value(lockunlock,#{<<"lockUnlock">> := InvalidLockUnlock}) ->
- throw({invalid_trait,lockunlock,utils:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
+ throw({invalid_action,"lockUnlock",utils:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
 
 %% ------------ "tempTarget" action -> 'temp_target' trait ------------ %%  
 
@@ -1123,7 +1222,7 @@ get_trait_value(temp_target,Action=#{<<"tempTarget">> := TempTarget}) when is_in
 
 % Invalid "tempTarget" action
 get_trait_value(temp_target,#{<<"tempTarget">> := InvalidTempTarget}) ->
- throw({invalid_trait,temp_target,utils:jsone_term_to_list(InvalidTempTarget,temp_target)});
+ throw({invalid_action,"tempTarget",utils:jsone_term_to_list(InvalidTempTarget,temp_target)});
  
 %% NOTE: The 'temp_current' trait has no associated action (it cannot be changed via a command)
 
@@ -1219,28 +1318,25 @@ issue_devcommands(ValidCommands) ->
   {ok,SuccessfulCommands,FailedCommands} ->
    {SuccessfulCommands,FailedCommands};
   
-  % If they were not, convert all valid in failed
-  % commands with the same error Reason and return them 
+  % If an error occured in parsing the devices' responses
   {error,Reason} ->
-   io:format("[issue_devcommands]: error: ~p~n",[Reason]),
-   {[],issue_devcommands_failure(ValidCommands,[],Reason)}
- end.
- 
- 
-%% Converts all valid in failed commands with the same error Reason( issue_devcommands(ValidCommands) helper function)
-issue_devcommands_failure([],FailedCommands,_) ->
-
- % Base case (return the list of failed commands)
- FailedCommands;
- 
-issue_devcommands_failure([ValidCommand|NextValidCommand],FailedCommands,ErrorReason) ->
- 
- % Convert the valid command to failed specifying the error Reason
- FailedCommand = #{dev_id => ValidCommand#valdevcmd.dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Server error in issuing the device commands: ~p",[ErrorReason])))},
- 
- % Proceed with the next command
- issue_devcommands_failure(NextValidCommand, FailedCommands ++ [FailedCommand], ErrorReason).
   
+   % Retrieve the controller's location ID for logging purposes
+   {ok,Loc_id} = application:get_env(janet_controller,loc_id),
+   
+   % Report the error
+   io:format("[issue_devcommands-~w]: error: ~p~n",[Loc_id,Reason]),
+   
+   % Convert all valid in failed commands with the same error Reason
+   FailedCommands = [#{dev_id => Dev_id,
+                       status => 500,
+					   errorReason => list_to_binary(lists:flatten(io_lib:format("Server error in issuing the device commands: ~p",[Reason])))}
+					 || {_,Dev_id,_,_,_} <- ValidCommands ],
+   
+   % Return the lists of successful (empty) and failed commands
+   {[],FailedCommands}
+ end.
+
   
 %% DESCRIPTION:  Retrieves and parses the device commands responses and
 %%               returns the lists of successful and failed commands
@@ -1491,72 +1587,76 @@ get_devcommands_statuscode(_ValidResponses,_InvalidResults) ->
  202.
  
 
-%% DESCRIPTION:  Prints a summary of the device commands issuing
+%% DESCRIPTION:  Prints a summary of the device commands issuing operation
 %%
 %% ARGUMENTS:    - SuccessfulCommands: The list of successful device commands
 %%               - FailedCommands:     The list of failed device commands
 %%               - ValidCommands:      The list of valid device commands
 %%               - InvalidCommands:    The list of invalid device commands
 %%
-%% RETURNS:      ok -> A summary of the operation was printed
+%% RETURNS:      ok -> A summary of the device commands issuing operation was printed
 %%
 print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode) ->
 
  % Retrieve the controller's location ID
  {ok,Loc_id} = application:get_env(janet_controller,loc_id),
 
- % Print a summary of the device commands issuing
+ % Print a summary of the device commands issuing operation
  print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id).
 
-%% ---------------------- Single Device Command ---------------------- %%
-
+%% ------------------------------------------ Single Device Command ------------------------------------------ %%
 % Successful command
 print_devcommands_summary([#{dev_id := Dev_id, state := NewState}],[],[ValidCommand],[],200,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
- io:format("[devcommands_handler-~w]: <SUCCESS> dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,NewState]);
+ io:format("~n[devcommands_handler-~w]: <SUCCESS> dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,utils:devmap_to_config(NewState)]);
 
 % Failed command
 print_devcommands_summary([],[#{dev_id := Dev_id, errorReason := ErrorReason}],[ValidCommand],[],RespCode,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
- io:format("[devcommands_handler-~w]: <FAILED> dev_id = ~w, command = ~200p, errorReason = ~200p (RespCode = ~w)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,ErrorReason,RespCode]);
+ io:format("~n[devcommands_handler-~w]: <FAILED> dev_id = ~w, command = ~200p, errorReason = ~200p (RespCode = ~w)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,ErrorReason,RespCode]);
  
 % Invalid command
 print_devcommands_summary([],[],[],[#{dev_id := Dev_id, errorReason := ErrorReason}],RespCode,Loc_id) ->
- io:format("[devcommands_handler-~w]: <INVALID> dev_id = ~p, errorReason = ~200p (RespCode = ~w)~n",[Loc_id,Dev_id,ErrorReason,RespCode]);
+ io:format("~n[devcommands_handler-~w]: <INVALID> dev_id = ~p, errorReason = ~200p (RespCode = ~w)~n",[Loc_id,Dev_id,ErrorReason,RespCode]);
  
-%% ----------------------- Multi Device Command ----------------------- %%
+%% ------------------------------------------- Multi Device Command ------------------------------------------- %%
 print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id) ->
 
- % Print the header of the device commands summary
- io:format("[devcommands_handler-~w]: Issued multiple device commands (RespCode = ~w)~n",[Loc_id,RespCode]),
+ % Print the header of the multiple device commands issuing operation
+ io:format("~n[devcommands_handler-~w]: MULTI-COMMAND (RespCode = ~w)~n",[Loc_id,RespCode]),
  
- % Print the list of successful device commands indented as a tree, also obtaining the list of valid but failed commands
+ % Print the list of SUCCESSFUL device commands indented as a tree, also obtaining the list of valid, but failed, commands
  ValidFailedCommands = print_successful_devcommands(SuccessfulCommands,ValidCommands,devcommands_summary_indent(FailedCommands++InvalidCommands)),
   
- % Print the list of failed device commands indented as a tree
+ % Print the list of FAILED device commands indented as a tree
  print_failed_devcommands(FailedCommands,ValidFailedCommands,devcommands_summary_indent(InvalidCommands)),
  
- % Print the list of invalid device commands indented as a tree
+ % Print the list of INVALID device commands indented as a tree (NOTE: in this case the indentation is fixed)
  print_invalid_devcommands(InvalidCommands,"   ").
  
+%% -------------------------------------- SUCCESSFUL Commands -------------------------------------- %%
 
-%% ---------------------------------------------
+%% Prints the tree of successful device commands (print_devcommands_summary(SuccessfulCommands,
+%% FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id) helper function)
 print_successful_devcommands([],ValidFailedCommands,_Indent) ->
 
- % If there are no successful command, directly
- % return the list of valid but failed commands
+ % If no command was successful, directly return the list of valid
+ % commands, all of which will be associated with failed commands
  ValidFailedCommands;
  
 print_successful_devcommands(SuccessfulCommands,ValidCommands,Indent) ->
  
-  % Print the successful commands tree header
-  io:format("|--[Successful Commands]~n"),
+  % If at least one command was successful,
+  % print the successful commands tree header
+  io:format("|--[SUCCESSFUL]~n"),
  
-  % Print the list of successful commands indented as a tree
+  % Print each successful command indented as a tree
   print_successful_devcommands_tree(SuccessfulCommands,ValidCommands,Indent).
  
+%% Print each successful device command indented as a tree (print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,
+%% InvalidCommands,RespCode,Loc_id) -> print_successful_devcommands(SuccessfulCommands,ValidCommands,Indent) helper function)
 print_successful_devcommands_tree([],ValidFailedCommands,_Indent) ->
 
- % The residual list of valid commands
- % represents the valid but failed commands
+ % After printing each successful command return the residual list of
+ % valid commands, which will be associated with failed commands
  ValidFailedCommands;
  
 print_successful_devcommands_tree([#{dev_id := Dev_id, state := NewState}|NextSuccessCommand],ValidCommands,Indent) ->
@@ -1565,13 +1665,15 @@ print_successful_devcommands_tree([#{dev_id := Dev_id, state := NewState}|NextSu
  {value,MatchValidCommand,NewValidCommands} = lists:keytake(Dev_id,2,ValidCommands),
  
  % Print a summary of the successful command
- io:format("~s|-- dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Indent,Dev_id,MatchValidCommand#valdevcmd.cfgcommand,NewState]),
+ io:format("~s|-- dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Indent,Dev_id,MatchValidCommand#valdevcmd.cfgcommand,utils:devmap_to_config(NewState)]),
  
  % Proceed with the next successful command
  print_successful_devcommands_tree(NextSuccessCommand,NewValidCommands,Indent).
 
+%% ---------------------------------------- FAILED Commands ---------------------------------------- %%
 
-%% ---------------------------------------------
+%% Prints the tree of failed device commands (print_devcommands_summary(SuccessfulCommands,
+%% FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id) helper function)
 print_failed_devcommands([],_ValidFailedCommands,_Indent) ->
 
  % If there are no failed commands, return
@@ -1579,16 +1681,19 @@ print_failed_devcommands([],_ValidFailedCommands,_Indent) ->
  
 print_failed_devcommands(FailedCommands,ValidFailedCommands,Indent) ->
 
- % Print the failed commands tree header
- io:format("|--[Failed Commands]~n"),
+ % If at least one command failed, print
+ % the failed commands tree header
+ io:format("|--[FAILED]~n"),
  
- % Print the list of failed commands indented as a tree
+ % Print each failed command indented as a tree
  print_failed_devcommands_tree(FailedCommands,ValidFailedCommands,Indent).
 
+%% Print each failed device command indented as a tree (print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,
+%% InvalidCommands,RespCode,Loc_id) -> print_failed_devcommands(FailedCommands,ValidFailedCommands,Indent) helper function)
 print_failed_devcommands_tree([],_ValidFailedCommands,_Indent) ->
 
- % When there are no more failed
- % commands to print, return
+ % When all failed commands
+ % have been printed, return
  ok;
  
 print_failed_devcommands_tree([#{dev_id := Dev_id, status := Status, errorReason := ErrorReason}|NextFailedCommand],ValidFailedCommands,Indent) ->
@@ -1602,8 +1707,10 @@ print_failed_devcommands_tree([#{dev_id := Dev_id, status := Status, errorReason
  % Proceed with the next failed command
  print_failed_devcommands_tree(NextFailedCommand,NewValidFailedCommands,Indent).
  
- 
-%% ---------------------------------------------
+%% --------------------------------------- INVALID Commands --------------------------------------- %%
+
+%% Prints the tree of invalid device commands (print_devcommands_summary(SuccessfulCommands,
+%% FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id) helper function)
 print_invalid_devcommands([],_Indent) ->
 
  % If there are no invalid commands, return
@@ -1611,16 +1718,19 @@ print_invalid_devcommands([],_Indent) ->
  
 print_invalid_devcommands(InvalidCommands,Indent) ->
 
- % Print the invalid commands tree header
- io:format("|--[Invalid Commands]~n"),
+ % If at least one command was invalid,
+ % print the invalid commands tree header
+ io:format("|--[INVALID]~n"),
  
- % Print the list of invalid commands indented as a tree
+ % Print each invalid command indented as a tree
  print_invalid_devcommands_tree(InvalidCommands,Indent).
-
+ 
+%% Print each invalid device command indented as a tree (print_devcommands_summary(SuccessfulCommands,FailedCommands,
+%% ValidCommands,InvalidCommands,RespCode,Loc_id) -> print_invalid_devcommands(InvalidCommands,Indent) helper function)
 print_invalid_devcommands_tree([],_Indent) ->
  
- % When there are no more invalid
- % commands to print, return
+ % When all invalid commands
+ % have been printed, return
  ok;
  
 print_invalid_devcommands_tree([#{dev_id := Dev_id, status := Status, errorReason := ErrorReason}|NextInvalidCommand],Indent) ->
@@ -1631,68 +1741,19 @@ print_invalid_devcommands_tree([#{dev_id := Dev_id, status := Status, errorReaso
  % Proceed with the next invalid command
  print_invalid_devcommands_tree(NextInvalidCommand,Indent).
  
- 
-%% ---------------------------------------------
+
+%% Determines the indentation to be applied when printing each tree of successful, failed and invalid commands
+%% (print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,InvalidCommands,RespCode,Loc_id) helper function)
 devcommands_summary_indent(List) when is_list(List), length(List) > 0 ->
+
+ % If there are other lists of commands to
+ % print after this one (Failed or Invalid)
  "|  ";
+ 
 devcommands_summary_indent(List) when is_list(List) ->
+ 
+ % If this is the last list of command to print
  "   ".
-
-
-
-%%====================================================================================================================================
-%%                                                SIMULATOR DATABASE BRIDGE FUNCTIONS
-%%==================================================================================================================================== 
-
-%% Attempts to perform an operation in the JANET Simulator database and,
-%% if successful, attempts to mirror it in the controller's database
-sim_db_sync(DBFun,SimArgsList,CtrArgsList) ->
-
- % Attempt to perform the "DBFun" function with "SimArgsList" arguments in the JANET Simulator database
- % by routing the request via the 'ctr_simserver' to the 'ctr_manager' associated with the controller
- case gen_sim_command(db,DBFun,SimArgsList) of
- 
-  {error,Error} ->
-  
-   % If an error was raised in performing the operation, whether it occured in the JANET Simulator database or
-   % within the communication, return it without attempting to mirror the operation on the controller's database
-   {error,Error};
-   
-  SimDBRes ->
-   
-   % If the JANET Simulator database operation was successful, regardless of the results of its
-   % side-effects, if any (which are carried in the "SimDBRes" variable), attempt to mirror such
-   % operation in the location controller, concatenating in order the results of the two operations
-   print_sim_db_sync_result(SimDBRes,apply(ctr_db,DBFun,CtrArgsList))
- end.
-   
-   
-%% Concatenates the result of a database operation in the JANET Simulator with the result of its mirroring
-%% in the controller's database into a tuple (sim_db_sync(DBFun,SimArgsList,CtrArgsList) helper function) 
-print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_atom(CtrDBRes) ->
- {SimDBRes,CtrDBRes};
-print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_tuple(CtrDBRes) ->
- list_to_tuple([SimDBRes] ++ [CtrDBRes]);
-print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_atom(CtrDBRes) ->
- list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]);
-print_sim_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_tuple(CtrDBRes) ->
- list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]).
-
- 
-%% Attempts to synchronously execute a command on the JANET Simulator by routing the request
-%% via the 'ctr_simserver' to the 'ctr_manager' associated with this controller, returning
-%% the result of the operation (sim_db_sync(DBFun,SimArgsList,CtrArgsList) helper function) 
-gen_sim_command(Module,Function,ArgsList) ->
- 
- % Route the command via the 'ctr_simserver' to the 'ctr_manager' associated
- % with this controller and wait for a response up to a predefined timeout
- try gen_server:call(ctr_simserver,{sim_command,Module,Function,ArgsList},5000)
- catch
-    exit:{timeout,_} ->
-	   
-     % Command timeout
-	 {error,request_timeout}
- end.
  
  
 %%====================================================================================================================================

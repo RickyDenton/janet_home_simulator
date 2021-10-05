@@ -4,7 +4,7 @@
 
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
          check_merge_devconfigs/3,get_devtype_default_config/1,
-		 get_devtype_default_config_json/1,deprefix_dev_config/1,devconfig_to_map/1]). 
+		 get_devtype_default_config_json/1,deprefix_dev_config/1,devconfig_to_map/1,devmap_to_config/1]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
 -export([jsone_term_to_list/2,str_to_atom/1,sign/1]).                                     % Conversions Utility Functions
@@ -435,6 +435,41 @@ devconfig_to_map(Cfg) when is_record(Cfg,condcfg) ->
 devconfig_to_map(_) ->
  throw({error,invalid_devtype}).
  
+ 
+%% DESCRIPTION:  Converts a device's configuration encoded in a map (in which
+%%               all traits must be present) into its associated #devcfg record
+%%
+%% ARGUMENTS:    - CfgMap: The device configuration as a map, in which all traits/keys must be present
+%%
+%% RETURNS:      - #devcfg -> The device configuration record associated with the CfgMap
+%% 
+%% THROWS:       - {error,invalid_devtype} -> The device type is invalid (or there
+%%                                            are missing traits/keys in the map)
+%%
+% Conditioner
+devmap_to_config(#{'onOff' := OnOff, 'tempTarget' := TempTarget, 'tempCurrent' := TempCurrent, 'fanSpeed' := FanSpeed}) ->
+ #condcfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent, fanspeed = FanSpeed};
+
+% Thermostat
+devmap_to_config(#{'onOff' := OnOff, 'tempTarget' := TempTarget, 'tempCurrent' := TempCurrent}) ->
+ #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent};
+
+% Fan
+devmap_to_config(#{'onOff' := OnOff, 'fanSpeed' := FanSpeed}) ->
+ #fancfg{onoff = OnOff, fanspeed = FanSpeed};
+
+% Light
+devmap_to_config(#{'onOff' := OnOff, 'brightness' := Brightness, 'color' := Color}) ->
+ #lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = Color};
+
+% Door
+devmap_to_config(#{'openClose' := OpenClose, 'lockUnlock' := LockUnlock}) ->
+ #doorcfg{openclose = OpenClose, lockunlock = LockUnlock};
+
+% Invalid device type
+devmap_to_config(_) ->
+ throw({error,invalid_devtype}).
+
  
 %%====================================================================================================================================
 %%                                                     NODES UTILITY FUNCTIONS
