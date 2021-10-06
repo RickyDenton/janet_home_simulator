@@ -389,15 +389,16 @@ add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType]) ->
    % If the device was added in both databases and its node was started, report the success of the operation
    io:format("[~p-~w]: Added device (dev_id = ~w, name = ~p, sub_id = {~w,~w}, type = ~p)~n",[?FUNCTION_NAME,Loc_id,Dev_id,Name,Loc_id,Subloc_id,Type]),
  
-   % Retrieve the device initial configuration in JSON format
-   DefaultConfigJSON = utils:get_devtype_default_config_json(Type),
-   
+   % Build the response body in JSON format by concatenating
+   % the "Dev_id" with the device initial configuration
+   RespBody = list_to_binary(lists:flatten(io_lib:format("{\"dev_id\":~w,\"state\":" ++ utils:get_devtype_default_config_json(Type) ++ "}",[Dev_id]))),
+
    % Define the HTTP response to be replied to the client
    cowboy_req:reply(
-	                200,                                                  % HTTP Response Code
-	                #{<<"content-type">> => <<"application/json">>},      % "Content Type" header
-		            DefaultConfigJSON,                                    % Response Body
-			        Req                                                   % Associated HTTP Request
+	                200,                                              % HTTP Response Code
+	                #{<<"content-type">> => <<"application/json">>},  % "Content Type" header
+		            RespBody,                                         % Response Body
+			        Req                                               % Associated HTTP Request
 			       );
   
   %% ------------------------------------ Operation Errors ------------------------------------ %   

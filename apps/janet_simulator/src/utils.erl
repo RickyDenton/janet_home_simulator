@@ -330,33 +330,33 @@ get_devtype_default_config(InvalidType) ->
  throw({invalid_devtype,InvalidType}).
 
 
-%% DESCRIPTION:  Returns a device's default configuration according to its type as a JSON-encoded binary
+%% DESCRIPTION:  Returns a device's default configuration according to its type as a JSON-encoded list
 %%
 %% ARGUMENTS:    - DevType: The device's type (an atom)
 %%
-%% RETURNS:      - <<BinConfig>> -> The device default configuration as a JSON-encoded binary
+%% RETURNS:      - JSONConfig -> The device default configuration as a JSON list
 %% 
 %% THROWS:       - {error,invalid_devtype} -> The device's type is invalid
 %%
 % Fan
 get_devtype_default_config_json(fan) ->
- <<"{\"onOff\":\"off\",\"fanSpeed\":50}">>;
+ "{\"onOff\":\"off\",\"fanSpeed\":50}";
 
 % Light
 get_devtype_default_config_json(light) ->
- <<"{\"onOff\":\"off\",\"brightness\":50,\"color\":\"white\"}">>;
+ "{\"onOff\":\"off\",\"brightness\":50,\"color\":\"white\"}";
  
 % Door
 get_devtype_default_config_json(door) ->
- <<"{\"openClose\":\"close\",\"lockUnlock\":\"unlock\"}">>;
+ "{\"openClose\":\"close\",\"lockUnlock\":\"unlock\"}";
 
 % Thermostat
 get_devtype_default_config_json(thermostat) ->
- <<"{\"onOff\":\"off\",\"tempTarget\":21,\"tempCurrent\":21}">>;
+ "{\"onOff\":\"off\",\"tempTarget\":21,\"tempCurrent\":21}";
  
 % Conditioner
 get_devtype_default_config_json(conditioner) ->
-<<"{\"onOff\":\"off\",\"tempTarget\":21,\"tempCurrent\":21,\"fanSpeed\":50}">>;
+ "{\"onOff\":\"off\",\"tempTarget\":21,\"tempCurrent\":21,\"fanSpeed\":50}";
 
 % Invalid device type
 get_devtype_default_config_json(InvalidType) ->
