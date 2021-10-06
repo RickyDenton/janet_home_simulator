@@ -417,7 +417,7 @@ devconfig_to_map(Cfg) when is_record(Cfg,fancfg) ->
 
 % Light
 devconfig_to_map(Cfg) when is_record(Cfg,lightcfg) ->
- #{onOff => Cfg#lightcfg.onoff, brightness => Cfg#lightcfg.brightness, color => Cfg#lightcfg.colorsetting};
+ #{onOff => Cfg#lightcfg.onoff, brightness => Cfg#lightcfg.brightness, color => list_to_binary(Cfg#lightcfg.colorsetting)};
 
 % Door
 devconfig_to_map(Cfg) when is_record(Cfg,doorcfg) ->
