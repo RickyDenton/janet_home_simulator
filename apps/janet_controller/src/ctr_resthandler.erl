@@ -149,7 +149,7 @@ err_to_code_msg({device_node_not_stopped,Dev_id,InternalError}) ->
 % stopping its node and deleting it from the Controller database (should NEVER happen)
 err_to_code_msg({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError}) ->
  {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was deleted from the Simulator database, but internal errors occured " ++
-                    "in stopping its node (~p) and deleting it from the Controller database (~p)",[Dev_id,InternalError,CtrDBError])};   
+                    "in stopping its node (~p) and in deleting it from the Controller database (~p)",[Dev_id,InternalError,CtrDBError])};   
    
 %% DEVCOMMANDS (PATCH /device)
 %% -----------
@@ -167,7 +167,7 @@ err_to_code_msg({empty,devcommands}) ->
 
 % The device commands' results could not be encoded in JSON format
 err_to_code_msg(jsone_encode_error) ->
- {500,"<SERVER ERROR> The device commands' results could not be encoded in JSON format"};
+ {500,"<SERVER ERROR> The device commands' results could not be encoded in JSON"};
 
 % NOTE: The per-devcommand error handling is performed manually within the operation handler
 % ----
@@ -1546,13 +1546,13 @@ cmdclient_receive_devresponses(PendingCmdResponses,ParentPID) ->
 %%
 build_devcommands_response(SuccessfulCommands,FailedCommands,InvalidCommands) ->
  
- % Define the list of invalid results as the concatenation
- % of the lists of failed and invalid commands
- InvalidResults = FailedCommands ++ InvalidCommands,
+ % Define the list of unsuccessful commands as the
+ % concatenation of the lists of failed and invalid commands
+ UnsuccessfulCommands = FailedCommands ++ InvalidCommands,
  
  % Set the body of the HTTP response to be returned to the client as the encode in JSON
- % format of the concatenation of the lists of successful commands and invalid results
- ResBody = try jsone:encode(SuccessfulCommands ++ InvalidResults)
+ % format of the concatenation of the lists of successful and unsuccessful commands
+ ResBody = try jsone:encode(SuccessfulCommands ++ UnsuccessfulCommands)
            catch
 		   
 		    % If the concatenation of the two lists could
@@ -1562,7 +1562,7 @@ build_devcommands_response(SuccessfulCommands,FailedCommands,InvalidCommands) ->
 		   end,
  
  % Determine the HTTP status code to be replied to the client
- ResCode = get_devcommands_statuscode(SuccessfulCommands,InvalidResults),
+ ResCode = get_devcommands_statuscode(SuccessfulCommands,UnsuccessfulCommands),
 			
  % Return the status code and the body of the
  % HTTP response to be replied to the client
@@ -1576,14 +1576,14 @@ get_devcommands_statuscode(_SuccessfulCommands,[]) ->
  % If all commands were successful, return 200 (OK)
  200;
 
-get_devcommands_statuscode([],InvalidResults) ->
+get_devcommands_statuscode([],UnsuccessfulCommands) ->
 
- % If all results are invalid, return the highest among their error codes
- lists:foldl(fun(#{status := ErrCode},MaxCode) -> max(ErrCode,MaxCode) end,0,InvalidResults);
+ % If all commands were unsuccessful, return the highest among their error codes
+ lists:foldl(fun(#{status := ErrCode},MaxCode) -> max(ErrCode,MaxCode) end,0,UnsuccessfulCommands);
  
-get_devcommands_statuscode(_ValidResponses,_InvalidResults) ->
+get_devcommands_statuscode(_ValidResponses,_UnsuccessfulCommands) ->
  
- % If there are both successful and invalid results, return 202 (ACCEPTED)
+ % If there are both successful and unsuccessful commands, return 202 (ACCEPTED)
  202.
  
 
