@@ -117,17 +117,18 @@ handle_call(_,{ReqPid,_},SrvState) ->
 %% ACTIONS:   Push the updated device configuration and timestamp to the remote MongoDB database [TODO]: CHECK
 %% NEW STATE: -
 %%
-handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
+handle_cast({dev_config_update,DevSrvPid,CfgUpdatesList},SrvState) when DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
 
- % Push the updated device configuration and timestamp in the 'ctr_device' table
- ctr_db:update_dev_config(SrvState#devhandlerstate.dev_id,UpdatedCfg,Timestamp),
+ %% [TODO]: Push the "CfgUpdatesList" to the 'ctr_httpclient'
+
+ % Retrieve the last, or more recent, device configuration update
+ % with its timestamp and push them in the 'ctr_device' table
+ {LastCfg,LastTimestamp} = lists:last(CfgUpdatesList),
+ ctr_db:update_dev_config(SrvState#devhandlerstate.dev_id,LastCfg,LastTimestamp),
  
  % Log the result of the operation
  %% [TODO]: Debugging purposes, remove when ready
  %io:format("[ctr_devhandler-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devhandlerstate.dev_id,UpdatedCfg,PushToMnesia]),
- 
- 
- %% [TODO]: Push only the changed values to the Java EE Rest Server?
  
  % Keep the server state
  {noreply,SrvState}.
