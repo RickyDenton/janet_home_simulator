@@ -1546,39 +1546,51 @@ stop_mnesia() ->
  
 %% DESCRIPTION:  Backups the entire Mnesia database to a file
 %%
-%% ARGUMENTS:    - (none): The default backup file is used ("db/mnesia_backup.db")
-%%               - (File): A custom backup file is used
+%% ARGUMENTS:    - (none):   The default backup file is used ("db/mnesia_backup.db")
+%%               - FileName: The backup is saved to the custom file "FileName" under
+%%                           the default Mnesia directory ("db/")
 %%
-%% RETURNS:      - ok                    -> Mnesia database successfully backed up to the specified file
+%% RETURNS:      - ok                    -> Mnesia database successfully
+%%                                          backed up to the specified file
 %%               - {file_error,Reason}   -> Error in creating the backup file (its directory must
 %%                                          exist and its 'write' permission must be granted)
 %%               - {mnesia_error,Reason} -> The Mnesia database is not in a consistent state
 %%                                          (probably a wrong or no schema is installed)
+%%               - {error,badarg}        -> Invalid argument(s)
 %% 
 %% NOTE:         Mnesia backups can be restored using the restore()/restore(File) function
-%% 
+%%
+
+% Use the default backup file
 backup() ->
- backup("db/mnesia_backup.db").  % Default backup file
+ backup("mnesia_backup.db").
  
-backup(File) ->
+% Safeguard if an atom FileName was passed
+backup(FileName) when is_atom(FileName) ->
+ backup(atom_to_list(FileName)); 
+
+% If a list FileName was passed (as expected) 
+backup(FileName) when is_list(FileName) ->
 
  % Ensure Mnesia to be running and in a consistent state
  case start_check_mnesia() of
- 
   ok ->
   
-   % If Mnesia is in a consistent state, attempt to backup its contents to the specified file
-   case mnesia:backup(File) of
+   % If it is, append the default Mnesia directory ("db/") to the file name
+   FilePath = "db/" ++ FileName,
+	 
+   % Attempt to backup the database contents to the specified file
+   case mnesia:backup(FilePath) of
    
     ok -> 
 
      % If the backup was successful, notify it
-	 io:format("Mnesia database successfully backed up to file \"~s\"~n",[File]);
+	 io:format("Mnesia database successfully backed up to file \"~s\"~n",[FilePath]);
 
     {error,Reason} ->
 	
 	 % Otherwise, notify the error
-     io:format("<WARNING> Error in creating the backup file \"~s\" (check the directory to exist and its 'write' permission to be granted)~n",[File]),
+     io:format("<WARNING> Error in creating the backup file \"~s\" (check the directory to exist and its 'write' permission to be granted)~n",[FilePath]),
      {file_error,Reason}
    end;
    
@@ -1587,29 +1599,46 @@ backup(File) ->
     % If the Mnesia database is NOT in a consistent state, abort the backup
 	io:format("The Mnesia database is not in a consistent state, the backup cannot be created~n"),
 	{mnesia_error,Reason}
- end.
+ end;
+
+% The FileName is neither an atom or a list
+backup(_) ->
+ {error,badarg}.
 
 
 %% DESCRIPTION:  Restores the Mnesia database to the contents of a backup file
 %%
-%% ARGUMENTS:    - (none): The default backup file is used for restoring the database ("db/mnesia_backup.db")
-%%               - (File): A custom backup file is used
+%% ARGUMENTS:    - (none):   The default backup file is used for
+%%                           restoring the database ("db/mnesia_backup.db")
+%%               - FileName: The database is restored to the contents of the custom
+%%                           file "FileName" under the default mnesia directory ("db/")
 %%
-%% RETURNS:      - ok                       -> Database successfully restored to the contents of the specified backup file
+%% RETURNS:      - ok                       -> Database successfully restored to the
+%%                                             contents of the specified backup file
 %%               - aborted                  -> The user aborted the operation
-%%               - {error,janet_is_running} -> The operation cannot be performed while the JANET Simulator is running
-%%               - {file_error,Reason}      -> Error in restoring the database from the backup file
-%%                                             (check the file to exist and its 'read' permission to be granted)
+%%               - {error,janet_is_running} -> The operation cannot be performed
+%%                                             while the JANET Simulator is running
+%%               - {file_error,Reason}      -> Error in restoring the database from the backup
+%%                                             file (check the file to exist and its 'read'
+%%                                             permission to have been granted)
 %%               - {mnesia_error,Reason}    -> The Mnesia database is not in a consistent state
 %%                                             (probably a wrong or no schema is installed)
+%%               - {error,badarg}           -> Invalid argument(s)
 %%
 %% NOTES:        1) The current database contents will be DISCARDED by calling this function
 %%               2) Database backup files can be created via the db:backup()/db:backup(File) function
 %%
+
+% Use the default backup file
 restore() ->
- restore("db/mnesia_backup.db").
+ restore("mnesia_backup.db").
  
-restore(File) ->
+% Safeguard if an atom FileName was passed
+restore(FileName) when is_atom(FileName) ->
+ restore(atom_to_list(FileName)); 
+ 
+% If a list FileName was passed (as expected)
+restore(FileName) when is_list(FileName) ->
 
  % Ensure the JANET simulator not to be running and ask for user confirmation for the operation
  case check_db_operation("Restoring") of
@@ -1621,13 +1650,16 @@ restore(File) ->
    case start_check_mnesia() of
     ok ->
 	
-     % If it is, attempt to restore its tables to the contents of the specified file 
-	 case mnesia:restore(File,[{default_op,recreate_tables}]) of
+	 % If it is, append the default Mnesia directory ("db/") to the file name
+	 FilePath = "db/" ++ FileName,
+	
+     % Attempt to restore its tables to the contents of the specified file 
+	 case mnesia:restore(FilePath,[{default_op,recreate_tables}]) of
 	 
 	  {atomic,_} ->
 	  
 	   % If the restoring was successful, notify it
-	   io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[File]);
+	   io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[FilePath]);
 	   
       {aborted,Reason} ->
 	  
@@ -1646,7 +1678,11 @@ restore(File) ->
   % Otherwise, return the result of the check_db_operation()
   CheckDBOperation ->
    CheckDBOperation
- end.
+ end;
+
+% The FileName is neither an atom or a list
+restore(_) ->
+ {error,badarg}.
 
 
 %% DESCRIPTION:  Clears (empties) all database tables (but preserves the database's schema)

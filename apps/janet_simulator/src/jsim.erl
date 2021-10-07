@@ -4,7 +4,7 @@
 -behaviour(application). 
 
 %% ---------------------------------- JANET SIMULATOR RUN AND STOP ---------------------------------- %%
--export([run/0,run/2,stop/0,shutdown/0]).
+-export([run/0,run/4,stop/0,shutdown/0]).
 
 %% ---------------------------------- DATABASE INTERFACE FUNCTIONS ---------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).            % Create
@@ -36,8 +36,10 @@
 %%====================================================================================================================================
 
 %% DESCRIPTION:  Attempts to start the JANET Simulator application with the default environment parameters:
-%%                 - rest_port   -> 45678
-%%                 - remote_host -> "janethome.zapto.org"
+%%                 - sim_rest_port           -> 45678
+%%                 - remote_rest_client      -> "janethome.zapto.org"
+%%                 - remote_rest_server_addr -> "janethome.zapto.org" [TODO]: Check
+%%                 - remote_rest_server_port -> 50505                 [TODO]: Check
 %%
 %% ARGUMENTS:    none
 %%
@@ -49,18 +51,22 @@
 %%
 run() ->
  
- % Retrieve the default values of the 'rest_port' and 'remote_host' environment parameters
- {ok,RESTPort} = application:get_env(janet_simulator,default_rest_port),
- {ok,RemoteHost} = application:get_env(janet_simulator,default_remote_host),
+ % Retrieve the default values of the environment parameters used for interfacing with the remote host
+ {ok,SimRESTPort} = application:get_env(janet_simulator,default_sim_rest_port),
+ {ok,RemoteRESTClient} = application:get_env(janet_simulator,default_remote_rest_client),
+ {ok,RemoteRESTServerAddr} = application:get_env(janet_simulator,default_remote_rest_server_addr),
+ {ok,RemoteRESTServerPort} = application:get_env(janet_simulator,default_remote_rest_server_port),
  
- % Attempt to start the JANET Simulator with the default parameters
- run(RESTPort,RemoteHost).
+ % Attempt to start the JANET Simulator application with such default parameters
+ run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort).
  
 
-%% DESCRIPTION:  Sets the 'rest_port' and 'remote_host' enviroment parameters and attempts to start the JANET Simulator application
+%% DESCRIPTION:  Attempts to start the JANET Simulator application given the set of environment parameters for interfacing with the remote host
 %%
-%% ARGUMENTS:    - RESTPort:   The port to be used by the JANET Simulator REST Server (>= 30000 for preventing port allocation conflicts)
-%%               - RemoteHost: The remote host from which accept REST requests
+%% ARGUMENTS:    - SimRESTPort:          The OS port to be used by the JANET Simulator REST server (int >= 30000 for preventing port allocation conflicts)
+%%               - RemoteRESTClient:     The address of the remote client issuing REST requests to the JANET Simulator and Controller nodes (a list)
+%%               - RemoteRESTServerAddr: The address of the remote server accepting REST requests from the JANET Controller nodes (a list)
+%%               - RemoteRESTServerPort: The port of the remote server accepting REST requests from the JANET Controller nodes (int > 0)
 %%
 %% RETURNS:      - ok                         -> JANET Simulator succesfully started
 %%               - {error,already_running}    -> The janet_simulator application is already running on the node
@@ -68,8 +74,9 @@ run() ->
 %%               - {error,Reason}             -> Internal error in starting the application
 %%               - {error,badarg}             -> Invalid arguments
 %%
-run(RESTPort,RemoteHost) when is_number(RESTPort), RESTPort >= 30000 ->
-
+run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) when is_number(SimRESTPort), SimRESTPort >= 30000,
+                                                                                 is_list(RemoteRESTClient), is_list(RemoteRESTServerAddr),
+                                                                                 is_number(RemoteRESTServerPort), RemoteRESTServerPort > 0 ->
  % Check if the JANET Simulator is already running
  case utils:is_running(janet_simulator) of
   true ->
@@ -85,10 +92,12 @@ run(RESTPort,RemoteHost) when is_number(RESTPort), RESTPort >= 30000 ->
  
     ok ->
      
-	 % If Mnesia is in a consistent state, set the 'rest_port' and
-	 % 'remote_host' environment parameters of the JANET Simulator application
-	 application:set_env(janet_simulator,rest_port,RESTPort),
-     application:set_env(janet_simulator,remote_host,RemoteHost),
+	 % If Mnesia is in a consistent state, initialize the set of
+	 % environment parameters used for interfacing with the remote host
+	 application:set_env(janet_simulator,sim_rest_port,SimRESTPort),
+     application:set_env(janet_simulator,remote_rest_client,RemoteRESTClient),
+	 application:set_env(janet_simulator,sim_rest_server_addr,RemoteRESTServerAddr),
+     application:set_env(janet_simulator,sim_rest_server_port,RemoteRESTServerPort),
 	 
 	 %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
      
@@ -102,17 +111,16 @@ run(RESTPort,RemoteHost) when is_number(RESTPort), RESTPort >= 30000 ->
      {error,mnesia_init_failed}
    end
  end;
-
-%% A RESTPort < 30000 was passed (print help message)
-run(RESTPort,_) when is_number(RESTPort) ->
- io:format("Please use a RESTPort >= 30000 for reducing the chance of port allocation conflicts on the host OS~n"),
- {error,badarg};
  
-%% A non-number RESTPort was passed (print help message) 
-run(_,_) ->
- io:format("usage: run(RESTPort,RemoteHost) (RESTPort >= 30000)~n"),
+%% Invalid syntax (print help message) 
+run(_,_,_,_) ->
+ io:format("usage: run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort)~n~n"),
+ io:format("- SimRESTPort:          The OS port to be used by the JANET Simulator REST server (int >= 30000 for preventing port allocation conflicts)~n"),
+ io:format("- RemoteRESTClient:     The address of the remote client issuing REST requests to the JANET Simulator and Controller nodes (a list)~n"),
+ io:format("- RemoteRESTServerAddr: The address of the remote server accepting REST requests from the JANET Controller nodes (a list)~n"),
+ io:format("- RemoteRESTServerPort: The port of the remote server accepting REST requests from the JANET Controller nodes (int > 0)~n~n"),
  {error,badarg}.
-
+ 
 
 %% DESCRIPTION:  Stops the JANET Simulator
 %%

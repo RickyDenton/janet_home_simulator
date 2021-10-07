@@ -50,7 +50,7 @@ init(_) ->
 	 worker,                  	        % Child Type
 	 [ctr_simserver]                    % Child Modules (For Release Handling Purposes)
     },
-	
+
 	%% ------------- The JANET Controller REST handler (ctr_resthandler) ------------- %%
     {
      ctr_resthandler,		            % ChildID
@@ -59,6 +59,16 @@ init(_) ->
 	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [ctr_resthandler]                  % Child Modules (For Release Handling Purposes)
+    },
+	
+	%% -------------- The JANET Controller HTTP client (ctr_httpclient) -------------- %%
+    {
+     ctr_httpclient,		            % ChildID
+     {ctr_httpclient,start_link,[]},    % Child Start Function
+ 	 permanent,                         % Child Restart Policy 
+	 5000,                              % Child Sub-tree Max Shutdown Time
+	 worker,                  	        % Child Type
+	 [ctr_httpclient]                   % Child Modules (For Release Handling Purposes)
     }
    ] 
   }

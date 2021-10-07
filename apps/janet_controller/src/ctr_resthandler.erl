@@ -43,9 +43,9 @@
 %% ======================================================== INIT_HANDLER ======================================================== %%
 init_handler(_) ->
  
- % Retrieve the 'rest_port' and 'remote_host' environment variables
- {ok,RESTPort} = application:get_env(rest_port),
- {ok,RemoteHost} = application:get_env(remote_host),
+ % Retrieve the 'ctr_rest_port' and 'remote_rest_client' environment variables
+ {ok,CtrRESTPort} = application:get_env(ctr_rest_port),
+ {ok,RemoteRESTClient} = application:get_env(remote_rest_client),
  
  % Define the REST listener name
  ListenerName = ctr_resthandler,
@@ -78,7 +78,7 @@ init_handler(_) ->
 	     ],
 			
  % Return the initialization tuple to the behaviour engine
- {ok,RESTPort,RemoteHost,ListenerName,Paths}.
+ {ok,CtrRESTPort,RemoteRESTClient,ListenerName,Paths}.
  
  
 %% ============================================================ INIT ============================================================ %%
@@ -1761,6 +1761,6 @@ devcommands_summary_indent(List) when is_list(List) ->
 %%                                                         START FUNCTION                                                        
 %%====================================================================================================================================
 
-%% Called by the Janet Simulator top-level supervisor (sup_jsim) at boot time
+%% Called by the Janet Controller top-level supervisor (sup_jctr) at boot time
 start_link() ->
  gen_resthandler:start_link(?MODULE,[]).

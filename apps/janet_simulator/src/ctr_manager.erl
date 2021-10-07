@@ -11,7 +11,7 @@
 %% This record represents the state of a ctr_manager gen_server
 -record(ctrmgrstate,    
         {
-		 ctr_state,       % The state of the managed controller node
+		 ctr_state,       % The state of the managed controller node ('booting' | 'connecting' | 'online')
 		 ctr_node,        % The reference to the managed node
 		 ctr_srv_pid,     % The PID of the controller's 'ctr_simserver' process
 		 ctr_srv_mon,     % A reference used for monitoring the controller's 'ctr_simserver' process (and consequently the node)
@@ -50,14 +50,15 @@ handle_continue(init,SrvState) ->
  % Retrieve the location record
  {ok,LocationRecord} = db:get_record(location,Loc_id),
  
- % Retrieve the location port to be used as 'rest_port' by the controller
- Loc_port = LocationRecord#location.port,
- 
  % Derive the initial contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
  {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
- % Retrieve the 'remote_host' environment variable
- {ok,RemoteHost} = application:get_env(remote_host),
+ % Retrieve the environment parameters that will be used
+ % by the controller for interfacing with the remote host
+ CtrRESTPort = LocationRecord#location.port,                            % The OS port to be used by the controller's REST server (int >= 30000)
+ {ok,RemoteRESTClient} = application:get_env(remote_rest_client),        % The address of the remote client issuing REST requests to the controller (a list)
+ {ok,RemoteRESTServerAddr} = application:get_env(sim_rest_server_addr),  % The address of the remote server accepting REST requests from the controller (a list)  
+ {ok,RemoteRESTServerPort} = application:get_env(sim_rest_server_port),  % The port of the remote server accepting REST requests from the controller (int > 0)
  
  %% ---------------------------- Controller Node Creation ---------------------------- %% 
  
@@ -69,7 +70,7 @@ handle_continue(init,SrvState) ->
  NodeHost = "localhost",
  NodeName = "ctr-" ++ Loc_id_str,
  NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_controller/ebin/ _build/default/lib/janet_simulator/ebin/ " ++
-            "_build/default/lib/cowboy/ebin/ _build/default/lib/cowlib/ebin/ _build/default/lib/ranch/ebin/ _build/default/lib/jsone/ebin/",
+            "_build/default/lib/cowboy/ebin/ _build/default/lib/cowlib/ebin/ _build/default/lib/ranch/ebin/ _build/default/lib/jsone/ebin/ _build/default/lib/gun/ebin/",
  
  % Instantiate the controller's node and link it to the manager
  {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),
@@ -78,7 +79,7 @@ handle_continue(init,SrvState) ->
  {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
  % Launch the Janet Controller application on the controller node
- ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),Loc_port,RemoteHost]),
+ ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort]),
  
  % Set the ctr_node in the server state and wait for the
  % registration request of the controller's 'ctr_simserver' process
@@ -95,9 +96,9 @@ handle_continue(init,SrvState) ->
 %% CONTENTS:  The PID of the ctr_simserver
 %% MATCHES:   When the controller is booting (and the request comes from the spawned controller node)
 %% ACTIONS:   Create a monitor towards the controller's 'ctr_simserver' process and
-%%            update the controller's state to "ONLINE" in the 'ctrmanager' table
+%%            update the controller's state to "CONNECTING" in the 'ctrmanager' table
 %% ANSWER:    'ok' (the controller registration was successful)
-%% NEW STATE: Update the 'ctr_state' to 'online' and set the 'ctr_srv_pid' and 'ctr_srv_mon' variables
+%% NEW STATE: Update the 'ctr_state' to 'connecting' and set the 'ctr_srv_pid' and 'ctr_srv_mon' variables
 %%
 %% NOTE:      This message can be received only once, since if the ctr_simserver process crashes the entire
 %%            controller node is shut down by its application master (The Janet Controller application is permanent)
@@ -107,15 +108,14 @@ handle_call({ctr_reg,CtrSrvPid},{CtrSrvPid,_},SrvState) when SrvState#ctrmgrstat
  % Create a monitor towards the device's 'ctr_simserver' process
  MonRef = monitor(process,CtrSrvPid),
  
- % Update the controller node state to "ONLINE" in the 'ctrmanager' table 
- %% [TODO]: Maybe another intermediate state is required for checking if it can connect with the remote MongoDB database 
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="ONLINE"}) end),
+ % Update the controller node state to "CONNECTING" in the 'ctrmanager' table 
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="CONNECTING"}) end),
  
  % Log that the controller has successfully booted
  io:format("[ctr_mgr-~w]: Controller node successfully booted~n",[SrvState#ctrmgrstate.loc_id]),
  
  % Confirm the controller registration and update the 'ctr_srv_pid' and the 'ctr_state' state variables
- {reply,ok,SrvState#ctrmgrstate{ctr_state = online, ctr_srv_pid = CtrSrvPid, ctr_srv_mon = MonRef}}; 
+ {reply,ok,SrvState#ctrmgrstate{ctr_state = connecting, ctr_srv_pid = CtrSrvPid, ctr_srv_mon = MonRef}}; 
  
 
 %% CTR_COMMAND
@@ -178,18 +178,46 @@ handle_call(_,{ReqPid,_},SrvState) ->
  {reply,gen_response,SrvState}.
 
 
-%% ===================================================== HANDLE_CAST (STUB) ===================================================== %% 
+%% ========================================================= HANDLE_CAST ========================================================= %% 
 
-%% This represents a STUB of the handle_cast() callback function, whose
-%% definition is formally required by the 'gen_server' OTP behaviour
-handle_cast(Request,SrvState) ->
+%% CTR_STATE_UPDATE
+%% ----------------
+%% SENDER:    The controller simulation server ('ctr_simserver') on behalf of the controller HTTP client ('ctr_httpclient')
+%% WHEN:      When the connection towards the remote REST server changes (Gun up or down)
+%% PURPOSE:   Update the controller connection state
+%% CONTENTS:  The updated controller connection state ('connecting'|'online')
+%% MATCHES:   - (when the request comes from controller simulation server)
+%% ACTIONS:   Update accordingly the controller node state in the 'ctrmanager' table
+%% NEW STATE: Update the controller state to the passed connection state
+%%
+
+% New State: CONNECTING (connection with the remote REST server was lost)
+handle_cast({ctr_state_update,connecting,ReqPid},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =:= ReqPid ->
+																			 
+ % Update the controller node state to "CONNECTING" in the 'ctrmanager' table 
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="CONNECTING"}) end),													
+
+ % Update the controller state to 'connecting'
+ {noreply,SrvState#ctrmgrstate{ctr_state = connecting}};
+
+% New State: ONLINE (connection with the remote REST server was established)
+handle_cast({ctr_state_update,online,ReqPid},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =:= ReqPid ->
+																			 
+ % Update the controller node state to "ONLINE" in the 'ctrmanager' table 
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="ONLINE"}) end),													
+
+ % Update the controller state to 'online'
+ {noreply,SrvState#ctrmgrstate{ctr_state = online}};
  
- % Report that this gen_server should not receive cast requests
- io:format("[ctr_manager-~w]: <WARNING> Unexpected cast (Request = ~w, SrvState = ~w)~n",[SrvState#ctrmgrstate.loc_id,Request,SrvState]),
-
- % Keep the SrvState
- {noreply,SrvState}.
-
+% Unknown new controller state
+handle_cast({ctr_state_update,UnknownState,ReqPid},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =:= ReqPid ->
+											
+ % Log the error
+ io:format("[ctr_mgr-~w]: <ERROR> Received unknown controller state: ~p~n",[SrvState#ctrmgrstate.loc_id,UnknownState]),
+											
+ % Keep the controller state
+ {noreply,SrvState}. 
+				
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 

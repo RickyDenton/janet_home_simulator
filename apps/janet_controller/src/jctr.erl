@@ -3,7 +3,7 @@
 -module(jctr).
 -behaviour(application).
 
--export([run/6,shutdown/0]).  % Application Start and Stop
+-export([run/8,shutdown/0]).  % Application Start and Stop
 -export([start/2,stop/1]). 	  % Application Behaviour Callback Functions
  
 %%====================================================================================================================================
@@ -12,20 +12,23 @@
 
 %% DESCRIPTION:  Prepares the configuration parameters and starts the JANET Controller application
 %%
-%% ARGUMENTS:    - Loc_id:         The ID of the location the controller is deployed in
-%%               - CtrSublocTable: The serialized controller's 'ctr_sublocation' table ([{subloc_id,devlist}])
-%%               - CtrDeviceTable: The serialized controller's 'ctr_device' table      ([{dev_id,subloc_id,type,config,lastupdate,handler_pid}])
-%%               - MgrPid:         The PID of the manager associated to this controller in the Janet Simulator node 
-%%               - RESTPort:       The port that will be used by the JANET Controller for binding its REST server on the host OS (>=30000)
-%%               - RemoteHost:     The IP address of the host where JANET controller will forward state updates
+%% ARGUMENTS:    - Loc_id:               The ID of the location the controller is deployed in
+%%               - CtrSublocTable:       The serialized controller's 'ctr_sublocation' table ([{subloc_id,devlist}])
+%%               - CtrDeviceTable:       The serialized controller's 'ctr_device' table      ([{dev_id,subloc_id,type,config,lastupdate,handler_pid}])
+%%               - MgrPid:               The PID of the manager associated to this controller in the Janet Simulator node 
+%%               - CtrRESTPort:          The OS port to be used by the controller's REST server (int >= 30000)
+%%               - RemoteRESTClient:     The address of the remote client issuing REST requests to the controller (a list)
+%%               - RemoteRESTServerAddr: The address of the remote server accepting REST requests from the controller (a list)
+%%               - RemoteRESTServerPort: The port of the remote server accepting REST requests from the controller (int > 0)
 %%
 %% RETURNS:      - ok                      -> JANET Controller succesfully started
 %%               - {error,already_running} -> The janet_controller application is already running on the node
 %%               - {error,Reason}          -> Internal error in starting the application
 %%               - {error,badarg}          -> Invalid arguments
 %%
-run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RESTPort,RemoteHost) when is_number(Loc_id), Loc_id>0, is_pid(MgrPid), is_number(RESTPort), RESTPort>=30000 ->
- 
+run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) when is_number(Loc_id), Loc_id > 0, is_pid(MgrPid), is_number(CtrRESTPort),
+                                                                                                                             CtrRESTPort >= 30000, is_list(RemoteRESTClient), is_list(RemoteRESTServerAddr),
+																															 is_number(RemoteRESTServerPort), RemoteRESTServerPort > 0 ->
  % Check if the JANET Controller is already running
  case utils:is_running(janet_controller) of
   true ->
@@ -38,8 +41,10 @@ run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RESTPort,RemoteHost) when is_num
    % Otherwise, initialize the JANET Controller configuration parameters as for the arguments
    application:set_env(janet_controller,loc_id,Loc_id),
    application:set_env(janet_controller,mgr_pid,MgrPid),
-   application:set_env(janet_controller,rest_port,RESTPort),
-   application:set_env(janet_controller,remote_host,RemoteHost),
+   application:set_env(janet_controller,ctr_rest_port,CtrRESTPort),
+   application:set_env(janet_controller,remote_rest_client,RemoteRESTClient),
+   application:set_env(janet_controller,remote_rest_server_addr,RemoteRESTServerAddr),
+   application:set_env(janet_controller,remote_rest_server_port,RemoteRESTServerPort),
    
    % Start Mnesia in disc-less and permanent mode and initialize
    % the tables used by the JANET Controller application
@@ -50,7 +55,7 @@ run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,RESTPort,RemoteHost) when is_num
    application:start(janet_controller,permanent)
  end;
  
-run(_,_,_,_,_,_) ->
+run(_,_,_,_,_,_,_,_) ->
  {error,badarg}.
  
 

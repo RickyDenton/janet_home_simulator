@@ -591,15 +591,15 @@ init(Parent,Module,Args) ->
     % Call the init_handler() callback function with the Args passed by the
 	% start_link() function, which returns the following information as a tuple:
     %
-	% - RESTPort:    The port to be used by the Cowboy listener
-    % - RemoteHost:  The name/ip of the remote host from which
-    %                accept REST requests (in addition to localhost)
-    % - ListnerName: The name (atom) by which register the
-    %                callback module as a cowboy listener
-    % - Paths:       The list of resource handlers paths
-	%                implemented by the callback module
+	% - RESTPort:     The port to be used by the Cowboy listener
+    % - RemoteHost:   The name/ip of the remote host from which
+    %                 accept REST requests (in addition to localhost)
+    % - ListenerName: The name (atom) by which register the
+    %                 callback module as a cowboy listener
+    % - Paths:        The list of resource handlers paths
+	%                 implemented by the callback module
 	% 
-	{ok,RESTPort,RemoteHost,ListnerName,Paths} = Module:init_handler(Args),
+	{ok,RESTPort,RemoteHost,ListenerName_,Paths} = Module:init_handler(Args),
  
     % Initialize the list of Cowboy routes by merging the list of resource
     % paths with the list of accepted hosts (the RemoteHost and localhost)
@@ -609,20 +609,20 @@ init(Parent,Module,Args) ->
     CompiledRoutes = cowboy_router:compile(Routes),
  
     % Start the Cowboy Listener
-    {ok,_} = cowboy:start_clear(ListnerName,                            % Listener Name
+    {ok,_} = cowboy:start_clear(ListenerName_,                           % Listener Name
                                 [{port, RESTPort}],                      % Listener Port
 							    #{env => #{dispatch => CompiledRoutes}}  % Listener Routes
 							   ),
 	
     % Log that the REST handler has started
-    io:format("[~p]: Successfully initialized~n",[ListnerName]),
+    io:format("[~p]: Successfully initialized~n",[ListenerName_]),
 
     % Inform the parent process that the
 	% synchronous initialization is complete	
 	proc_lib:init_ack(Parent,{ok,self()}),
 	
 	% Return the {Dbg,ListenerName} tuple
-	{DbgStruct,ListnerName}
+	{DbgStruct,ListenerName_}
 	
   catch
   

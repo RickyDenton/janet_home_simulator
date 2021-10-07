@@ -8,7 +8,7 @@
   {modules,[jctr,sup_jctr,sup_devhandlers,           % Application-specific Modules
             ctr_pairserver,ctr_devhandler,
 			ctr_simserver,ctr_resthandler,
-			ctr_db]},                 
+			ctr_httpclient,ctr_db]},                 
   {registered,[sup_devs,ctr_pairserver,              % Application Registered Names
                ctr_simserver]},             
   {applications,[mnesia,stdlib,kernel]},             % Application Dependencies

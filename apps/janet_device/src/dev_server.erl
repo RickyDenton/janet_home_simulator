@@ -7,7 +7,7 @@
 -export([start_link/0,init/1,handle_call/3,handle_cast/2,handle_continue/2,handle_info/2]).  % gen_server Behaviour Callback Functions
 -export([ctr_pairer/3]).                                                                     % The 'dev_server' controller pairing client
 
-%% This record represents the state of a dev_server gen_server
+%% This record represents the state of a 'dev_server' gen_server
 -record(devsrvstate,    
         {
 		 dev_state,       % The device's current state (booting|connecting|online)
@@ -21,8 +21,8 @@
 
 
 % Maximum size of the backlog used for postponing device configuration
-% updates towards the controller while not paired with it
--define(Max_cfg_backlog_size,3).  
+% updates towards the controller while not paired with it ('cfg_backlog')
+-define(Max_cfg_backlog_size,100).  
 
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
