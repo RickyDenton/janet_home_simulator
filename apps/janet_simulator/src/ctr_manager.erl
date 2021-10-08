@@ -180,44 +180,46 @@ handle_call(_,{ReqPid,_},SrvState) ->
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
-%% CTR_STATE_UPDATE
-%% ----------------
+%% CTR_CONN_UPDATE
+%% ---------------
 %% SENDER:    The controller simulation server ('ctr_simserver') on behalf of the controller HTTP client ('ctr_httpclient')
-%% WHEN:      When the connection towards the remote REST server changes (Gun up or down)
-%% PURPOSE:   Update the controller connection state
-%% CONTENTS:  The updated controller connection state ('connecting'|'online')
+%% WHEN:      When the connection state of the controller node towards the remote REST server changes
+%% PURPOSE:   Update the controller connection state in the 'ctrmanager' table
+%% CONTENTS:  1) The updated controller connection state ('connecting'|'online')
+%%            2) The PID of the 'ctr_simserver' process ("security purposes")
 %% MATCHES:   - (when the request comes from controller simulation server)
-%% ACTIONS:   Update accordingly the controller node state in the 'ctrmanager' table
+%% ACTIONS:   Update accordingly the controller connection state in the 'ctrmanager' table
 %% NEW STATE: Update the controller state to the passed connection state
 %%
 
-% New State: CONNECTING (connection with the remote REST server was lost)
-handle_cast({ctr_state_update,connecting,ReqPid},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =:= ReqPid ->
+% CONNECTING (connection with the remote REST server was lost)
+handle_cast({ctr_conn_update,connecting,CtrSimSrvPid},SrvState=#ctrmgrstate{ctr_state=online,ctr_srv_pid=CtrSimSrvPid}) ->
 																			 
  % Update the controller node state to "CONNECTING" in the 'ctrmanager' table 
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="CONNECTING"}) end),													
 
- % Update the controller state to 'connecting'
+ % Update the controller state variable to 'connecting'
  {noreply,SrvState#ctrmgrstate{ctr_state = connecting}};
 
-% New State: ONLINE (connection with the remote REST server was established)
-handle_cast({ctr_state_update,online,ReqPid},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =:= ReqPid ->
+% ONLINE (connection with the remote REST server has been established)
+handle_cast({ctr_conn_update,online,CtrSimSrvPid},SrvState=#ctrmgrstate{ctr_state=connecting,ctr_srv_pid=CtrSimSrvPid}) ->
 																			 
  % Update the controller node state to "ONLINE" in the 'ctrmanager' table 
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="ONLINE"}) end),													
 
- % Update the controller state to 'online'
+ % Update the controller state variable to 'online'
  {noreply,SrvState#ctrmgrstate{ctr_state = online}};
+
+
+%% Unexpected Cast
+handle_cast(Request,SrvState=#ctrmgrstate{loc_id=Loc_id}) ->
  
-% Unknown new controller state
-handle_cast({ctr_state_update,UnknownState,ReqPid},SrvState) when SrvState#ctrmgrstate.ctr_srv_pid =:= ReqPid ->
-											
- % Log the error
- io:format("[ctr_mgr-~w]: <ERROR> Received unknown controller state: ~p~n",[SrvState#ctrmgrstate.loc_id,UnknownState]),
-											
- % Keep the controller state
- {noreply,SrvState}. 
-				
+ % Report that this gen_server should not receive cast requests
+ io:format("[ctr_mgr-~w]: <WARNING> Unexpected cast (Request = ~p, SrvState = ~w)~n",[Loc_id,Request,SrvState]),
+
+ % Keep the SrvState
+ {noreply,SrvState}.
+ 
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 

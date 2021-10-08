@@ -5,13 +5,12 @@
 
 -export([start_link/0,init/1,handle_call/3,handle_cast/2,handle_continue/2]).  % gen_server Behaviour Callback Functions
 
-%% Server state: 
-%% {
-%%  CtrState,   % Whether the controller is currently connected with the remote REST server ('connecting' | 'online')
-%%  MgrPid      % The PID of the 'ctr_manager' associated with the Controller in the JANET Simulator
-%% }
-%%
-%% [TODO]: Define via a proper record?
+%% This record represents the state of a 'ctr_simserver' gen_server
+-record(simsrvstate,    
+        {
+		 ctr_state,  % The controller state ('booting'|'connecting'|'online'), which once booted mirrors the 'ctr_httpclient' 'conn_state'
+		 mgr_pid     % The PID of the 'ctr_manager' process in the JANET Simulator associated with the controller
+		}).
 
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
@@ -22,13 +21,13 @@ init(_) ->
  
  % Return the server initial state, where further initialization operations will be performed in the "handle_continue(Continue,State)"
  % callback function for parallelization purposes (and for allowing the ctr_manager process to respond to the registration request)  
- {ok,{booting,none},{continue,init}}.
+ {ok,#simsrvstate{ctr_state = booting, mgr_pid = none},{continue,init}}.
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%  
 
 %% Registers the JANET controller node with its controller manager in the JANET simulator node by passing the PID of the ctr_simserver
-handle_continue(init,{booting,none}) ->
+handle_continue(init,_SrvState) ->
 
  % Retrieve the 'mgr_pid' environment variable
  {ok,MgrPid} = application:get_env(mgr_pid),
@@ -41,7 +40,7 @@ handle_continue(init,{booting,none}) ->
  ok = gen_server:call(MgrPid,{ctr_reg,self()},10000),
  
  % Return the server state
- {noreply,{connecting,MgrPid}}.
+ {noreply,#simsrvstate{ctr_state = connecting, mgr_pid = MgrPid}}.
  
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
@@ -52,15 +51,15 @@ handle_continue(init,{booting,none}) ->
 %% WHEN:      (varies) [TODO]: Double-check
 %% PURPOSE:   Execute a command on the controller node and return the result of the operation
 %% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()
-%% MATCHES:   When the 'ctr_simserver' is registered (and the request comes from the JANET Simulator)
+%% MATCHES:   (always) (when the requests comes from the controller manager in the JANET Simulator)
 %% ACTIONS:   Execute the required command via apply()
 %% ANSWER:    The result of the apply() function
 %% NEW STATE: -
 %%
-handle_call({ctr_command,Module,Function,ArgsList},{ReqPid,_},{CtrState,MgrPid}) when CtrState =/= booting andalso ReqPid =:= MgrPid ->
+handle_call({ctr_command,Module,Function,ArgsList},{MgrPid,_},SrvState=#simsrvstate{mgr_pid=MgrPid}) ->
 
  % Execute the required command and return its result
- {reply,apply(Module,Function,ArgsList),{CtrState,MgrPid}};
+ {reply,apply(Module,Function,ArgsList),SrvState};
 
 
 %% SIM_COMMAND
@@ -74,7 +73,7 @@ handle_call({ctr_command,Module,Function,ArgsList},{ReqPid,_},{CtrState,MgrPid})
 %% ANSWER:    The answer of the 'ctr_manager', consisting in the result of the specified command
 %% NEW STATE: -
 %%
-handle_call({sim_command,Module,Function,ArgsList},{CommPid,_},{CtrState,MgrPid}) when node(CommPid) =:= node() ->
+handle_call({sim_command,Module,Function,ArgsList},{CtrRESTHdlPID,_},SrvState=#simsrvstate{mgr_pid=MgrPid}) when node(CtrRESTHdlPID) =:= node() ->
 
  % Forward the command to associated 'ctr_manager' in the JANET Simulator, waiting for its response up to a predefined timeout
  Res = try gen_server:call(MgrPid,{sim_command,Module,Function,ArgsList},4800)
@@ -86,28 +85,32 @@ handle_call({sim_command,Module,Function,ArgsList},{CommPid,_},{CtrState,MgrPid}
  end,
  
  % Return the 'ctr_manager' response (or the timeout expiration)
- {reply,Res,{CtrState,MgrPid}}.
+ {reply,Res,SrvState}.
 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
-%% CTR_STATE_UPDATE
-%% ----------------
+%% CTR_CONN_UPDATE
+%% ---------------
 %% SENDER:    The controller HTTP client ('ctr_httpclient')
-%% WHEN:      When the connection towards the remote REST server changes (Gun up or down)
-%% PURPOSE:   Inform the 'ctr_server' of the updated controller connection state
-%% CONTENTS:  The updated controller connection state ('connecting'|'online')
+%% WHEN:      When the connection towards the remote REST server changes ("GUN UP" or "GUN DOWN" messages)
+%% PURPOSE:   Inform the 'ctr_manager' associated with the controller in the
+%%            JANET Simulator of the updated controller connection state
+%% CONTENTS:  1) The updated controller connection state ('connecting'|'online')
+%%            2) The PID of the 'ctr_httpclient' ("security purposes")
 %% MATCHES:   - (when the request comes from the JANET Controller)
-%% ACTIONS:   Forward the updated controller connection state to the 'ctr_server' via a cast()
-%% NEW STATE: Update the server state to the passed connection state
+%% ACTIONS:   Forward the updated controller connection state to the
+%%            'ctr_manager' in the JANET Simulator via a cast()
+%% NEW STATE: Update the 'conn_state' variable to the passed connection state
 %%
-handle_cast({ctr_state_update,UpdatedCtrState,CtrHTTPCliPID},{_CurrCtrState,MgrPid}) when node(CtrHTTPCliPID) =:= node() ->
+handle_cast({ctr_conn_update,ConnState,CtrHTTPCliPID},SrvState=#simsrvstate{mgr_pid=MgrPid}) when (ConnState =:= 'online' orelse ConnState =:= 'connecting'),
+                                                                                                    is_pid(CtrHTTPCliPID), node(CtrHTTPCliPID) =:= node() ->
 
- % Forward the updated controller connection state to its 'ctr_manager' in the JANET Simulator
- gen_server:cast(MgrPid,{ctr_state_update,UpdatedCtrState,self()}),
+ % Forward the updated controller connection state to its associated 'ctr_manager' in the JANET Simulator
+ gen_server:cast(MgrPid,{ctr_conn_update,ConnState,self()}),
  
- % Update the server state to the passed connection state
- {noreply,{UpdatedCtrState,MgrPid}}.
+ % Update the 'ctr_state' variable to the passed connection state
+ {noreply,SrvState#simsrvstate{ctr_state = ConnState}}.
 
 
 %%====================================================================================================================================

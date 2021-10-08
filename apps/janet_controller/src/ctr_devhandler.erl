@@ -39,6 +39,10 @@ init({Dev_id,DevSrvPid}) ->
     % If the device's handler was successfully registered, create a monito
 	% towards the device node's 'dev_server' process identified by "DevSrvPid"
     MonRef = monitor(process,DevSrvPid),
+	
+	% Inform the remote REST server via the 'ctr_httpclient' that
+	% the device has paired with the controller at the current time
+	gen_server:cast(ctr_httpclient,{dev_conn_update,Dev_id,online,self(),erlang:system_time(second)}),
 
     % Return the devhandler server (constant) state
     {ok,#devhandlerstate{dev_id = Dev_id, dev_srv_pid = DevSrvPid, dev_srv_mon = MonRef}}
@@ -176,6 +180,10 @@ terminate(_,SrvState) ->
  % If still active, remove the monitor towards the device's 'dev_server'
  % process, also flushing possible notifications from the message queue  
  demonitor(SrvState#devhandlerstate.dev_srv_mon,[flush]),
+ 
+ % Inform the remote REST server via the 'ctr_httpclient' that
+ % the device has unpaired from the controller at the current time
+ gen_server:cast(ctr_httpclient,{dev_conn_update,SrvState#devhandlerstate.dev_id,offline,self(),erlang:system_time(second)}),
  
  % Terminate
  ok. 
