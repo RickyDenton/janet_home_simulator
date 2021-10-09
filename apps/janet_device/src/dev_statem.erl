@@ -11,7 +11,7 @@
 
 % The inactivity time after which the 'dev_statem' automatically forwards
 % its state to the 'dev_server' via the Inactivity Update Timer (ms)
--define(Inactivity_update_timeout,60 * 1000).  % Default: 60 * 1000
+-define(Inactivity_update_timeout,90 * 1000).  % Default: 90 * 1000
 
 %% ------------------------- Simulated Activity Constants ------------------------- %%
 

@@ -9,6 +9,7 @@
 -record(httpcstate,    
         {
 		 loc_id,            % The controller's location ID
+		 loc_user,          % The user the location belongs to [REMOTE SERVER COMPATIBILITY]
 		 conn_state,        % Whether the Controller has established a connection with the remote REST server ('connecting'|'online')
 		 conn_pid,          % The PID of the Gun connection process maintaining a connection with the remote REST server
 		 conn_ref,          % The reference used for monitoring the Gun connection process
@@ -18,8 +19,8 @@
 		}).
 
 % Maximum size of the backlogs used for postponing device connection
-% and configuration updates to be sent to the remote REST serverz\
--define(Max_backlog_size,200).  
+% and configuration updates to be sent to the remote REST server
+-define(Max_backlog_size,300).  % Default: 300
 
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
@@ -44,6 +45,9 @@ handle_continue(init,_SrvState) ->
  % Retrieve the controller's location ID for logging purposes
  {ok,Loc_id} = application:get_env(janet_controller,loc_id),
  
+  % Retrieve the user the location belongs to [REMOTE SERVER COMPATIBILITY]
+ {ok,Loc_user} = application:get_env(janet_controller,loc_user),
+
  % Ensure that all dependencies of the Gun HTTP client have been started
  {ok,_GunDepsStarted} = application:ensure_all_started(gun),
  
@@ -52,7 +56,7 @@ handle_continue(init,_SrvState) ->
  {ConnPid,ConnRef} = gun_spawn(),
  
  % Return the server initial state 
- {noreply,#httpcstate{loc_id = Loc_id, conn_state = connecting, conn_pid = ConnPid, conn_ref = ConnRef, streams_refs = [], devconn_backlog = [], devcfg_backlog = []}}.
+ {noreply,#httpcstate{loc_id = Loc_id, loc_user = Loc_user, conn_state = connecting, conn_pid = ConnPid, conn_ref = ConnRef, streams_refs = [], devconn_backlog = [], devcfg_backlog = []}}.
 
 
 %% ===================================================== HANDLE_CALL (STUB) ===================================================== %% 
@@ -72,49 +76,85 @@ handle_call(Request,From,SrvState=#httpcstate{loc_id=Loc_id}) ->
 
 %% DEV_CONN_UPDATE
 %% ---------------
-%% SENDER:    A device handler ('ctr_devhandler')
+%% SENDER:    One of the controller's device handlers ('ctr_devhandler')
 %% WHEN:      When it has started (meaning that its associated device has paired with the controller)
 %%            or is stopping (meaning that its associated device has unpaired from the controller)
 %% PURPOSE:   Inform the remote REST server of the device connection update
 %% CONTENTS:  1) The "Dev_id" of the associated device
 %%            2) An atom indicating whether the device has paired ('online') or unpaired ('offline') from the controller
+%%            3) The PID of the device handler process ("security purposes")
+%%            4) The timestamp when the device paired or unpaired from the controller
 %% MATCHES:   - (when the request comes from the JANET Controller node)
-%% ACTIONS:   A) If the controller is connected with the remote REST server, forward it the device connection update
+%% ACTIONS:   A) If the controller is connected with the remote REST
+%%               server, directly forward it the device connection update
 %%            B) If the controller is NOT connected with the remote REST server,
 %%               postpone the update by appending it in the 'devconn_backlog'
-%% NEW STATE: A) Append the "StreamRef" associated with the HTTP request in the the 'streams_refs' list
+%% NEW STATE: A) Append the "DevConnStreamRef" associated with the HTTP request in the the 'streams_refs' list
 %%            B) Update the 'devconn_backlog' state variable
 %%
 
 %% Controller ONLINE -> Push the device connection update to the remote REST server 
-handle_cast({dev_conn_update,Dev_id,DevState,DevHandlerPid,Timestamp},SrvState=#httpcstate{conn_state=online,streams_refs=StreamsRefs})
-                                                                      when is_integer(Dev_id), Dev_id > 0, node(DevHandlerPid) =:= node()  ->
+handle_cast({dev_conn_update,Dev_id,DevConnState,DevHandlerPid,Timestamp},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state=online,conn_pid=ConnPid,streams_refs=StreamsRefs})
+                                                                                               when is_integer(Dev_id), Dev_id > 0, node(DevHandlerPid) =:= node()  ->
  
- % If the controller is currently connected with the remote REST server, encode the device
- % connection update in JSON, which represents the body of the associated HTTP request
- ReqBody = devconn_to_json(Dev_id,DevState,Timestamp),
+ % Attempt to send the device connection update, obtaining the stream
+ % reference associated with the HTTP request enclosed in a list
+ DevConnStreamRef = send_devconn_updates([{Dev_id,DevConnState,Timestamp}],ConnPid,Loc_user,Loc_id),
  
- % Asynchronosuly send the remote REST server the device connection update,
- % obtaining a stream reference that will be used later for validating its response
- StreamRef = gun:post(SrvState#httpcstate.conn_pid,               % PID of the Gun connection process
-                      "/device",                                   % Resource path in the remote REST server
-		   			  [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
-                      ReqBody                                      % Request body
-					 ), 
+ % Append the "DevConnStreamRef" into the 'streams_refs" state variable
+ {noreply,SrvState#httpcstate{streams_refs = StreamsRefs ++ DevConnStreamRef}};
  
- % Append the new StreamRef into the 'streams_refs" state variable
- {noreply,SrvState#httpcstate{streams_refs = StreamsRefs ++ [StreamRef]}};
- 
+
 %% Controller CONNECTING -> Append the device connection update in the 'devconn_backlog' 
-handle_cast({dev_conn_update,Dev_id,DevState,DevHandlerPid,Timestamp},SrvState=#httpcstate{loc_id=Loc_id,conn_state=connecting,devconn_backlog=DevStateBacklog})
-                                                                      when is_integer(Dev_id), Dev_id > 0, node(DevHandlerPid) =:= node()  ->
+handle_cast({dev_conn_update,Dev_id,DevConnState,DevHandlerPid,Timestamp},SrvState=#httpcstate{loc_id=Loc_id,conn_state=connecting,devconn_backlog=DevConnBacklog})
+                                                                             when is_integer(Dev_id), Dev_id > 0, node(DevHandlerPid) =:= node()  ->
  
  % If the controller is NOT currently connected with the remote REST
  % server, append the device connection update in the 'devconn_backlog'
- NewConnBacklog = append_to_backlog(DevStateBacklog,{Dev_id,DevState,Timestamp},Loc_id),
+ NewConnBacklog = append_to_backlog(DevConnBacklog,[{Dev_id,DevConnState,Timestamp}],Loc_id,"connection"),
 	
  % Update the 'devconn_backlog' state variable
  {noreply,SrvState#httpcstate{devconn_backlog = NewConnBacklog}};
+	
+	
+%% DEV_CONFIG_UPDATE
+%% -----------------
+%% SENDER:    One of the controller's device handlers ('ctr_devhandler')
+%% WHEN:      When it has received a list of configuration updates of
+%%            its associated device to be sent to the remote REST server
+%% PURPOSE:   Send the list of device configuration updates to the remote REST server
+%% CONTENTS:  1) The list of device configuration updates to be sent to the remote REST server
+%%            2) The PID of the device handler process ("security purposes")
+%% MATCHES:   - (when the request comes from the JANET Controller node)
+%% ACTIONS:   A) If the controller is connected with the remote REST
+%%               server, directly forward it the device configuration update
+%%            B) If the controller is NOT connected with the remote REST server,
+%%               postpone the update by appending it in the 'devcfg_backlog'
+%% NEW STATE: A) Append the "DevCfgStreamRef" associated with the HTTP request in the the 'streams_refs' list
+%%            B) Update the 'devcfg_backlog' state variable
+%%
+
+%% Controller ONLINE -> Push the device configuration update to the remote REST server 
+handle_cast({dev_config_update,DevCfgUpdates,DevHandlerPid},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state=online,conn_pid=ConnPid,streams_refs=StreamsRefs})
+                                                                                  when is_list(DevCfgUpdates), node(DevHandlerPid) =:= node() ->
+ 
+ % Attempt to send the device configuration update, obtaining the
+ % stream reference associated with the HTTP request enclosed in a list
+ DevCfgStreamRef = send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id),
+ 
+ % Append the "DevCfgStreamRef" into the 'streams_refs" state variable
+ {noreply,SrvState#httpcstate{streams_refs = StreamsRefs ++ DevCfgStreamRef}};
+ 
+
+%% Controller CONNECTING -> Append the device configuration update in the 'devcfg_backlog' 
+handle_cast({dev_config_update,DevCfgUpdates,DevHandlerPid},SrvState=#httpcstate{loc_id=Loc_id,conn_state=connecting,devcfg_backlog=DevCfgBacklog})
+                                                                                  when node(DevHandlerPid) =:= node()  ->
+ % If the controller is NOT currently connected with the remote REST
+ % server, append the device configuration update in the 'devcfg_backlog'
+ NewDevCfgBacklog = append_to_backlog(DevCfgBacklog,DevCfgUpdates,Loc_id,"configuration"),
+	
+ % Update the 'devcfg_backlog' state variable
+ {noreply,SrvState#httpcstate{devcfg_backlog = NewDevCfgBacklog}};	
 	
 
 %% Unexpected Cast
@@ -145,7 +185,7 @@ handle_cast(Request,SrvState=#httpcstate{loc_id=Loc_id}) ->
 %% NEW STATE: Update the 'conn_state' to 'online', clear both backlogs, and append the StreamRefs
 %%            associated with sending thebacklogs, if any, to the 'streams_refs' state variable
 %%
-handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,conn_state='connecting',conn_pid=ConnPid,devconn_backlog=ConnBacklog,devcfg_backlog=CfgBacklog,streams_refs=StreamsRefs}) ->
+handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state='connecting',conn_pid=ConnPid,devconn_backlog=ConnBacklog,devcfg_backlog=CfgBacklog,streams_refs=StreamsRefs}) ->
  
  % Log that the controller is now connected to the remote REST server
  %% [TODO]: Remove
@@ -155,13 +195,17 @@ handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,conn_s
  % that the controller is now connected with the remote REST server
  gen_server:cast(ctr_simserver,{ctr_conn_update,online,self()}),
  
- % If any, push the device connection and configuration updates backlogs to the remote REST server,
- % obtaining the list of new stream references to be appended to the 'streams_refs' state variable
- NewStreamsRefs = push_backlogs(ConnBacklog,CfgBacklog),
- 
+ % Send the backlogs of device connection and configuration updates to the remote REST server,
+ % obtaining the stream references associated with their HTTP requests enclosed in lists
+ %
+ % NOTE: If a backlog is empty, an empty list is returned
+ %
+ ConnBacklogRef = send_devconn_updates(ConnBacklog,ConnPid,Loc_user,Loc_id),
+ CfgBacklogRef = send_devcfg_updates(CfgBacklog,ConnPid,Loc_user,Loc_id),
+
  % Update the connection state to 'online', clear both backlogs, and
- % append the new stream references to the 'streams_refs' state variable
- {noreply,SrvState#httpcstate{conn_state = 'online', devconn_backlog = [], devcfg_backlog = [], streams_refs = StreamsRefs ++ NewStreamsRefs}};
+ % append their stream references to the 'streams_refs' state variable
+ {noreply,SrvState#httpcstate{conn_state = 'online', devconn_backlog = [], devcfg_backlog = [], streams_refs = StreamsRefs ++ ConnBacklogRef ++ CfgBacklogRef}};
 
 
 %% GUN DOWN
@@ -386,89 +430,259 @@ gun_spawn() ->
  {ConnPid,ConnRef}.
 
 
-%% DESCRIPTION:  Appends a new element into a backlog used by the HTTP client, dropping its first
-%%               (or oldest) element if the predefined maximum backlog size has been reached
+%% DESCRIPTION:  Appends a list of new elements into a backlog used by the HTTP client, dropping its
+%%               first (or oldest) elements if the predefined maximum backlog size has been reached
 %%
-%% ARGUMENTS:    - Backlog: The backlog which to append the new element to (a list)
-%%               - NewElem: The new element to be appended to the Backlog
-%%               - Loc_id:  The controller's location ID (used for logging purposes
-%%                          if the predefined maximum backlog size has been reached
+%% ARGUMENTS:    - Backlog:     The backlog which to append the new elements to (a list)
+%%               - NewElems:    The ne elements to be appended to the backlog (a list)
+%%               - Loc_id:      The controller's location ID (logging purposes)
+%%               - BacklogName: The backlog name (a list, logging purposes) 
 %%
-%% RETURNS:      - UpdatedBacklog -> The updated backlog (list)
+%% RETURNS:      - UpdatedBacklog -> The updated backlog (a list)
 %%
-append_to_backlog(Backlog,NewElem,Loc_id) when is_list(Backlog), length(Backlog) =:= ?Max_backlog_size ->
+append_to_backlog(Backlog,NewElems,Loc_id,BacklogName) when is_list(Backlog), is_list(NewElems), is_list(BacklogName) ->
 
- % If the predefined maximum backlog size
- % has been reached, print a warning message
- io:format("[ctr_httpclient-~w]: <WARNING> Maximum backlog size reached, the oldest update is being dropped~n",[Loc_id]),
-
- % Drop the first (or oldest) element in
- % the backlog and append the new element
- [_OldestElem|OtherElems] = Backlog,
- OtherElems ++ [NewElem];
-
-append_to_backlog(Backlog,NewElem,_) when is_list(Backlog) ->
-
- % If the predefined maximum backlog size has not been
- % reached, simply append the new element to the backlog
- Backlog ++ [NewElem].
-
-
-%% Encodes a single device connection update in JSON to be sent to the remote REST server
-%%
-%% NOTE: Temporary implementation
-devconn_to_json(Dev_id,online,Timestamp) ->
- "[{\"dev_id\":" ++ integer_to_list(Dev_id) ++ ",\"connState\":\"online\",\"timestamp\":\"" ++ calendar:system_time_to_rfc3339(Timestamp) ++ "\"}]";
-devconn_to_json(Dev_id,offline,Timestamp) ->
- "[{\"dev_id\":" ++ integer_to_list(Dev_id) ++ ",\"connState\":\"offline\",\"timestamp\":\"" ++ calendar:system_time_to_rfc3339(Timestamp) ++ "\"}]".
-
-
-
-
-
-
-
-% Multi-state (list)
-%
-%% NOTE: This is currently not JSON, no commas between devstates
-%
-%devconn_to_json([],DevStates) ->
-% "[" ++ DevStates ++ "]";
-%devconn_to_json([{Dev_id,online,Timestamp}|NextDevState],DevStates) ->
-% DevState = "{\"dev_id\":" ++ integer_to_list(Dev_id) ++ ",\"connState\":\"online\",\"timestamp\":\"" ++ calendar:system_time_to_rfc3339(Timestamp) ++ "\"}",
-% devconn_to_json(NextDevState,DevStates ++ [DevState]);
-%devconn_to_json([{Dev_id,offline,Timestamp}|NextDevState],DevStates) ->
-% DevState = "{\"dev_id\":" ++ integer_to_list(Dev_id) ++ ",\"connState\":\"offline\",\"timestamp\":\"" ++ calendar:system_time_to_rfc3339(Timestamp) ++ "\"}",
-% devconn_to_json(NextDevState,DevStates ++ [DevState]).
-
-%% [TODO!]
-push_backlogs(_ConnBacklog,_CfgBacklog) ->
- [].
+ % Retrieve the length of the list of new elements to be appended in the backlog
+ NewElemsLength = length(NewElems),
+ 
+ % Perform a set of checks, obtaining the updated backlog to be returned and the following two flags:
+ %
+ % NewElemsExceedSize -> Whether the list of new elements is longer than the predefined maximum backlog size
+ % OldElemsDropped    -> Whether existing elements were dropped from the backlog
+ %
+ {UpdatedBacklog,NewElemsExceedSize,OldElemsDropped} =
+ if
+  NewElemsLength > ?Max_backlog_size ->
   
-% % Push the 'devstate' backlog
-% DevStateBacklogStreamRef =
-% if
-% 
-%  % There are Devstates to be pushed in the backlog
-%  length(DevStateBacklog) > 0 ->
-% 
-%   % Encode the contents of the 'devstate' backlog in JSON
-%   DevStateBacklogReqBody = devstate_to_json(DevStateBacklog,[]),
-%   
-%   % Send in a single HTTP request all device state updates to the remote server,
-%   % obtaining a stream reference that will be used later for processing its response
-%   gun:post(SrvState#httpcstate.conn_pid,               % Gun connection process PID
-%            "/device",                                   % Remote server PATH%
-%		    [{<<"content-type">>, "application/json"}],  % "Content-Type" header
-%            DevStateBacklogReqBody                       % Request body
-%		   );
-%		   
-%  % There are no DevStates to be pushed
-%  true ->
-%   []
-% end,
+   % If the list of new elements is longer than the predefined
+   % maximum backlog size, set the "NewElemsExceedSize" flag
+   NewElemsExceedSize_ = true,
+   
+   % In this instance any existing elements in the backlog are
+   % dropped, and so if there are any se the "OldElemsDropped" flag
+   if
+    length(Backlog) > 0 ->
+	 OldElemsDropped_ = true;
+	true ->
+	 OldElemsDropped_ = false
+   end,
+   
+   % Set the updated backlog as the last "?Max_backlog_size" new elements
+   UpdatedBacklog_ = lists:nthtail(NewElemsLength-?Max_backlog_size,NewElems),
+   
+   % Return the required tuple
+   {UpdatedBacklog_,NewElemsExceedSize_,OldElemsDropped_};
+   
+  true ->
+  
+   % Otherwise if the list of new elements is not longer than the
+   % predefined maximum backlog size, clear the "NewElemsExceedSize" flag
+   NewElemsExceedSize_ = false,
+   
+   % Determine the length of the list that would be obtained by
+   % concatenating the new elements with the current backlog contents 
+   CumulativeLength = NewElemsLength + length(Backlog),
+   
+   % Depending on whether such cumulative length
+   % is greater than the maximum backlog size
+   if
+    CumulativeLength > ?Max_backlog_size ->
+	
+	 % If it is, set the "OldElemsDropped" flag
+	 OldElemsDropped_ = true,
+	 
+	 % Set the updated backlog as its last (CumulativeLength - ?Max_backlog_size)
+	 % current elements concatenated with the new elements
+	 UpdatedBacklog_ = lists:nthtail(CumulativeLength-?Max_backlog_size,Backlog) ++ NewElems,
+	  
+	 % Return the required tuple
+     {UpdatedBacklog_,NewElemsExceedSize_,OldElemsDropped_};
+   
+    true -> 
+	  
+	 % If instead the cumulative length is smaller than the
+	 % maximum backlog size, clear the "OldElemsDropped" flag
+     OldElemsDropped_ = false,
+	 
+	 % Set the updated backlog as the concatenation of
+	 % its current contents with the list of new elements
+     UpdatedBacklog_ = Backlog ++ NewElems,
+	 
+	 % Return the required tuple
+     {UpdatedBacklog_,NewElemsExceedSize_,OldElemsDropped_}
+   end
+ end,
+ 
+ % If any of the two previous flags is set, print a warning message 
+ case {NewElemsExceedSize,OldElemsDropped} of
+ 
+  % If both are set
+  {true,true} ->
+   io:format("[ctr_httpclient-~w]: <WARNING> Size of new device ~s updates exceeds maximum backlog size (~w > ~w), older updates as well as the current backlog contents are being dropped~n",[Loc_id,BacklogName,NewElemsLength,?Max_backlog_size]);
+ 
+  % If olny the "NewElemsExceedSize" flag is set
+  {true,false} ->
+   io:format("[ctr_httpclient-~w]: <WARNING> Size of new device ~s updates exceeds maximum backlog size (~w > ~w), older updates are being dropped~n",[Loc_id,BacklogName,NewElemsLength,?Max_backlog_size]);
+ 
+  % If olny the "OldElemsDropped" flag is set
+  {false,true} ->
+   io:format("[ctr_httpclient-~w]: <WARNING> The maximum size of the device ~s updates backlog has been reached (~w), older updates are being dropped~n",[Loc_id,BacklogName,?Max_backlog_size]);
+ 
+  % If no flags are set, do nothing
+  {false,false} ->
+   ok
+ end,
+ 
+ % Return the updated backlog
+ UpdatedBacklog.
+ 
+
+%% DESCRIPTION:  Sends a list of device connection updates to the remote REST server,
+%%               returning the stream reference associated with the HTTP request
+%%
+%% ARGUMENTS:    - DevConnUpdates: The list of device connection updates [{Dev_id,DevConnState,Timestamp}]
+%%               - ConnPid:        The PID of the Gun connection process
+%%               - Loc_user:       The user the location belongs to [REMOTE SERVER COMPATIBILITY]
+%%               - Loc_id:         The controller's location ID (logging purposes)
+%%
+%% RETURNS:      - [DevConnStreamRef] -> The stream reference associated with the HTTP request of sending
+%%                                       the list of device connection updates enclosed in a list
+%%               - []                 -> If an empty DevConnUpdates list was passed
+%% 
+send_devconn_updates([],_ConnPid,_Loc_user,_Loc_id) ->
+
+ % If there are no device connection updates
+ % to be sent, simply return an empty list
+ [];
+ 
+send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevConnUpdates), is_pid(ConnPid),
+                                                                  is_list(Loc_user), is_integer(Loc_id), Loc_id > 0 ->
+
+ % Attempt to encode the device connection updates in JSON format
+ case devconns_to_json(DevConnUpdates,Loc_user) of
+  jsone_encode_error ->
+   
+   % If the encoding failed, report the error and drop the device connection updates
+   io:format("[ctr_httpclient-~w]: <ERROR> Device connection updates could not be encoded in JSON (DevConnUpdates = ~p, Loc_user = ~p), dropping the updates~n",[Loc_id,DevConnUpdates,Loc_user]),
+   
+   % Return an empty list
+   [];
+   
+  ReqBody ->
+  
+   % Otherwise if the encoding was successful, asynchronosuly send the remote REST server the
+   % device connection updates, obtaining the stream reference associated with the HTTP request
+   DevConnStreamRef = gun:post(
+                               ConnPid,                                     % PID of the Gun connection process
+                               "/device",                                   % Resource path in the remote REST server
+		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
+                               ReqBody                                      % Request body
+			  	  	          ), 
+ 
+   % Return the stream reference enclosed in a list
+   [DevConnStreamRef]
+ end;
+
+send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) ->
+
+ % If invalid arguments were passed, report the error
+ io:format("[ctr_httpclient-~w]: <FATAL> Invalid arguments passed to 'send_devconn_updates' (DevConnUpdates = ~p, ConnPid = ~p, Loc_user = ~p, Loc_id = ~p), dropping the updates~n",[Loc_id,DevConnUpdates,ConnPid,Loc_user,Loc_id]),
+ 
+ % Return an empty list
+ [].
+ 
+%% Encodes a list of device connection updates in JSON format
+%% (send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) helper function)
+devconns_to_json(DevConnUpdates,Loc_user) ->
+ 
+ % Convert the list of device connection updates into a list of map
+ % connection updates as required by the remote REST server interface
+ DevConnsReqs = [ #{did => Dev_id, connState => DevConnState, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))} || {Dev_id,DevConnState,Timestamp} <- DevConnUpdates],
+
+ % Attempt to encode the list of device connection
+ % updates with the additional "user" field in JSON
+ try jsone:encode(#{user => list_to_binary(Loc_user), request => DevConnsReqs})
+ catch
+	
+  % If the encoding was unsuccessful, return an error
+  error:badarg ->
+   jsone_encode_error
+ end.
 
 
+%% DESCRIPTION:  Sends a list of device configuration updates to the remote REST server,
+%%               returning the stream reference associated with the HTTP request
+%%
+%% ARGUMENTS:    - DevCfgUpdates:  The list of device configuration updates [{Dev_id,UpdatedCfgMap,Timestamp}]
+%%               - ConnPid:        The PID of the Gun connection process
+%%               - Loc_user:       The user the location belongs to [REMOTE SERVER COMPATIBILITY]
+%%               - Loc_id:         The controller's location ID (logging purposes)
+%%
+%% RETURNS:      - [DevCfgStreamRef] -> The stream reference associated with the HTTP request of sending
+%%                                      the list of device configuration updates enclosed in a list
+%%               - []                -> If an empty DevCfgUpdates list was passed
+%% 
+send_devcfg_updates([],_ConnPid,_Loc_user,_Loc_id) ->
+
+ % If there are no device configuration updates
+ % to be sent, simply return an empty list
+ [];
+ 
+send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCfgUpdates), is_pid(ConnPid),
+                                                                is_list(Loc_user), is_integer(Loc_id), Loc_id > 0 ->
+
+ % Attempt to encode the device configuration updates in JSON format
+ case devcfgs_to_json(DevCfgUpdates,Loc_user) of
+  jsone_encode_error ->
+   
+   % If the encoding failed, report the error and drop the device configuration updates
+   io:format("[ctr_httpclient-~w]: <ERROR> Device configuration updates could not be encoded in JSON (DevCfgUpdates = ~p, Loc_user = ~p), dropping the updates~n",[Loc_id,DevCfgUpdates,Loc_user]),
+   
+   % Return an empty list
+   [];
+   
+  ReqBody ->
+  
+   % Otherwise if the encoding was successful, asynchronosuly send the remote REST server the
+   % device configuration updates, obtaining the stream reference associated with the HTTP request
+   DevCfgStreamRef = gun:patch(
+                               ConnPid,                                     % PID of the Gun connection process
+                               "/device",                                   % Resource path in the remote REST server
+		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
+                               ReqBody                                      % Request body
+			  	  	          ), 
+ 
+   % Return the stream reference enclosed in a list
+   [DevCfgStreamRef]
+ end;
+
+send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) ->
+
+ % If invalid arguments were passed, report the error
+ io:format("[ctr_httpclient-~w]: <FATAL> Invalid arguments passed to 'send_devcfg_updates' (DevCfgUpdates = ~p, ConnPid = ~p, Loc_user = ~p, Loc_id = ~p), dropping the updates~n",[Loc_id,DevCfgUpdates,ConnPid,Loc_user,Loc_id]),
+ 
+ % Return an empty list
+ [].
+ 
+%% Encodes a list of device connection updates in JSON format
+%% (send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) helper function)
+devcfgs_to_json(DevCfgUpdates,Loc_user) ->
+ 
+ % Convert the list of device configuration updates into a list of map
+ % configuration updates as required by the remote REST server interface
+ DevCfgsReqs = [ #{did => Dev_id, updatedState => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))} || {Dev_id,UpdatedCfgMap,Timestamp} <- DevCfgUpdates],
+
+ % Attempt to encode the list of device configuration
+ % updates with the additional "user" field in JSON
+ try jsone:encode(#{user => list_to_binary(Loc_user), request => DevCfgsReqs})
+ catch
+	
+  % If the encoding was unsuccessful, return an error
+  error:badarg ->
+   jsone_encode_error
+ end.
+ 
+ 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
 %%==================================================================================================================================== 

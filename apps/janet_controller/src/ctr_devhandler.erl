@@ -17,7 +17,7 @@
 
 % Maximum time between two device configuration updates for a new configuration updated
 % to be converted in its entirety to the map that will be sent to the remote server
--define(Max_time_before_complete_update,60). % Default: 60 seconds  
+-define(Max_time_before_complete_update,85). % Default: 85 seconds  
 
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
@@ -46,6 +46,7 @@ init({Dev_id,DevSrvPid}) ->
 	
 	% Inform the remote REST server via the 'ctr_httpclient' that
 	% the device has paired with the controller at the current time
+	%% [TODO]: Decide if this is required
 	gen_server:cast(ctr_httpclient,{dev_conn_update,Dev_id,online,self(),erlang:system_time(second)}),
 
     % Return the devhandler server (constant) state
@@ -118,17 +119,28 @@ handle_call(_,{ReqPid,_},SrvState) ->
 %%
 handle_cast({dev_config_update,DevSrvPid,CfgUpdatesList},SrvState) when DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
 
- % Parse the list of device configuration updates, obtaining the list of device configuration
- % maps with their timestamps to be sent to the remote server via the controller HTTP client
+ % Parse the list of device configuration updates, obtaining
+ % the list of device configuration maps with their timestamps
  CfgMapsStamps = parse_new_devconfigs(CfgUpdatesList,SrvState#devhandlerstate.dev_id),
+ 
+ % Build the list of device configuration updates to be sent to the remote server
+ % by dropping from the list of device configuration maps with their timestamps the
+ % elements with an empty configuration map and by append to each one the device ID
+ DevCfgUpdates = [ {SrvState#devhandlerstate.dev_id,UpdatedCfgMap,Timestamp} || {UpdatedCfgMap,Timestamp} <- CfgMapsStamps, UpdatedCfgMap =/= #{}],
 
- %% [TODO]: Remove
- %io:format("[ctr_devhandler-~w]: CfgMapsStamps: ~p~n",[SrvState#devhandlerstate.dev_id,CfgMapsStamps]),
+ % Depending on whether the resulting list of device configuration updates is empty
+ case DevCfgUpdates of
  
- %% [TODO]: Remove empty elements
- 
- %% [TODO]: If the final result is not empty, push it to the 'ctr_httpclient'
- 
+  % If it is, do nothing
+  [] ->
+   ok;
+   
+  % Otherwise if it contains at least one element, send all device configuration
+  % updates to the remote REST server via the controller HTTP client
+  _ ->
+   gen_server:cast(ctr_httpclient,{dev_config_update,DevCfgUpdates,self()})
+ end,
+  
  % Keep the server state
  {noreply,SrvState}.
  

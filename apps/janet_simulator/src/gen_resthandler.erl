@@ -611,7 +611,10 @@ init(Parent,Module,Args) ->
     % Start the Cowboy Listener
     {ok,_} = cowboy:start_clear(ListenerName_,                           % Listener Name
                                 [{port, RESTPort}],                      % Listener Port
-							    #{env => #{dispatch => CompiledRoutes}}  % Listener Routes
+							    #{
+								  env => #{dispatch => CompiledRoutes},  % Listener Routes
+								  request_timeout => infinity            % Connection persistence
+								  }
 							   ),
 	
     % Log that the REST handler has started

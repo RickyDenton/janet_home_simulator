@@ -59,6 +59,7 @@ handle_continue(init,SrvState) ->
  {ok,RemoteRESTClient} = application:get_env(remote_rest_client),        % The address of the remote client issuing REST requests to the controller (a list)
  {ok,RemoteRESTServerAddr} = application:get_env(sim_rest_server_addr),  % The address of the remote server accepting REST requests from the controller (a list)  
  {ok,RemoteRESTServerPort} = application:get_env(sim_rest_server_port),  % The port of the remote server accepting REST requests from the controller (int > 0)
+ Loc_user = LocationRecord#location.user,                               % The user the location belongs to [REMOTE SERVER COMPATIBILITY]
  
  %% ---------------------------- Controller Node Creation ---------------------------- %% 
  
@@ -79,7 +80,7 @@ handle_continue(init,SrvState) ->
  {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
  % Launch the Janet Controller application on the controller node
- ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort]),
+ ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort,Loc_user]),
  
  % Set the ctr_node in the server state and wait for the
  % registration request of the controller's 'ctr_simserver' process
