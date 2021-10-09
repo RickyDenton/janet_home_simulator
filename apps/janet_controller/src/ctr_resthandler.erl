@@ -1372,13 +1372,10 @@ parse_devcommands_responses([IssuedCommand|NextIssuedCommand],SuccessfulCommands
      %% ---------------------------------- Device Command Successful ---------------------------------- %
 	 
      % If the device command was successfully executed
-     {ok,{UpdatedCfg,Timestamp}} ->
-
-	  % Convert the returned updated device configuration into a map
-	  UpdatedCfgMap = utils:devconfig_to_map(UpdatedCfg),
+     {ok,{UpdatedCfgMap,Timestamp}} ->
 	 
 	  % Return the successful device command
-	  {ok,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 200, state => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))}};
+	  {ok,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 200, updatedState => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))}};
 	 
 	 %% ------------------------------------ Device Command Failed ------------------------------------ %
 
@@ -1393,10 +1390,6 @@ parse_devcommands_responses([IssuedCommand|NextIssuedCommand],SuccessfulCommands
 	 % Device state machine timeout
 	 {error,statem_timeout} ->
 	  {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 504, errorReason => <<"The device state machine is not responding">>}};
-	 
-	 % Error in mirroring the updated device configuration in the controller's database
-     {error,{mnesia,MnesiaError}} ->
-	  {error,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 500, errorReason => list_to_binary(lists:flatten(io_lib:format("Error in mirroring the updated device configuration in the controller's database: ~p",[MnesiaError])))}};
 	
  	 % An unexpected response was received from the devhandler
 	 UnexpectedResponse ->
@@ -1607,8 +1600,8 @@ print_devcommands_summary(SuccessfulCommands,FailedCommands,ValidCommands,Invali
 
 %% ------------------------------------------ Single Device Command ------------------------------------------ %%
 % Successful command
-print_devcommands_summary([#{dev_id := Dev_id, state := NewState}],[],[ValidCommand],[],200,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
- io:format("~n[devcommands_handler-~w]: <SUCCESS> dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,utils:devmap_to_config(NewState)]);
+print_devcommands_summary([#{dev_id := Dev_id, updatedState := UpdatedStateMap}],[],[ValidCommand],[],200,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
+ io:format("~n[devcommands_handler-~w]: <SUCCESS> dev_id = ~w, command = ~200p, updatedState = ~200p (RespCode = 200)~n",[Loc_id,Dev_id,ValidCommand#valdevcmd.cfgcommand,UpdatedStateMap]);
 
 % Failed command
 print_devcommands_summary([],[#{dev_id := Dev_id, errorReason := ErrorReason}],[ValidCommand],[],RespCode,Loc_id) when ValidCommand#valdevcmd.dev_id =:= Dev_id ->
@@ -1660,13 +1653,13 @@ print_successful_devcommands_tree([],ValidFailedCommands,_Indent) ->
  % valid commands, which will be associated with failed commands
  ValidFailedCommands;
  
-print_successful_devcommands_tree([#{dev_id := Dev_id, state := NewState}|NextSuccessCommand],ValidCommands,Indent) ->
+print_successful_devcommands_tree([#{dev_id := Dev_id, updatedState := UpdatedStateMap}|NextSuccessCommand],ValidCommands,Indent) ->
 
  % Match the successful to its associated valid command
  {value,MatchValidCommand,NewValidCommands} = lists:keytake(Dev_id,2,ValidCommands),
  
  % Print a summary of the successful command
- io:format("~s|-- dev_id = ~w, command = ~200p, newState = ~200p (RespCode = 200)~n",[Indent,Dev_id,MatchValidCommand#valdevcmd.cfgcommand,utils:devmap_to_config(NewState)]),
+ io:format("~s|-- dev_id = ~w, command = ~200p, updatedState = ~200p (RespCode = 200)~n",[Indent,Dev_id,MatchValidCommand#valdevcmd.cfgcommand,UpdatedStateMap]),
  
  % Proceed with the next successful command
  print_successful_devcommands_tree(NextSuccessCommand,NewValidCommands,Indent).

@@ -4,7 +4,8 @@
 
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,             % Devices Utility Functions
          check_merge_devconfigs/3,get_devtype_default_config/1,
-		 get_devtype_default_config_json/1,deprefix_dev_config/1,devconfig_to_map/1,devmap_to_config/1]). 
+		 get_devtype_default_config_json/1,deprefix_dev_config/1,
+		 devconfig_to_map_all/1,devconfig_to_map_diff/2]). 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).          % Nodes Utility Functions
 -export([ensure_janet_started/0,is_running/1]).                                           % Applications Utility Functions
 -export([jsone_term_to_list/2,str_to_atom/1,sign/1]).                                     % Conversions Utility Functions
@@ -403,73 +404,136 @@ deprefix_dev_config(Config) ->
  end.
  
  
-%% DESCRIPTION:  Converts a device's configuration record into a map
+%% DESCRIPTION:  Converts an entire device configuration record into a map
 %%
 %% ARGUMENTS:    - Cfg: The device configuration record to be converted into a map
 %%
-%% RETURNS:      - CfgMap -> The device's configuration as a map
+%% RETURNS:      - CfgMap -> The entire device's configuration as a map
 %% 
 %% THROWS:       - {error,invalid_devtype} -> The device type is invalid
 %%
 % Fan
-devconfig_to_map(Cfg) when is_record(Cfg,fancfg) ->
+devconfig_to_map_all(Cfg) when is_record(Cfg,fancfg) ->
  #{onOff => Cfg#fancfg.onoff, fanSpeed => Cfg#fancfg.fanspeed};
 
 % Light
-devconfig_to_map(Cfg) when is_record(Cfg,lightcfg) ->
+devconfig_to_map_all(Cfg) when is_record(Cfg,lightcfg) ->
  #{onOff => Cfg#lightcfg.onoff, brightness => Cfg#lightcfg.brightness, color => list_to_binary(Cfg#lightcfg.colorsetting)};
 
 % Door
-devconfig_to_map(Cfg) when is_record(Cfg,doorcfg) ->
+devconfig_to_map_all(Cfg) when is_record(Cfg,doorcfg) ->
  #{openClose => Cfg#doorcfg.openclose, lockUnlock => Cfg#doorcfg.lockunlock}; 
 
 % Thermostat
-devconfig_to_map(Cfg) when is_record(Cfg,thermocfg) ->
+devconfig_to_map_all(Cfg) when is_record(Cfg,thermocfg) ->
  #{onOff => Cfg#thermocfg.onoff, tempTarget => Cfg#thermocfg.temp_target, tempCurrent => Cfg#thermocfg.temp_current};
 
 % Conditioner
-devconfig_to_map(Cfg) when is_record(Cfg,condcfg) ->
+devconfig_to_map_all(Cfg) when is_record(Cfg,condcfg) ->
  #{onOff => Cfg#condcfg.onoff, tempTarget => Cfg#condcfg.temp_target, tempCurrent => Cfg#condcfg.temp_current, fanSpeed => Cfg#condcfg.fanspeed};
  
 % Invalid device type
-devconfig_to_map(_) ->
+devconfig_to_map_all(_) ->
  throw({error,invalid_devtype}).
  
+
+%% DESCRIPTION:  Returns a map containing the traits that have changed between 
+%%               an old an a new device configuration of the same #devtype
+%%
+%% ARGUMENTS:    - OldCfg: The older device configuration
+%%               - NewCfg: The newer device configuration
+%%
+%% RETURNS:      - CfgDiffMap -> The map containing the traits that have
+%%                               changed between the old and new configuration
+%%
+%% THROWS:       - {error,different_devtypes} -> The two configurations are of
+%%                                               different (or invalid) #devtype
+% Fan 
+devconfig_to_map_diff(OldCfg,NewCfg) when is_record(OldCfg,fancfg), is_record(NewCfg,fancfg) ->
  
-%% DESCRIPTION:  Converts a device's configuration encoded in a map (in which
-%%               all traits must be present) into its associated #devcfg record
-%%
-%% ARGUMENTS:    - CfgMap: The device configuration as a map, in which all traits/keys must be present
-%%
-%% RETURNS:      - #devcfg -> The device configuration record associated with the CfgMap
-%% 
-%% THROWS:       - {error,invalid_devtype} -> The device type is invalid (or there
-%%                                            are missing traits/keys in the map)
-%%
-% Conditioner
-devmap_to_config(#{'onOff' := OnOff, 'tempTarget' := TempTarget, 'tempCurrent' := TempCurrent, 'fanSpeed' := FanSpeed}) ->
- #condcfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent, fanspeed = FanSpeed};
-
-% Thermostat
-devmap_to_config(#{'onOff' := OnOff, 'tempTarget' := TempTarget, 'tempCurrent' := TempCurrent}) ->
- #thermocfg{onoff = OnOff, temp_target = TempTarget, temp_current = TempCurrent};
-
-% Fan
-devmap_to_config(#{'onOff' := OnOff, 'fanSpeed' := FanSpeed}) ->
- #fancfg{onoff = OnOff, fanspeed = FanSpeed};
-
+ % "onOff" state
+ M1 = map_diff(#{},onOff,OldCfg#fancfg.onoff,NewCfg#fancfg.onoff),
+ 
+ % "fanSpeed" state
+ map_diff(M1,fanSpeed,OldCfg#fancfg.fanspeed,NewCfg#fancfg.fanspeed);
+ 
 % Light
-devmap_to_config(#{'onOff' := OnOff, 'brightness' := Brightness, 'color' := Color}) ->
- #lightcfg{onoff = OnOff, brightness = Brightness, colorsetting = Color};
+devconfig_to_map_diff(OldCfg,NewCfg) when is_record(OldCfg,lightcfg), is_record(NewCfg,lightcfg) ->
+ 
+ % "onOff" state
+ M1 = map_diff(#{},onOff,OldCfg#lightcfg.onoff,NewCfg#lightcfg.onoff),
+ 
+ % "brightness" state
+ M2 = map_diff(M1,brightness,OldCfg#lightcfg.brightness,NewCfg#lightcfg.brightness), 
+ 
+ % "color" state
+ M3 = map_diff(M2,color,OldCfg#lightcfg.colorsetting,NewCfg#lightcfg.colorsetting),
+ 
+ % If the "color" state is present in the map (i.e. it has changed from the OldCfg)
+ case maps:is_key(color,M3) of
+  true ->
+  
+   % if it is, convert it to a binary
+   #{color := ColorList} = M3,
+   M3#{color := list_to_binary(ColorList)};
+   
+  false ->
+  
+   % Otherwise just return the map
+   M3
+ end;
+ 
+% Door 
+devconfig_to_map_diff(OldCfg,NewCfg) when is_record(OldCfg,doorcfg), is_record(NewCfg,doorcfg) ->
+ 
+ % "openClose" state
+ M1 = map_diff(#{},openClose,OldCfg#doorcfg.openclose,NewCfg#doorcfg.openclose),
+ 
+ % "lockUnlock" state
+ map_diff(M1,lockUnlock,OldCfg#doorcfg.lockunlock,NewCfg#doorcfg.lockunlock);
+ 
+% Thermostat
+devconfig_to_map_diff(OldCfg,NewCfg) when is_record(OldCfg,thermocfg), is_record(NewCfg,thermocfg) ->
+ 
+ % "onOff" state
+ M1 = map_diff(#{},onOff,OldCfg#thermocfg.onoff,NewCfg#thermocfg.onoff),
+ 
+ % "tempTarget" state
+ M2 = map_diff(M1,tempTarget,OldCfg#thermocfg.temp_target,NewCfg#thermocfg.temp_target),
+  
+ % "tempCurrent" state
+ map_diff(M2,tempCurrent,OldCfg#thermocfg.temp_current,NewCfg#thermocfg.temp_current); 
 
-% Door
-devmap_to_config(#{'openClose' := OpenClose, 'lockUnlock' := LockUnlock}) ->
- #doorcfg{openclose = OpenClose, lockunlock = LockUnlock};
+% Conditioner
+devconfig_to_map_diff(OldCfg,NewCfg) when is_record(OldCfg,condcfg), is_record(NewCfg,condcfg) ->
+ 
+ % "onOff" state
+ M1 = map_diff(#{},onOff,OldCfg#condcfg.onoff,NewCfg#condcfg.onoff),
+ 
+ % "tempTarget" state
+ M2 = map_diff(M1,tempTarget,OldCfg#condcfg.temp_target,NewCfg#condcfg.temp_target),
+  
+ % "tempCurrent" state
+ M3 = map_diff(M2,tempCurrent,OldCfg#condcfg.temp_current,NewCfg#condcfg.temp_current),
 
-% Invalid device type
-devmap_to_config(_) ->
- throw({error,invalid_devtype}).
+ % "fanSpeed" state
+ map_diff(M3,fanSpeed,OldCfg#condcfg.fanspeed,NewCfg#condcfg.fanspeed);
+ 
+% Different device types
+devconfig_to_map_diff(_,_) ->
+ throw({error,different_devtypes}).
+ 
+%% If two values differ, adds the new one in a Map with key "TraitName", otherwise
+%% returns the Map unchanged (devconfig_to_map_diff(OldCfg,NewCfg) helper function) 
 
+% Same values -> return the Map unchanged
+map_diff(Map,_TraitName,SameValue,SameValue) when is_map(Map)-> 
+ Map;
+ 
+% Different values -> add the NewValue in the map with key "Traitname"
+map_diff(Map,TraitName,_OldValue,NewValue) when is_map(Map), is_atom(TraitName) ->
+ Map#{TraitName => NewValue}. 
+ 
  
 %%====================================================================================================================================
 %%                                                     NODES UTILITY FUNCTIONS
