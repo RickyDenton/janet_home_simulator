@@ -30,16 +30,6 @@ init(_) ->
 	 supervisor,                        % Child Type
 	 [sup_devhandlers]                  % Child Modules (For Release Handling Purposes)
     },
-   
-    %% ---------------- The devices' pairing server (ctr_pairserver) ---------------- %%
-	{
-     ctr_pairserver,		            % ChildID
-     {ctr_pairserver,start_link,[]},    % Child Start Function
- 	 permanent,                         % Child Restart Policy
-	 1000,                              % Child Sub-tree Max Shutdown Time
-	 worker,                  	        % Child Type
-	 [ctr_pairserver]                   % Child Modules (For Release Handling Purposes)
-    },
 	
 	%% -------------- The controller simulation server (ctr_simserver) -------------- %%
 	{
@@ -69,6 +59,16 @@ init(_) ->
 	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [ctr_httpclient]                   % Child Modules (For Release Handling Purposes)
+    },
+	
+	%% ---------------- The devices' pairing server (ctr_pairserver) ---------------- %%
+	{
+     ctr_pairserver,		            % ChildID
+     {ctr_pairserver,start_link,[]},    % Child Start Function
+ 	 permanent,                         % Child Restart Policy
+	 1000,                              % Child Sub-tree Max Shutdown Time
+	 worker,                  	        % Child Type
+	 [ctr_pairserver]                   % Child Modules (For Release Handling Purposes)
     }
    ] 
   }

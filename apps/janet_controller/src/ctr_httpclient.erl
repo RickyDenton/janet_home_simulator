@@ -20,7 +20,12 @@
 
 % Maximum size of the backlogs used for postponing device connection
 % and configuration updates to be sent to the remote REST server
--define(Max_backlog_size,300).  % Default: 300
+-define(Max_backlog_size,300).      % Default: 300
+
+% Initial delay before attempting to connect to the remote REST server so to
+% collect the initial device connection and configuration updates in their
+% respective backlogs, allowing them to be sent in single HTTP requests
+-define(Init_conn_delay,2 * 1000).  % Default: 2* 1000 
 
 %%====================================================================================================================================
 %%                                                  GEN_SERVER CALLBACK FUNCTIONS                                                        
@@ -50,6 +55,11 @@ handle_continue(init,_SrvState) ->
 
  % Ensure that all dependencies of the Gun HTTP client have been started
  {ok,_GunDepsStarted} = application:ensure_all_started(gun),
+ 
+ % Await for a predefined time before attempting to connect with the remote REST
+ % server so to collect the initial device connection and configuration updates
+ % in their respective backlogs, allowing them to be sent in single HTTP requests
+ timer:sleep(?Init_conn_delay),
  
  % Spawn the Gun connection process for attempting to connect with the
  % remote REST server, obtaining its PID and a monitor reference towards it
@@ -270,21 +280,15 @@ handle_info({gun_response,ConnPid,StreamRef,_Fin,Status,_Headers},SrvState=#http
  
   % If it is, do nothing
   200 ->
+   
+   % Logging purposes
    %% [TODO]: Remove
-   io:format("[ctr_httpclient-~w]: Server returned OK for request with StreamRef = ~p~n",[Loc_id,StreamRef]);
-
+   %io:format("[ctr_httpclient-~w]: Server returned OK for request with StreamRef = ~p~n",[Loc_id,StreamRef]);
+   ok;
+   
   % If it is not, log the error
   ErrorCode ->
    io:format("[ctr_httpclient-~w]: <WARNING> Server returned status \"~p\" for request with StreamRef = ~p~n",[Loc_id,ErrorCode,StreamRef])
- end,
-
- % Ensure the "StreamRefs" variable to not be cluttered
- %% [TODO]: Remove
- if
-  length(StreamsRefs) > 20 ->
-   io:format("[ctr_httpclient-~w]: <WARNING> More than 20 references pending in the 'streams_refs' list~n",[Loc_id]);
-  true ->
-   ok
  end,
 
  % Remove the response reference from the 'streams_refs' state variable
@@ -309,7 +313,7 @@ handle_info({gun_response,ConnPid,StreamRef,_Fin,Status,_Headers},SrvState=#http
 handle_info({gun_error,ConnPid,StreamRef,Reason},SrvState=#httpcstate{loc_id=Loc_id,conn_pid=ConnPid,streams_refs=StreamsRefs}) ->
 
  % Log the error
- io:format("[ctr_httpclient-~w]: Gun stream-specific error (reason = ~p) ~n",[Loc_id,Reason]),
+ io:format("[ctr_httpclient-~w]: <ERROR> Gun stream-specific error (reason = ~p) ~n",[Loc_id,Reason]),
 
  % Remove the stream in which the error occured from the list of streams associated with HTTP requests pending a response
  {noreply,SrvState#httpcstate{streams_refs = lists:delete(StreamRef,StreamsRefs)}};
@@ -318,7 +322,7 @@ handle_info({gun_error,ConnPid,StreamRef,Reason},SrvState=#httpcstate{loc_id=Loc
 handle_info({gun_error,ConnPid,Reason},SrvState=#httpcstate{loc_id=Loc_id,conn_pid=ConnPid}) ->
 
  % Log the error
- io:format("[ctr_httpclient-~w]: Gun connection-wide error (reason = ~p) ~n",[Loc_id,Reason]),
+ io:format("[ctr_httpclient-~w]: <ERROR> Gun connection-wide error (reason = ~p) ~n",[Loc_id,Reason]),
 
  % Keep the server state
  {noreply,SrvState};

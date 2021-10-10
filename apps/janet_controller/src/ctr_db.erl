@@ -169,7 +169,7 @@ print_table_records(TableRecords) ->
 print_table_records_list([]) ->
  io:format("~n");
 print_table_records_list([Record|NextRecord]) ->
- io:format("~s~n",[io_lib:format("~p",[Record])]),
+ io:format("~s~n",[io_lib:format("~300p",[Record])]),
  print_table_records_list(NextRecord).
 
 
@@ -193,7 +193,7 @@ print_tree() ->
  SortedSublocList = lists:sort(get_table_records(ctr_sublocation)),
  
  % Print the tree header
- io:format("~n{location ~w}~n",[Loc_id]),
+ io:format("~n{location: ~w}~n",[Loc_id]),
  
  % Print the rest of the tree
  print_tree_subloc(SortedSublocList),
@@ -206,21 +206,23 @@ print_tree_subloc([]) ->
  ok;
 print_tree_subloc([SublocRecord|Next_SublocRecord]) ->
  
- % Retrieve the 'subloc_id' and 'devlist' of the "SublocRecord"
+ % Retrieve the sublocation 'subloc_id'
  Subloc_id = SublocRecord#ctr_sublocation.subloc_id,
- SublocDevList = SublocRecord#ctr_sublocation.devlist,
+ 
+ % Retrieve the sublocation 'devlist' ordered by "Dev_id"
+ SublocDevList = lists:sort(SublocRecord#ctr_sublocation.devlist),
  
  case SublocDevList of
   [] ->
   
    % If the sublocation is empty, just print its header
-   io:format("|--{sublocation ~w} (empty)~n",[Subloc_id]);
+   io:format("|--{sublocation,~w,[]} (empty)~n",[Subloc_id]);
    
   _ ->
   
    % Otherwise print the sublocation header
    % and the list of devices in the sublocation
-   io:format("|--{sublocation ~w}~n",[Subloc_id]),
+   io:format("|--{sublocation,~w,~w}~n",[Subloc_id,SublocDevList]),
 
    % Set the printing indentation accordingly on
    % whether this is the last DevAlloc entry   
@@ -270,7 +272,7 @@ print_tree_devlist([Dev_id|Next_Devid],Indentation) ->
  end,
  
  % Print the device information
- io:format("~s|--{device ~w,~w,~p,~s} - ~s~n",[Indentation,Dev_id,DevRecord#ctr_device.type,Config,LastUpdate,DevStatus]),
+ io:format("~s|--{device,~w,~w,~p,~s} - ~s~n",[Indentation,Dev_id,DevRecord#ctr_device.type,Config,LastUpdate,DevStatus]),
  
  % Proceed with the next device, preserving the indentation
  print_tree_devlist(Next_Devid,Indentation).

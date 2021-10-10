@@ -356,7 +356,7 @@ print_table() ->
 print_table_header(location) ->
  io:format("LOCATION TABLE {loc_id,name,user,port}~n==============~n");
 print_table_header(sublocation) ->
- io:format("SUBLOCATION TABLE {sub_id,name}~n=================~n");
+ io:format("SUBLOCATION TABLE {sub_id,name,devlist}~n=================~n");
 print_table_header(device) -> 
  io:format("DEVICE TABLE {dev_id,name,sub_id,type,config,lastupdate}~n============~n");
 print_table_header(suploc) -> 
@@ -376,7 +376,7 @@ print_table_records(TableRecords) ->
 print_table_records_list([]) ->
  io:format("~n");
 print_table_records_list([Record|NextRecord]) ->
- io:format("~s~n",[io_lib:format("~p",[Record])]),
+ io:format("~s~n",[io_lib:format("~300p",[Record])]),
  print_table_records_list(NextRecord).
  
 
@@ -500,8 +500,8 @@ print_tree_user([]) ->
  ok;
 print_tree_user([User|NextUser]) ->
  
- % Retrieve the user's locations list
- Loclist = mnesia:dirty_match_object(#location{user = User, _ = '_'}),
+ % Retrieve the list of user's locations and sort them by "Loc_id"
+ Loclist = lists:sort(mnesia:dirty_match_object(#location{user = User, _ = '_'})),
 
  % Print information on the user
  io:format("{user: ~s}~n",[io_lib:format("~p",[User])]),
@@ -517,8 +517,11 @@ print_tree_location([],_) ->
  ok;
 print_tree_location([Loc|Nextloc],Indent) ->
  
- % Retrieve the list of sublocations in the location (note that at least the "(default)" sublocation is always present)
- Subloclist = mnesia:dirty_match_object(#sublocation{sub_id = {Loc#location.loc_id,'_'}, _ = '_'}),
+ % Retrieve the list of sublocations in the location and sort them by "sub_id"
+ %
+ % NOTE: Each location contains at least the "(default)" sublocation {Loc_id,0} 
+ %
+ Subloclist = lists:sort(mnesia:dirty_match_object(#sublocation{sub_id = {Loc#location.loc_id,'_'}, _ = '_'})),
  
  % Retrieve the location controller's status from the ctrmanager table
  ReadMgrRecord = mnesia:dirty_read({ctrmanager,Loc#location.loc_id}),
@@ -548,24 +551,24 @@ print_tree_location([Loc|Nextloc],Indent) ->
  print_tree_location(Nextloc,Indent).
 
 
-%% Prints all devices in a list of locations as a tree (print_tree(sublocation,Sub_id), print_tree_location([Loc|NextLoc],Indent) helper function)
+%% Prints all devices in a list of sublocations as a tree (print_tree(sublocation,Sub_id), print_tree_location([Loc|NextLoc],Indent) helper function)
 print_tree_sublocation([],_,_) ->
  ok;
 print_tree_sublocation([Subloc|NextSubloc],Indent1,Indent2) ->
 
- % Retrieve the list of devices in the sublocation
- Devlist = mnesia:dirty_match_object(#device{sub_id=Subloc#sublocation.sub_id, _ = '_'}),
+ % Retrieve the list of devices in the sublocation and sort them by "Dev_id"
+ Devlist = lists:sort(mnesia:dirty_match_object(#device{sub_id=Subloc#sublocation.sub_id, _ = '_'})),
  
  case Devlist of
   [] ->
    
    % If the sublocation is empty, just print its information
-   io:format("~s~s (empty)~n",[Indent1++Indent2,io_lib:format("~p",[Subloc])]);
+   io:format("~s{sublocation,~w,~p,[]} (empty)~n",[Indent1++Indent2,Subloc#sublocation.sub_id,Subloc#sublocation.name]);
 		  
   _Devices ->
    
    % Otherwise also print the devices within the location as a tree, taking the indentation into account
-   io:format("~s~s~n",[Indent1++Indent2,io_lib:format("~p",[Subloc])]),
+   io:format("~s{sublocation,~w,~p,~w}~n",[Indent1++Indent2,Subloc#sublocation.sub_id,Subloc#sublocation.name,Subloc#sublocation.devlist]),
    case {Indent2, NextSubloc} of
     {"|--",[]} ->
 	 print_tree_device(Devlist,Indent1 ++ "   " ++ Indent2);
@@ -597,8 +600,8 @@ print_tree_device([Dev|NextDev],Indent) ->
  end,
  
  % Print information on the device
- io:format("~s{~w,~s,~w,~w,~p,~s} - ~s~n",[Indent, Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]), Dev#device.sub_id, Dev#device.type, utils:deprefix_dev_config(Dev#device.config),
-										   string:slice(calendar:system_time_to_rfc3339(Dev#device.lastupdate,[{time_designator,$\s}]),0,19), DevMgrStatus]),
+ io:format("~s{device,~w,~s,~w,~w,~p,~s} - ~s~n",[Indent, Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]), Dev#device.sub_id, Dev#device.type, utils:deprefix_dev_config(Dev#device.config),
+										  		 string:slice(calendar:system_time_to_rfc3339(Dev#device.lastupdate,[{time_designator,$\s}]),0,19), DevMgrStatus]),
  % Parse the next device in the list
  print_tree_device(NextDev,Indent).
 
