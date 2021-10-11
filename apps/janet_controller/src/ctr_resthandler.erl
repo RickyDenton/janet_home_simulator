@@ -7,7 +7,7 @@
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
 %% -------------------------- gen_resthandler BEHAVIOUR CALLBACK FUNCTIONS -------------------------- %%
--export([start_link/0,init_handler/1,init/2,err_to_code_msg/1]).
+-export([start_link/0,init_handler/1,init/2,err_to_code_msg/1,os_port_conflict/1]).
 
 %% -------------------------------- RESOURCES AND OPERATIONS HANDLERS -------------------------------- %%
 -export([res_subloc_handler/1,              % /sublocation/:subloc_id resource handler
@@ -176,6 +176,20 @@ err_to_code_msg(jsone_encode_error) ->
 %% ------------- 
 err_to_code_msg(UnknownError) ->
  {500,io_lib:format("<UNKNOWN SERVER ERROR> Unknown error: ~p",[UnknownError])}.
+ 
+
+%% ====================================================== OS_PORT_CONFLICT ====================================================== %% 
+os_port_conflict(RESTPort) ->
+
+ % Retrieve the controller's location ID
+ {ok,Loc_id} = application:get_env(janet_controller,loc_id),
+
+ % Report that the REST server of the JANET Controller application will not be reachable by the remote client during the execution
+ io:format("[ctr_resthandler-~w]: <PORT CONFLICT> Port \"~w\" is not available in the host OS, the JANET Controller REST server will NOT be reachable by the remote client~n",[Loc_id,RESTPort]),
+ 
+ % Return the atom 'ignore' so to prevent the 'sup_jctr' root supervisor from reattempting
+ % to restart the process (which would be useless being the REST port unavailable) 
+ ignore.
  
  
 %%==================================================================================================================================%

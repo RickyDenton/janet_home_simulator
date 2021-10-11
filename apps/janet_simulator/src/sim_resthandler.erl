@@ -4,7 +4,7 @@
 -behaviour(gen_resthandler).  % Custom REST handler behaviour
 
 %% -------------------------- gen_resthandler BEHAVIOUR CALLBACK FUNCTIONS -------------------------- %%
--export([start_link/0,init_handler/1,init/2,err_to_code_msg/1]). % gen_resthandler behaviour callback functions
+-export([start_link/0,init_handler/1,init/2,err_to_code_msg/1,os_port_conflict/1]).
 
 %% -------------------------------- RESOURCES AND OPERATIONS HANDLERS -------------------------------- %%
 -export([res_loc_handler/1,                                      % /location/:loc_id resource handler
@@ -118,6 +118,18 @@ err_to_code_msg({device_not_exists,Dev_id}) ->
 %% ------------- 
 err_to_code_msg(UnknownError) ->
  {500,io_lib:format("<UNKNOWN SERVER ERROR> Unknown error: ~p",[UnknownError])}.
+
+
+%% ====================================================== OS_PORT_CONFLICT ====================================================== %% 
+os_port_conflict(RESTPort) ->
+
+ % Report that the REST server of the JANET Simulator application will not be reachable by the remote client during
+ % the execution (which should NOT happen since the availability of such port was checked at the application startup)
+ io:format("[sim_resthandler]: <PORT CONFLICT> Port \"~w\" is not available in the host OS, the JANET Simulator REST server will NOT be reachable by the remote client~n",[RESTPort]),
+
+ % Return the atom 'ignore' so to prevent the 'sup_jsim' root supervisor from reattempting
+ % to restart the process (which would be useless being the REST port unavailable) 
+ ignore.
  
  
 %%==================================================================================================================================%

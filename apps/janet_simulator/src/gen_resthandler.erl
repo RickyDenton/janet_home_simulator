@@ -79,6 +79,22 @@
   {HTTPErrorCode::integer(),ErrorDescr::list()}.
 
 
+%% DESCRIPTION:     Host OS Port allocation conflict callback
+%%
+%% CALLED WHEN:     The "RESTPort" passed by the callback module in the
+%%                  "init_handler" callback function is not available in the host OS
+%%
+%% ARGUMENTS:       - RESTPort: The port that is not available in the host OS (int > 0)
+%%
+%% ALLOWED RETURNS: - {stop,Reason} -> The gen_resthandler will return the error Reason to its
+%%                                     parent supervisor and then exit via the exit(Reason) BIF
+%%	                - ignore        -> The gen_resthandler will return 'ignore' to its parent
+%%                                     supervisor and then exit via the exit(normal) BIF 
+%%
+-callback os_port_conflict(RESTPort::integer()) ->
+ {stop,Reason::term()} | ignore. 
+  
+  
 %%====================================================================================================================================
 %%                                                    GEN_RESTHANDLER PUBLIC API                                                       
 %%====================================================================================================================================
@@ -577,68 +593,114 @@ init(Parent,Module,Args) ->
     
  {Dbg,ListenerName} =
  try
- 
-    % Trap exit signals so to allow cleanup operations when terminating ({'EXIT',Parent,Reason} in main receive loop)
-    process_flag(trap_exit,true),
- 
-    % Set a default debug structure for the
-    % process (sys debug facilities support)
-    DbgStruct = sys:debug_options([]),
- 
-    % Ensure that all Cowboy application dependencies are running
-	{ok, _StartedApps} = application:ensure_all_started(cowboy),
- 
-    % Call the init_handler() callback function with the Args passed by the
-	% start_link() function, which returns the following information as a tuple:
-    %
-	% - RESTPort:     The port to be used by the Cowboy listener
-    % - RemoteHost:   The name/ip of the remote host from which
-    %                 accept REST requests (in addition to localhost)
-    % - ListenerName: The name (atom) by which register the
-    %                 callback module as a cowboy listener
-    % - Paths:        The list of resource handlers paths
-	%                 implemented by the callback module
-	% 
-	{ok,RESTPort,RemoteHost,ListenerName_,Paths} = Module:init_handler(Args),
- 
-    % Initialize the list of Cowboy routes by merging the list of resource
-    % paths with the list of accepted hosts (the RemoteHost and localhost)
-    Routes = [{"localhost",Paths},{RemoteHost,Paths}],
-    
-	% Compile the Cowboy Routes
-    CompiledRoutes = cowboy_router:compile(Routes),
- 
-    % Start the Cowboy Listener
-    {ok,_} = cowboy:start_clear(ListenerName_,                           % Listener Name
-                                [{port, RESTPort}],                      % Listener Port
-							    #{
-								  env => #{dispatch => CompiledRoutes},  % Listener Routes
-								  request_timeout => infinity            % Connection persistence
-								  }
-							   ),
-	
-    % Log that the REST handler has started
-    io:format("[~p]: Successfully initialized~n",[ListenerName_]),
 
-    % Inform the parent process that the
-	% synchronous initialization is complete	
-	proc_lib:init_ack(Parent,{ok,self()}),
+   %% ---------------------------------------- Initial Setup ---------------------------------------- %	
+   
+   % Trap exit signals so to allow cleanup operations when terminating ({'EXIT',Parent,Reason} in main receive loop)
+   process_flag(trap_exit,true),
+ 
+   % Set a default debug structure for the
+   % process (sys debug facilities support)
+   DbgStruct = sys:debug_options([]),
+ 
+   % Call the init_handler() callback function with the Args passed by the
+   % start_link() function, which returns the following information as a tuple:
+   %
+   % - RESTPort:     The port to be used by the Cowboy listener
+   % - RemoteHost:   The name/ip of the remote host from which
+   %                 accept REST requests (in addition to localhost)
+   % - ListenerName: The name (atom) by which register the
+   %                 callback module as a cowboy listener
+   % - Paths:        The list of resource handlers paths
+   %                 implemented by the callback module
+   % 
+   {ok,RESTPort,RemoteHost,ListenerName_,Paths} = Module:init_handler(Args),
+ 
+   try
 	
-	% Return the {Dbg,ListenerName} tuple
-	{DbgStruct,ListenerName_}
+	 %% ---------------------------------------- Cowboy Setup ---------------------------------------- %	
+
+     % Ensure that all Cowboy application dependencies are running
+     {ok, _StartedApps} = application:ensure_all_started(cowboy),
+   
+     % Initialize the list of Cowboy routes by merging the list of resource
+     % paths with the list of accepted hosts (the RemoteHost and localhost)
+     Routes = [{"localhost",Paths},{RemoteHost,Paths}],
+    
+	 % Compile the Cowboy Routes
+     CompiledRoutes = cowboy_router:compile(Routes),
+ 
+     % Attempt to start the Cowboy Listener
+     {ok,_} = cowboy:start_clear(ListenerName_,                           % Listener Name
+                                 [{port, RESTPort}],                      % Listener Port
+		 					      #{
+								    env => #{dispatch => CompiledRoutes},  % Listener Routes
+								    request_timeout => infinity            % Connection persistence
+	   						       }
+							     ),
 	
+      % Log that the REST handler has started
+      %% [TODO]: Remove
+	  %io:format("[~p]: Successfully initialized~n",[ListenerName_]),
+
+      % Inform the parent process that the
+	  % synchronous initialization is complete	
+	  proc_lib:init_ack(Parent,{ok,self()}),
+	
+	  % Return the {Dbg,ListenerName} tuple
+	  {DbgStruct,ListenerName_}
+	  
+   catch
+	
+	%% ------------------------------------- Cowboy Setup Errors ------------------------------------- %
+	
+	% If the REST port is not available in the host OS, rethrow the error
+    error:{badmatch,{error,eaddrinuse}} ->
+	 throw({os_port_conflict,RESTPort})
+	  
+   end
+	  
   catch
   
-   % If an exception was thrown during the initializaiton
+   %% ----------------------------------------- Setup Errors ----------------------------------------- %
+   
+   % If the REST port is not available in the host OS
+   {os_port_conflict,RESTPortConflict} ->
+  
+    % Determine the gen_resthandler shutdown strategy by
+	% calling the 'os_port_conflict' callback function
+    case Module:os_port_conflict(RESTPortConflict) of
+	 ignore ->
+	 
+	  % Inform the parent supervisor that
+	  % this child process should be ignored
+	  proc_lib:init_ack(Parent,ignore),
+	  
+	  % Exit with reason 'normal' so to prevent the parent
+	  % supervisor from reattempting to restart the gen_resthandler
+	  exit(normal);
+	  
+	 {stop,Reason} ->
+	 
+	  % Inform the parent supervisor that this child process
+	  % is stopping for an error of the given Reason
+	  proc_lib:init_ack(Parent,{error,Reason}),
+	    
+	  % Exit with the same Reason
+	  exit(Reason)
+	end;
+  
+   % Unhandled error in the gen_resthandler initialization
    _:Reason ->
    
     % Log the error
-    io:format("<FATAL> in gen_resthandler: ~p",[Reason]),
+    io:format("[gen_resthandler]: <FATAL> Unhandled error: ~p",[Reason]),
 	
-	% Inform the parent supervisor of the error
+	% Inform the parent supervisor that this child process
+	% is stopping for an error of the given Reason
 	proc_lib:init_ack(Parent,{error,Reason}),
    
-    % Exit with the same error reason
+	% Exit with the same Reason
     exit(Reason)  
 	
   end,

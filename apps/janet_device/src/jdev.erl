@@ -76,11 +76,16 @@ shutdown() ->
 %%====================================================================================================================================
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
+ 
+%% Called during the "application:start(janet_device)"
+%% call for starting the JANET Device application
+start(normal,_Args) ->
 
-%% Starts the JANET Device
-start(normal, _Args) ->
+ % Start the root supervision tree of the JANET Device application
  sup_jdev:start_link().
  
-%% Called once the JANET Device has been stopped
+ 
+%% Called during the "application:stop(janet_device)"
+%% call AFTER the application has been stopped
 stop(_State) ->
  ok.

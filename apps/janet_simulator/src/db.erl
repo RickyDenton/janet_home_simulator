@@ -21,6 +21,7 @@
 %%==================================================================================================================================== 
 
 %% NOTE: All the public CRUD functions crash if Mnesia is NOT started on the node (which is automatically performed by the 'init' process at startup)
+%% [TODO]: Check if this is still true
 
 %% ========================================================== CREATE =============================================================== %%
 
@@ -1465,13 +1466,14 @@ delete_devmanager(Dev_id) ->
 
 %% DESCRIPTION:  Ensure the Mnesia application to be started and for the disc_copies tables required
 %%               by the JANET Simulator application (location,sublocation,device) to be loaded
-%%               (called during the bootstrap of the JANET Simulator application)
 %%
 %% ARGUMENTS:    none 
 %%
 %% RETURNS:      - ok                     -> Mnesia started and disc_copies tables successfully loaded
-%%               - {error,tables_timeout} -> Timeout in loading the Mnesia Tables (probably a wrong schema is installed)
-%%               - {error,Reason}         -> Internal Mnesia error (probably the schema is not installed)
+%%
+%% THROWS:       - {error,{mnesia,tables_timeout}} -> Timeout in loading the Mnesia Tables
+%%                                                    (probably a wrong schema is installed)
+%%               - {error,{mnesia,Reason}}         -> Internal Mnesia error (probably the schema is not installed)
 %%
 start_check_mnesia() ->
  
@@ -1499,21 +1501,21 @@ start_check_mnesia() ->
 	 % If the tables were successfully loaded, return 'ok'
 	 ok;
 	
-	% If the tables couldn't be loaded due to a timeout, notify the error
+	% If the tables couldn't be loaded due to a timeout, throw an error
     {timeout,TableList} ->
 	 io:format("<FATAL> Timeout in loading the Mnesia tables ~w (is the correct Mnesia scheme installed?...)~n",[TableList]),
-	 {error,tables_timeout};
+	 throw({error,{mnesia,tables_timeout}});
 	 
-	% If the tables couldn't be loaded due to another error, notify it
+	% If the tables couldn't be loaded due to another error, throw it
     {error,LoadReason} ->
 	 io:format("<FATAL> Error in loading the Mnesia tables (reason = ~w)~n",[LoadReason]),
-     {error,LoadReason}	 
+     throw({error,{mnesia,LoadReason}}) 
    end;
    
-  % Otherwise, notify the error in starting Mnesia
+  % Otherwise, throw the error in starting Mnesia
   {error,Reason} ->
    io:format("<FATAL> Error in starting Mnesia (reason = ~w) (is the Mnesia scheme installed?...)~n"),
-   {error,Reason}
+   throw({error,{mnesia,Reason}})
  end.
  
 
@@ -1575,33 +1577,35 @@ backup(FileName) when is_atom(FileName) ->
 % If a list FileName was passed (as expected) 
 backup(FileName) when is_list(FileName) ->
 
- % Ensure Mnesia to be running and in a consistent state
- case start_check_mnesia() of
-  ok ->
-  
-   % If it is, append the default Mnesia directory ("db/") to the file name
-   FilePath = "db/" ++ FileName,
+ try 
+ 
+  % Ensure Mnesia to be running and in a consistent state 
+  ok = start_check_mnesia(),
+
+  % Append the default Mnesia directory ("db/") to the file name
+  FilePath = "db/" ++ FileName,
 	 
-   % Attempt to backup the database contents to the specified file
-   case mnesia:backup(FilePath) of
+  % Attempt to backup the database contents to the specified file
+  case mnesia:backup(FilePath) of
    
-    ok -> 
+   ok -> 
 
-     % If the backup was successful, notify it
-	 io:format("Mnesia database successfully backed up to file \"~s\"~n",[FilePath]);
+    % If the backup was successful, notify it
+	io:format("Mnesia database successfully backed up to file \"~s\"~n",[FilePath]);
 
-    {error,Reason} ->
+   {error,BackupReason} ->
 	
-	 % Otherwise, notify the error
-     io:format("<WARNING> Error in creating the backup file \"~s\" (check the directory to exist and its 'write' permission to be granted)~n",[FilePath]),
-     {file_error,Reason}
-   end;
+	% Otherwise, notify the error
+    io:format("<WARNING> Error in creating the backup file \"~s\" (check the directory to exist and its 'write' permission to be granted)~n",[FilePath]),
+    {file_error,BackupReason}
+  end
    
-  {error,Reason} ->
+ catch
+  {error,{mnesia,Reason}} ->
   
-    % If the Mnesia database is NOT in a consistent state, abort the backup
-	io:format("The Mnesia database is not in a consistent state, the backup cannot be created~n"),
-	{mnesia_error,Reason}
+   % If Mnesia cannot be started or is not in a consistent state, abort the backup
+   io:format("The Mnesia database is not in a consistent state, the backup cannot be created~n"),
+   {mnesia_error,Reason}
  end;
 
 % The FileName is neither an atom or a list
@@ -1649,33 +1653,35 @@ restore(FileName) when is_list(FileName) ->
   % If the user confirmed the operation
   ok ->
   
-   % Ensure Mnesia to be running and in a consistent state
-   case start_check_mnesia() of
-    ok ->
+   try 
+ 
+    % Ensure Mnesia to be running and in a consistent state 
+    ok = start_check_mnesia(),
+
+	% Append the default Mnesia directory ("db/") to the file name
+	FilePath = "db/" ++ FileName,
 	
-	 % If it is, append the default Mnesia directory ("db/") to the file name
-	 FilePath = "db/" ++ FileName,
-	
-     % Attempt to restore its tables to the contents of the specified file 
-	 case mnesia:restore(FilePath,[{default_op,recreate_tables}]) of
+    % Attempt to restore its tables to the contents of the specified file 
+	case mnesia:restore(FilePath,[{default_op,recreate_tables}]) of
 	 
-	  {atomic,_} ->
+	 {atomic,_} ->
 	  
-	   % If the restoring was successful, notify it
-	   io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[FilePath]);
+	  % If the restoring was successful, notify it
+	  io:format("Mnesia database successfully restored to the contents of the \"~s\" file~n",[FilePath]);
 	   
-      {aborted,Reason} ->
+     {aborted,RestoreReason} ->
 	  
-	   % If an error occured while restoring, notify it
-	   io:format("<FATAL> Error in restoring the Mnesia database (reason = ~w)~n",[Reason]),
-	   {file_error,Reason}
-	 end;
-	 
-    {error,Reason} ->
+	  % If an error occured while restoring, notify it
+	  io:format("<FATAL> Error in restoring the Mnesia database (reason = ~w)~n",[RestoreReason]),
+	  {file_error,RestoreReason}
+	end
+	
+   catch
+    {error,{mnesia,Reason}} ->
   
-      % If the Mnesia database is NOT in a consistent state, abort the restore
-	  io:format("The Mnesia database is not in a consistent state, its contents cannot be restored~n"),
-	  {mnesia_error,Reason}
+     % If Mnesia cannot be started or is not in a consistent state, abort the restore
+	 io:format("The Mnesia database is not in a consistent state, its contents cannot be restored~n"),
+     {mnesia_error,Reason}
    end;
    
   % Otherwise, return the result of the check_db_operation()
@@ -1709,23 +1715,25 @@ clear() ->
   % If the user confirmed the operation
   ok ->
   
-   % Ensure Mnesia to be running and in a consistent state
-   case start_check_mnesia() of
-    ok ->   
+   try 
+ 
+    % Ensure Mnesia to be running and in a consistent state 
+    ok = start_check_mnesia(),
 	
-     % If Mnesia is in a consistent state, clear all its tables
-     [{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok}] =
-	  [mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device),
-	   mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
+    % Clear all Mnesia tables used by the JANET Simulator application
+    [{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok},{atomic,ok}] =
+	 [mnesia:clear_table(location),mnesia:clear_table(sublocation),mnesia:clear_table(device),
+	  mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
      
-     % Return the result of the operation
-     io:format("Mnesia tables successfully cleared~n");
-	 
-	{error,Reason} ->
+    % Return the result of the operation
+    io:format("Mnesia tables successfully cleared~n")
 	
-	 % If Mnesia is NOT in a consistent state, its tables cannot be cleared
+   catch
+    {error,{mnesia,Reason}} ->
+  
+     % If Mnesia cannot be started or is not in a consistent state, its tables cannot be cleared
 	 io:format("The Mnesia database is not in a consistent state, its tables cannot be cleared~n"),
-	 {mnesia_error,Reason}
+     {mnesia_error,Reason}
    end;
 	  
   % Otherwise, return the result of the check_db_operation()

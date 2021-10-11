@@ -70,14 +70,19 @@ run(_,_,_,_,_,_,_,_,_) ->
 shutdown() ->
  init:stop("shutdown").
  
+ 
 %%====================================================================================================================================
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-%% Starts the JANET Controller
+%% Called during the "application:start(janet_controller)"
+%% call for starting the JANET Controller application
 start(normal,_Args) ->
- sup_jctr:start_link().
  
-%% Called once the JANET Controller has been stopped
+ % Start the root supervision tree of the JANET Simulator application
+ sup_jctr:start_link().
+
+%% Called during the "application:stop(janet_controller)"
+%% call AFTER the application has been stopped
 stop(_State) ->
  ok.

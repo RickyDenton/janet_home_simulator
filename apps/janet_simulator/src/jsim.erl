@@ -19,9 +19,9 @@
 -export([stop_subloc/1,restart_subloc/1]).                           % Per-sublocation stop/restart
 -export([stop_loc/1,restart_loc/1]).                                 % Per-location stop/restart
 -export([stop_all_nodes/0,restart_all_nodes/0]).                     % All-nodes stop/restart
-
-%% ---------------------------------- SIMULATION UTILITY FUNCTIONS ---------------------------------- %%
 -export([print_nodes/0,print_nodes/1]).                              % Running and stopped nodes info
+
+%% ---------------------------------- NODES INTERACTIONS FUNCTIONS ---------------------------------- %%
 -export([print_ctr_table/1,print_ctr_table/2,                        % Controller Nodes interaction
          print_ctr_tree/1,ctr_command/4]).   
 -export([dev_config_change/2,dev_command/4]).                        % Device Nodes interaction
@@ -31,89 +31,60 @@
 
 -include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
+%%====================================================================================================================================%
+%%                                                                                                                                    %
+%%                                                    JANET SIMULATOR PUBLIC API                                                      %
+%%                                                                                                                                    %
+%%====================================================================================================================================%
+
 %%====================================================================================================================================
-%%                                                  JANET SIMULATOR RUN AND STOP                                                       
+%%                                                   JANET SIMULATOR RUN AND STOP                                                       
 %%====================================================================================================================================
 
-%% DESCRIPTION:  Attempts to start the JANET Simulator application with the default environment parameters:
-%%                 - sim_rest_port           -> 45678
-%%                 - remote_rest_client      -> "janethome.zapto.org"
-%%                 - remote_rest_server_addr -> "janethome.zapto.org" [TODO]: Check
-%%                 - remote_rest_server_port -> 50505                 [TODO]: Check
+%% DESCRIPTION:  Starts the JANET Simulator application
 %%
-%% ARGUMENTS:    none
+%% ARGUMENTS:    (none):                 Attempt to start the JANET Simulator with the default remote
+%%                                       host configuration parameters (file "config/sys.config")
+%%               - SimRESTPort:          The OS port to be used by the JANET Simulator REST server
+%%                                       (int >= 30000 for preventing port allocation conflicts)
+%%               - RemoteRESTClient:     The address of the remote client issuing REST requests
+%%                                       to the JANET Simulator and Controller nodes (a list)
+%%               - RemoteRESTServerAddr: The address of the remote server accepting REST
+%%                                       requests from the JANET Controller nodes (a list)
+%%               - RemoteRESTServerPort: The port of the remote server accepting REST
+%%                                       requests from the JANET Controller nodes (int > 0)
 %%
-%% RETURNS:      - ok                         -> JANET Simulator succesfully started
-%%               - {error,already_running}    -> The janet_simulator application is already running on the node
-%%               - {error,mnesia_init_failed} -> The Janet Simulator cannot be started due to an invalid Mnesia configuration
-%%               - {error,Reason}             -> Internal error in starting the application
-%%               - {error,badarg}             -> Invalid arguments
+%% RETURNS:      - ok                      -> JANET Simulator succesfully started
+%%               - {error,already_running} -> The janet_simulator application is already running on the node
+%%               - {mnesia_error,Reason}   -> The Mnesia database is not in a consistent state
+%%                                            (probably a wrong or no schema is installed)
+%%               - {error,port_conflict}   ->  
+%%               - {error,Reason}          -> Internal error in starting the application
+%%               - {error,badarg}          -> Invalid arguments
 %%
+
+%% Default remote host configuration parameters
 run() ->
  
- % Retrieve the default values of the environment parameters used for interfacing with the remote host
+ % Retrieve the default remote host configuration parameters
  {ok,SimRESTPort} = application:get_env(janet_simulator,default_sim_rest_port),
  {ok,RemoteRESTClient} = application:get_env(janet_simulator,default_remote_rest_client),
  {ok,RemoteRESTServerAddr} = application:get_env(janet_simulator,default_remote_rest_server_addr),
  {ok,RemoteRESTServerPort} = application:get_env(janet_simulator,default_remote_rest_server_port),
  
- % Attempt to start the JANET Simulator application with such default parameters
- run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort).
+ % Attempt to start the JANET Simulator application with the default remote host configuration parameters
+ janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort).
  
+%% Custom remote host configuration parameters
+run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) 
+    when is_number(SimRESTPort), SimRESTPort >= 30000, is_list(RemoteRESTClient),
+         is_list(RemoteRESTServerAddr), is_number(RemoteRESTServerPort), RemoteRESTServerPort > 0 ->
 
-%% DESCRIPTION:  Attempts to start the JANET Simulator application given the set of environment parameters for interfacing with the remote host
-%%
-%% ARGUMENTS:    - SimRESTPort:          The OS port to be used by the JANET Simulator REST server (int >= 30000 for preventing port allocation conflicts)
-%%               - RemoteRESTClient:     The address of the remote client issuing REST requests to the JANET Simulator and Controller nodes (a list)
-%%               - RemoteRESTServerAddr: The address of the remote server accepting REST requests from the JANET Controller nodes (a list)
-%%               - RemoteRESTServerPort: The port of the remote server accepting REST requests from the JANET Controller nodes (int > 0)
-%%
-%% RETURNS:      - ok                         -> JANET Simulator succesfully started
-%%               - {error,already_running}    -> The janet_simulator application is already running on the node
-%%               - {error,mnesia_init_failed} -> The Janet Simulator cannot be started due to an invalid Mnesia configuration
-%%               - {error,Reason}             -> Internal error in starting the application
-%%               - {error,badarg}             -> Invalid arguments
-%%
-run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) when is_number(SimRESTPort), SimRESTPort >= 30000,
-                                                                                 is_list(RemoteRESTClient), is_list(RemoteRESTServerAddr),
-                                                                                 is_number(RemoteRESTServerPort), RemoteRESTServerPort > 0 ->
- % Check if the JANET Simulator is already running
- case utils:is_running(janet_simulator) of
-  true ->
-  
-   % If it is, return an error
-   {error,already_running};
-   
-  false ->
-   
-   % If it is not, ensure the Mnesia database to be running and for the disc_copies tables
-   % required by the JANET Simulator application (location,sublocation,device) to be loaded
-   case db:start_check_mnesia() of
+ % Attempt to start the JANET Simulator application with such custom remote host configuration parameters
+ janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort);
  
-    ok ->
-     
-	 % If Mnesia is in a consistent state, initialize the set of
-	 % environment parameters used for interfacing with the remote host
-	 application:set_env(janet_simulator,sim_rest_port,SimRESTPort),
-     application:set_env(janet_simulator,remote_rest_client,RemoteRESTClient),
-	 application:set_env(janet_simulator,sim_rest_server_addr,RemoteRESTServerAddr),
-     application:set_env(janet_simulator,sim_rest_server_port,RemoteRESTServerPort),
-	 
-	 %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
-     
-	 % Attempt to start the JANET Simulator application
-     application:start(janet_simulator);
-	 
-    _ ->
-   
-     % If Mnesia is NOT in a consistent state, the JANET Simulator cannot be started
-	 io:format("The Mnesia database is not in a consistent state, the JANET Simulator cannot be started~n"),
-     {error,mnesia_init_failed}
-   end
- end;
- 
-%% Invalid syntax (print help message) 
-run(_,_,_,_) ->
+%% Invalid custom remote host configuration parameters (print help message) 
+run(_SimRESTPort,_RemoteRESTClient,_RemoteRESTServerAddr,_RemoteRESTServerPort) ->
  io:format("usage: run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort)~n~n"),
  io:format("- SimRESTPort:          The OS port to be used by the JANET Simulator REST server (int >= 30000 for preventing port allocation conflicts)~n"),
  io:format("- RemoteRESTClient:     The address of the remote client issuing REST requests to the JANET Simulator and Controller nodes (a list)~n"),
@@ -122,62 +93,34 @@ run(_,_,_,_) ->
  {error,badarg}.
  
 
-%% DESCRIPTION:  Stops the JANET Simulator
+%% DESCRIPTION:  Stops the JANET Simulator application
 %%
 %% ARGUMENTS:    none 
 %%
-%% RETURNS:      - ok                  -> JANET Simulator succesfully stopped
-%%               - {error,not_running} -> The JANET Simulator is not running on the node
-%%               - {error,Reason}      -> Internal error in stopping the application
+%% RETURNS:      - ok                          -> JANET Simulator succesfully stopped
+%%               - {error,not_running}         -> The JANET Simulator is not running
+%%               - {error,{janet_stop,Reason}} -> Internal error in stopping the application
 %%
 stop() ->
+ janet_stop().
 
- % Check if the JANET Simulator is running
- case utils:is_running(janet_simulator) of
-  false ->
-  
-   % If it is not, return an error
-   {error,not_running};
-  
-  true ->
-  
-   % Otherwise, attempt to stop the JANET Simulator
-   case application:stop(janet_simulator) of
-    ok ->
-	 
-	 % If stopped, clear all Mnesia ram_copies tables and report the operation
-     [{atomic,ok},{atomic,ok},{atomic,ok}] = 
-	  [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
-   
-	 %% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
-	 timer:sleep(5),                            
-	 
-	 % Inform that the JANET Simulator has successfully stopped
-     io:format("Janet Simulator stopped~n");
-	 
-	{error,Reason} ->
-	 
-	 % Otherwise, notify the error
-     io:format("<FATAL> Error in stopping the Janet Simulator (reason = ~w)~n",[Reason]),
-	 {error,Reason}
-   end
- end.
-
-
-%% DESCRIPTION:  Stops the Janet Simulator and Mnesia application, as well as the erlang node
+ 
+%% DESCRIPTION:  Stops the JANET Simulator application and then
+%%               shuts down the entire Erlang Run-Time System (ERTS)
 %%
 %% ARGUMENTS:    none 
 %%
-%% RETURNS:      - ok -> JANET Simulator node succesfully stopped
+%% RETURNS:      - (the Erlang node is terminated)
 %% 
 shutdown() ->
  
- % Attempt to stop both the Janet Simulator and Mnesia applications
- stop(),
+ % Attempt to stop the JANET Simulator application
+ janet_stop(),
  
- % Shut down the node
+ % Regardless of whether the JANET Simulator application was stopped
+ % successfully, shut down the entire Erlang Run-Time System (ERTS)
  init:stop().
-
+ 
 
 %%====================================================================================================================================
 %%                                                  DATABASE INTERFACE FUNCTIONS
@@ -722,10 +665,6 @@ restart_all_nodes() ->
  catch(change_all_nodes_statuses(restart)).
 
 
-%%====================================================================================================================================
-%%                                                   SIMULATION UTILITY FUNCTIONS                                                        
-%%====================================================================================================================================
-
 %% =============================================== RUNNING AND STOPPED NODES INFO =============================================== %%
 
 %% DESCRIPTION:  Prints the IDs of all stopped and/or running JANET nodes
@@ -754,8 +693,12 @@ print_nodes(_) ->
  io:format("usage: print_nodes(stopped|running|all)~n"),
  {error,badarg}. 
  
+
+%%====================================================================================================================================
+%%                                                   NODES INTERACTIONS FUNCTIONS                                                       
+%%====================================================================================================================================
  
-%% ================================================ CONTROLLER NODES INTERACTION  ================================================ %%
+%% ================================================ CONTROLLER NODES INTERACTION ================================================ %%
 
 %% DESCRIPTION:  Prints a specific or all Mnesia RAM Tables in a running controller node
 %%
@@ -841,7 +784,7 @@ ctr_command(_,_,_,_) ->
  {error,badarg}.
 
 
-%% ================================================== DEVICE NODES INTERACTION  ================================================== %%
+%% ================================================== DEVICE NODES INTERACTION ================================================== %%
 
 %% DESCRIPTION:  Changes the configuration of a running device node
 %%
@@ -909,13 +852,109 @@ dev_command(_,_,_,_) ->
  {error,badarg}.
 
 
-
-
 %%====================================================================================================================================%
 %%                                                                                                                                    %
 %%                                                     PRIVATE HELPER FUNCTIONS                                                       %
 %%                                                                                                                                    %
 %%====================================================================================================================================%
+
+%%====================================================================================================================================
+%%                                                   JANET SIMULATOR RUN AND STOP                                                       
+%%====================================================================================================================================
+
+%% Attempts to start the JANET Simulator application with a set of remote host configuration parameters
+%% (run(), run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort)  helper function)
+janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) ->
+
+ try 
+ 
+  % Ensure the JANET Simulator not to be already running
+  ok = utils:ensure_jsim_state(stopped),
+
+  % Ensure Mnesia to be running and in a consistent state 
+  ok = db:start_check_mnesia(),
+  
+  % Ensure the "SimRESTPort" to be available in the host OS
+  case utils:is_os_port_available(SimRESTPort) of
+  
+   % If it is not, throw an error
+   false ->
+    throw({port_conflict,SimRESTPort});
+	
+   % Otherwise, continue
+   true ->
+    ok
+  end,
+  
+  % Initialize the remote host configuration parameters of the JANET Simulator application
+  application:set_env(janet_simulator,sim_rest_port,SimRESTPort),
+  application:set_env(janet_simulator,remote_rest_client,RemoteRESTClient),
+  application:set_env(janet_simulator,sim_rest_server_addr,RemoteRESTServerAddr),
+  application:set_env(janet_simulator,sim_rest_server_port,RemoteRESTServerPort),
+	 
+  %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
+
+  % Attempt to start the JANET Simulator application
+  ok = application:start(janet_simulator)
+  
+ catch
+  
+  % If attempting to start the JANET Simulator while it is already running, return the error
+  {error,janet_running} ->
+   {error,already_running};
+   
+  % If Mnesia cannot be started or is not in a consistent state, the JANET Simulator cannot be started
+  {error,{mnesia,Reason}} ->
+   io:format("The Mnesia database is not in a consistent state, the JANET Simulator cannot be started~n"),
+   {mnesia_error,Reason};
+	 
+  % If the port used by the JANET Simulator REST server is not available in the host OS, return the error
+  {port_conflict,SimRESTPort} -> 
+   io:format("The port that would be used by the JANET Simulator REST server (~w) is not available in the host OS, please use another one~n",[SimRESTPort]),
+   {error,port_conflict}
+   
+ end.
+
+
+%% Attempts to stop the JANET Simulator application and clears its Mnesia ram_copies tables (stop(), shutdown() helper function) 
+janet_stop() ->
+
+ try 
+ 
+  % Ensure the JANET Simulator to be running
+  ok = utils:ensure_jsim_state(running),
+  
+  % Attempt to stop the JANET Simulator application
+  case application:stop(janet_simulator) of
+   ok ->
+	 
+	% If the JANET Simulator was successfully stopped, clear its Mnesia ram_copies tables
+    [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
+   
+	%% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
+    timer:sleep(5),                            
+	
+    % Report that the JANET Simulator has successfully stopped
+    io:format("Janet Simulator stopped~n");
+	 
+   {error,StopReason} ->
+	
+     % If an error occured  in stopping the JANET Simulator, throw it
+	 throw({error,{janet_stop,StopReason}})
+  end
+  
+ catch
+ 
+  % If attempting to stop the JANET Simulator while it is not running, return the error
+  {error,janet_not_running} ->
+   {error,not_running};
+ 
+  % If an error occured in stopping the JANET Simulator application, return it
+  {error,{janet_stop,Reason}} ->
+   {error,{janet_stop,Reason}}
+   
+ end.
+
 
 %%====================================================================================================================================
 %%                                                 DATABASE INTERFACE HELPER FUNCTIONS
@@ -1002,7 +1041,7 @@ print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_tuple(Ct
 change_node_status(NodeTypeShortHand,Node_id,Mode) -> 
  
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
 
  % If it is running, determine the passed node type, taking shorthand forms into account
  NodeType = utils:resolve_nodetype_shorthand(NodeTypeShortHand),
@@ -1028,7 +1067,7 @@ change_node_status(NodeTypeShortHand,Node_id,Mode) ->
 change_subloc_status({Loc_id,Subloc_id},Mode) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
  
  % Retrieve the list of devices in the sublocation
  DevIdList = get_subloc_devs_throw({Loc_id,Subloc_id}),
@@ -1071,7 +1110,7 @@ get_subloc_devs_throw({Loc_id,Subloc_id}) ->
 change_loc_status(Loc_id,Mode) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
  
  % Retrieve the PID of location managers' 'sup_loc' supervisor
  Sup_pid = db:get_suploc_pid(Loc_id),
@@ -1168,7 +1207,7 @@ print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode) ->
 change_all_nodes_statuses(Mode) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
   
  % If it is, retrieve all locations' IDs from the database
  LocIdsList = db:get_table_keys(location),
@@ -1528,10 +1567,6 @@ change_ctr_status(Loc_id,Sup_pid,Mode) ->
  {ok,Mode}. 
  
 
-%%====================================================================================================================================
-%%                                            SIMULATION UTILITY PRIVATE HELPER FUNCTIONS                                                        
-%%====================================================================================================================================
-
 %% =============================================== RUNNING AND STOPPED NODES INFO =============================================== %%
 
 %% Prints the lists of IDs of all stopped and/or running node managers
@@ -1539,7 +1574,7 @@ change_ctr_status(Loc_id,Sup_pid,Mode) ->
 print_managers(all) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
   
  % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
  CtrMgrRecords = db:get_table_records(ctrmanager),
@@ -1564,7 +1599,7 @@ print_managers(all) ->
 print_managers(Status) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
   
  % If it is, retrieve all records from the 'ctrmanager' and 'devmanager' tables
  CtrMgrRecords = db:get_table_records(ctrmanager),
@@ -1596,8 +1631,7 @@ print_managers(Status) ->
  print_mgrs_list("Devices:    ",StatusDevManagers),
  io:format("~n~n").
  
-
-
+ 
 %% Prints a list of node managers' statuses (print_managers(all), print_managers(Status) helper function)
 print_mgrs_list(StrHeader,MgrsList) ->
  io:format("~n~s ",[StrHeader]),
@@ -1609,6 +1643,10 @@ print_mgrs_list(StrHeader,MgrsList) ->
  end.
  
  
+%%====================================================================================================================================
+%%                                            NODES INTERACTIONS PRIVATE HELPER FUNCTIONS                                                        
+%%====================================================================================================================================
+
 %% ================================================ CONTROLLER NODES INTERACTION  ================================================ %%
 
 %% Attempts to synchronously execute a command on a running controller node by forwarding the
@@ -1617,7 +1655,7 @@ print_mgrs_list(StrHeader,MgrsList) ->
 gen_ctr_command(Loc_id,Module,Function,ArgsList) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
   
  % Retrieve the controller's manager PID and status
  {_,CtrMgrPid,CtrMgrStatus} = db:get_manager_info(controller,Loc_id),
@@ -1649,7 +1687,7 @@ gen_ctr_command(Loc_id,Module,Function,ArgsList) ->
 gen_dev_config_change(Dev_id,Config) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
 
  % Retrieve the device's manager PID and status
  {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
@@ -1702,7 +1740,7 @@ gen_dev_config_change(Dev_id,Config) ->
 gen_dev_command(Dev_id,Module,Function,ArgsList) ->
 
  % Ensure the JANET Simulator to be running
- ok = utils:ensure_janet_started(),
+ ok = utils:ensure_jsim_state(running),
   
  % Retrieve the device's manager PID and status
  {_,DevMgrPid,DevMgrStatus} = db:get_manager_info(device,Dev_id),
@@ -1731,10 +1769,15 @@ gen_dev_command(Dev_id,Module,Function,ArgsList) ->
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-%% Starts the JANET Simulator
+%% Called during the "application:start(janet_simulator)"
+%% call for starting the JANET Simulator application
 start(normal,_Args) ->
+
+ % Start the root supervision tree of the JANET Simulator application
  sup_jsim:start_link().
  
-%% Called once the JANET Simulator has been stopped
+ 
+%% Called during the "application:stop(janet_simulator)"
+%% call AFTER the application has been stopped
 stop(_State) ->
  ok.

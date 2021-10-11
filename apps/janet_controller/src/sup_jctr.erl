@@ -45,7 +45,7 @@ init(_) ->
     {
      ctr_resthandler,		            % ChildID
      {ctr_resthandler,start_link,[]},   % Child Start Function
- 	 permanent,                         % Child Restart Policy 
+ 	 transient,                         % Child Restart Policy (transient to account for port allocation conflicts) 
 	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [ctr_resthandler]                  % Child Modules (For Release Handling Purposes)
