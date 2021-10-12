@@ -68,7 +68,7 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  {ok,Dev_id} = application:get_env(dev_id),
 
  % Spawn the 'ctr_pairer' client for attempting to pair the device with its controller node
- spawn_link(?MODULE,ctr_pairer,[Loc_id,Dev_id,self()]),
+ proc_lib:spawn_link(?MODULE,ctr_pairer,[Loc_id,Dev_id,self()]),
 
  % Return the server initial state
  {noreply,#devsrvstate{dev_state = connecting, dev_id = Dev_id, loc_id = Loc_id, mgr_pid = MgrPid, _ = none, cfg_backlog = [{InitCfg,Timestamp}]}}.
@@ -117,7 +117,7 @@ handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when ReqPid =:= SrvS
 	% configuration update and timestamp to the JANET Controller (which is performed only if the device
 	% is currently paired with it), obtaining the updated value of the configuration updates backlog
     push_or_store_ctr_update(SrvState#devsrvstate.dev_state,SrvState#devsrvstate.cfg_backlog,
-	                         SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp});
+                             SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp},SrvState#devsrvstate.dev_id);
 
  	ReqPid =:= SrvState#devsrvstate.devhandler_pid ->
 	
@@ -157,11 +157,15 @@ handle_call({dev_command,Module,Function,ArgsList},{ReqPid,_},SrvState) when    
  {reply,apply(Module,Function,ArgsList),SrvState};  
 
 
-%% DEBUGGING PURPOSES [TODO]: REMOVE
-handle_call(_,{ReqPid,_},SrvState) ->
- io:format("[dev_srv-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#devsrvstate.dev_id,ReqPid]),
- {reply,gen_response,SrvState}.
+%% Unexpected call
+handle_call(Request,From,SrvState=#devsrvstate{dev_id = Dev_id}) ->
+  
+ % Report that an unexpected call was received by this gen_server
+ io:format("[dev_srv-~w]: <WARNING> Unexpected call (Request = ~p, From = ~p, SrvState = ~p)~n",[Dev_id,Request,From,SrvState]),
 
+ % Reply with a stub message and keep the SrvState
+ {reply,unsupported,SrvState}.
+ 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
@@ -180,10 +184,6 @@ handle_call(_,{ReqPid,_},SrvState) ->
 %%            backlog and set the 'devhandler_pid' and 'devhandler_mon' variables
 %%
 handle_cast({pair_success,PairerPID,Devhandler_Pid},SrvState) when SrvState#devsrvstate.dev_state =:= connecting andalso node(PairerPID) =:= node() ->
-
- % Logging Purposes
- %% [TODO]: Remove
- % io:format("[dev_server-~w]: Pairing Success (devhandler PID = ~w)~n",[SrvState#devsrvstate.dev_id,Devhandler_Pid]),
 
  % Create a monitor towards the handler assigned to the device in the controller node
  %
@@ -237,12 +237,22 @@ handle_cast({dev_config_update,{UpdatedCfg,Timestamp}},SrvState) ->
  % Attempt to forward the updated device configuration and timestamp to the device handler in
  % the controller node, obtaining the updated value of the "cfg_backlog" server state variable
  NewCfgBacklog = push_or_store_ctr_update(SrvState#devsrvstate.dev_state,SrvState#devsrvstate.cfg_backlog,
-                                          SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp}),
+                                          SrvState#devsrvstate.devhandler_pid,{UpdatedCfg,Timestamp},SrvState#devsrvstate.dev_id),
 
  % Possibly update the 'cfg_backlog' state variable
- {noreply,SrvState#devsrvstate{cfg_backlog = NewCfgBacklog}}.
+ {noreply,SrvState#devsrvstate{cfg_backlog = NewCfgBacklog}};
  
 
+%% Unexpected cast
+handle_cast(Request,SrvState=#devsrvstate{dev_id = Dev_id}) ->
+
+ % Report that this gen_server should not receive cast requests
+ io:format("[dev_srv-~w]: <WARNING> Unexpected cast (Request = ~w, SrvState = ~w)~n",[Dev_id,Request,SrvState]),
+
+ % Keep the SrvState
+ {noreply,SrvState}.
+ 
+ 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
 %% CONTROLLER NODE DOWN
@@ -277,7 +287,7 @@ handle_info({'DOWN',MonRef,process,Devhandler_pid,Reason},SrvState) when MonRef 
  gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_srv_state_update,connecting,self()}),
  
  % Respawn the 'ctr_pairer' client for attempting to re-pair the device with the controller node
- spawn_link(?MODULE,ctr_pairer,[SrvState#devsrvstate.loc_id,SrvState#devsrvstate.dev_id,self()]),
+ proc_lib:spawn_link(?MODULE,ctr_pairer,[SrvState#devsrvstate.loc_id,SrvState#devsrvstate.dev_id,self()]),
  
  % Update the device state to 'connecting' and reset the 'devhandler_pid' and 'devhandler_mon' variables
  {noreply,SrvState#devsrvstate{dev_state = connecting, devhandler_pid = none, devhandler_mon = none}}.
@@ -304,7 +314,7 @@ ctr_pairer(Loc_id,Dev_id,DevSrvPid) ->
  timer:sleep(1000),
  
  % Attempt to pair the device to the location controller via a synchronous request, catching possible exceptions
- PairingResult = try gen_server:call({ctr_pairserver,utils:str_to_atom("ctr-" ++ integer_to_list(Loc_id) ++ "@localhost")},{pair_request,Dev_id,DevSrvPid},1500)
+ PairingResult = try gen_server:call({ctr_pairserver,list_to_atom("ctr-" ++ integer_to_list(Loc_id) ++ "@localhost")},{pair_request,Dev_id,DevSrvPid},1500)
  catch
   exit:{timeout,_} ->
   
@@ -346,10 +356,11 @@ ctr_pairer(Loc_id,Dev_id,DevSrvPid) ->
 %%               - CfgBacklog:             The current value of the configuration updates backlog
 %%               - Devhandler_pid:         The PID of the device handler in the controller node, if any
 %%               - {UpdatedCfg,Timestamp}: The updated device configuration and timestamp to be forwarded or stored
+%%               - Dev_id:                 The device ID (logging purposes)
 %%
 %% RETURNS:      - NewCfgBacklog -> The new value of the configuration updates backlog
 %%
-push_or_store_ctr_update(online,CfgBacklog,Devhandler_pid,{UpdatedCfg,Timestamp}) ->
+push_or_store_ctr_update(online,CfgBacklog,Devhandler_pid,{UpdatedCfg,Timestamp},_Dev_id) ->
 
  % If the 'dev_server is paired with the controller node, forward it the
  % updated device configuration and timestamp as a single-element list
@@ -358,16 +369,18 @@ push_or_store_ctr_update(online,CfgBacklog,Devhandler_pid,{UpdatedCfg,Timestamp}
  % Keep the same configuration updates backlog
  CfgBacklog;
 
-push_or_store_ctr_update(connecting,CfgBacklog,_Devhandler_pid,{UpdatedCfg,Timestamp}) ->
+push_or_store_ctr_update(connecting,CfgBacklog,_Devhandler_pid,{UpdatedCfg,Timestamp},Dev_id) ->
 
- % If the device is NOT paired with the controller node, append the new
- % configuration and timestamp to the configuration updates backlog
- NewCfgBacklog =
+ % If the device is NOT paired with the controller node, depending on
+ % whether the maximum size of the device updates backlog has been reached
  if
   length(CfgBacklog) =:= ?Max_cfg_backlog_size ->
 
-   % If the backlog maximum size has been reached, drop its first
-   % (oldest) update and append it the new configuration update
+   % If it has been reached, print a warning message
+   % informing that the oldest device update is being dropped
+   io:format("[dev_server-~w]: <WARNING> The maximum size of the device configuration updates backlog has been reached (~w), the oldest update is being dropped~n",[Dev_id,?Max_cfg_backlog_size]),
+  
+   % Drop the first (oldest) update in the backlog and appent it the new configuration update
    [_OldestUpdate|OtherUpdates] = CfgBacklog,
    OtherUpdates ++ [{UpdatedCfg,Timestamp}];
    
@@ -375,13 +388,7 @@ push_or_store_ctr_update(connecting,CfgBacklog,_Devhandler_pid,{UpdatedCfg,Times
   
    % Otherwise simply append the new configuration in the backlog
    CfgBacklog ++ [{UpdatedCfg,Timestamp}]
- end,
- 
- % Logging purposes
- %% [TODO]: REMOVE (and remove the "NewCfgBacklog" variable)
- {ok,Dev_id} = application:get_env(dev_id),
- io:format("[dev_srv-~w]: cfg_backlog: ~p~n",[Dev_id,NewCfgBacklog]),
- NewCfgBacklog.
+ end.
 
 
 %%====================================================================================================================================

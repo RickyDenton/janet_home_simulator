@@ -60,7 +60,7 @@ handle_continue(init,SrvState) ->
  
  % Set the cookie for allowing the Janet Simulator to connect with the device's node
  % NOTE: The use of atoms is required by the erlang:set_cookie BIF  
- erlang:set_cookie(utils:str_to_atom("dev-" ++ Dev_id_str ++ "@localhost"),utils:str_to_atom(Loc_id_str)),
+ erlang:set_cookie(list_to_atom("dev-" ++ Dev_id_str ++ "@localhost"),list_to_atom(Loc_id_str)),
  
  % Prepare the Host, Name and Args parameters of the controller's node
  NodeHost = "localhost",
@@ -208,13 +208,16 @@ handle_call({dev_command,_,_,_},{_,_},SrvState) ->
  % Reply that the device is still booting
  {reply,{error,dev_booting},SrvState}; 
  
- 
- 
-%% DEBUGGING PURPOSES [TODO]: REMOVE
-handle_call(_,{ReqPid,_},SrvState) ->
- io:format("[dev_mgr-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#devmgrstate.dev_id,ReqPid]),
- {reply,gen_response,SrvState}.
 
+%% Unexpected call
+handle_call(Request,From,SrvState=#devmgrstate{dev_id=Dev_id}) ->
+ 
+ % Report that an unexpected call was received by this gen_server
+ io:format("[dev_mgr-~w]: <WARNING> Unexpected call (Request = ~p, From = ~p, SrvState = ~p)~n",[Dev_id,Request,From,SrvState]),
+
+ % Reply with a stub message and keep the SrvState
+ {reply,unsupported,SrvState}.
+ 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
@@ -263,14 +266,20 @@ handle_cast({dev_config_update,DevSrvPid,{UpdatedCfg,Timestamp}},SrvState) when 
  % Push the updated device configuration and timestamp in the 'device' table
  db:update_dev_config(SrvState#devmgrstate.dev_id,UpdatedCfg,Timestamp),
  
- % Log the result of the operation
- %% [TODO]: Debugging purposes, remove when ready
- %io:format("[dev_mgr-~w]: Received status update (Config = ~p, Mnesia update result = ~w)~n",[SrvState#devmgrstate.dev_id,UpdatedCfg,PushToMnesia]),
- 
  % Keep the server state
- {noreply,SrvState}.
+ {noreply,SrvState};
 
 
+%% Unexpected cast
+handle_cast(Request,SrvState=#devmgrstate{dev_id=Dev_id}) ->
+ 
+ % Report that an unexpected cast was received by this gen_server
+ io:format("[dev_mgr-~w]: <WARNING> Unexpected cast (Request = ~p, SrvState = ~w)~n",[Dev_id,Request,SrvState]),
+
+ % Keep the SrvState
+ {noreply,SrvState}. 
+ 
+ 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
 %% DEVICE NODE DOWN

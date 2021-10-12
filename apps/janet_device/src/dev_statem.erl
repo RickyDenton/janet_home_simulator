@@ -915,7 +915,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
   abs(TempDiff) >= 10 ->
   
    % Drift towards the equilibrium (no randomicity)
-   TempCurrent + utils:sign(TempDiff); 
+   TempCurrent + sign(TempDiff); 
   
   % ------ 6 =< DistFromEq < 10 ------ %
   abs(TempDiff) >= 6 ->
@@ -923,7 +923,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
    % 80% drift towards equilibrium, 20% keep
    if
     Rand =< 0.8 ->
-	 TempCurrent + utils:sign(TempDiff);
+	 TempCurrent + sign(TempDiff);
 	Rand < 1 ->
 	 TempCurrent
    end;
@@ -934,7 +934,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
    % 60% drift towards equilibrium, 40% keep
    if
     Rand =< 0.6 ->
-	 TempCurrent + utils:sign(TempDiff);
+	 TempCurrent + sign(TempDiff);
 	Rand < 1 ->
 	 TempCurrent
    end;  
@@ -945,7 +945,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
    % 40% drift towards equilibrium, 60% keep
    if
     Rand =< 0.4 ->
-	 TempCurrent + utils:sign(TempDiff);
+	 TempCurrent + sign(TempDiff);
 	Rand < 1 ->
 	 TempCurrent
    end; 
@@ -956,7 +956,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
    % 20% drift towards equilibrium, 80% keep
    if
     Rand =< 0.2 ->
-	 TempCurrent + utils:sign(TempDiff);
+	 TempCurrent + sign(TempDiff);
 	Rand < 1 ->
 	 TempCurrent
    end;    
@@ -976,7 +976,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
      % 20% drift towards native equilibrium, 80% keep equilibrium
      if
       Rand =< 0.2 ->
-	   TempCurrent + utils:sign(TempEqNative - TempCurrent);
+	   TempCurrent + sign(TempEqNative - TempCurrent);
 	  Rand < 1 ->
 	   TempCurrent
      end;
@@ -1074,6 +1074,18 @@ get_native_equilibrium() ->
  element(Hour+1,{16,15,14,12,10,11,12,13,14,15,17,19,22,24,25,26,25,24,23,22,21,20,19,17}).
 
 
+%% DESCRIPTION:  A simple sign function
+%%
+%% ARGUMENTS:    - X: A number
+%%
+%% RETURNS:      - sign(X) (1 if X =:= 0) 
+%%
+sign(X) when is_number(X), X >= 0 ->
+ 1; 
+sign(X) when is_number(X), X < 0 ->
+ -1.
+ 
+ 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
 %%==================================================================================================================================== 

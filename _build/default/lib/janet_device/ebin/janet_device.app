@@ -1,5 +1,5 @@
 {application,janet_device,
-             [{description,"JANET Erlang Device"},
+             [{description,"JANET Home Device"},
               {vsn,"0.0.1"},
               {modules,[dev_server,dev_statem,jdev,sup_jdev]},
               {registered,[dev_server,dev_statem]},

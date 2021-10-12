@@ -16,9 +16,6 @@
 %% ============================================================ INIT ============================================================ %%
 init(_) ->
 
- %% [TODO]: Trap Exit signals?
- %% process_flag(trap_exit,true),
- 
  % No initialization is required for the 'ctr_pairserver',
  % and so just return its (constant) state
  {ok,online}.
@@ -28,8 +25,9 @@ init(_) ->
 
 %% PAIR_REQUEST
 %% ------------
-%% SENDER:    A device's 'dev_server' (or more precisely its 'ctr_pairer' process) [TODO]: Check Name
-%% WHEN:      After the 'dev_server' has registered with the JANET Simulator and is attempting to pair with its JANET Controller
+%% SENDER:    A device's 'dev_server' (or more precisely its 'ctr_pairer' process)
+%% WHEN:      After the 'dev_server' has registered with the JANET
+%%            Simulator and is attempting to pair with its JANET Controller
 %% PURPOSE:   Pairing request with its location JANET controller
 %% CONTENTS:  The device's ID and the PID of its 'dev_server' process
 %% MATCHES:   (always)
@@ -88,8 +86,21 @@ handle_call({pair_request,Dev_id,DevSrvPid},{_,_},SrvState) when is_number(Dev_i
 	   {reply,{ok,Devhandler_pid},SrvState}
 	 end
    end
- end.
+ end;
 
+
+%% Unexpected call
+handle_call(Request,From,SrvState) ->
+  
+ % Retrieve the controller's location ID for logging purposes
+ {ok,Loc_id} = application:get_env(loc_id),
+ 
+ % Report that an unexpected call was received by this gen_server
+ io:format("[ctr_pairserver-~w]: <WARNING> Unexpected call (Request = ~p, From = ~p, SrvState = ~p)~n",[Loc_id,Request,From,SrvState]),
+
+ % Reply with a stub message and keep the SrvState
+ {reply,unsupported,SrvState}.
+ 
 
 %% ===================================================== HANDLE_CAST (STUB) ===================================================== %% 
 
@@ -97,7 +108,7 @@ handle_call({pair_request,Dev_id,DevSrvPid},{_,_},SrvState) when is_number(Dev_i
 %% definition is formally required by the 'gen_server' OTP behaviour
 handle_cast(Request,SrvState) ->
 
- % Retrieve the controller's location ID
+ % Retrieve the controller's location ID for logging purposes
  {ok,Loc_id} = application:get_env(loc_id),
  
  % Report that this gen_server should not receive cast requests

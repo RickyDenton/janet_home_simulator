@@ -170,7 +170,7 @@ handle_cast({dev_config_update,DevCfgUpdates,DevHandlerPid},SrvState=#httpcstate
 %% Unexpected Cast
 handle_cast(Request,SrvState=#httpcstate{loc_id=Loc_id}) ->
  
- % Report that this gen_server should not receive cast requests
+ % Report that an unexpected cast was received by this gen_server
  io:format("[ctr_httpclient-~w]: <WARNING> Unexpected cast (Request = ~p, SrvState = ~w)~n",[Loc_id,Request,SrvState]),
 
  % Keep the SrvState
@@ -198,7 +198,7 @@ handle_cast(Request,SrvState=#httpcstate{loc_id=Loc_id}) ->
 handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state='connecting',conn_pid=ConnPid,devconn_backlog=ConnBacklog,devcfg_backlog=CfgBacklog,streams_refs=StreamsRefs}) ->
  
  % Log that the controller is now connected to the remote REST server
- %% [TODO]: Remove
+ %% [TODO]: Remove when ready?
  io:format("[ctr_httpclient-~w]: Gun up!~n",[Loc_id]),
  
  % Inform the 'ctr_manager' in the JANET Simulator passing by the 'ctr_simserver'
@@ -242,7 +242,7 @@ handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_us
 handle_info({gun_down,ConnPid,_Protocol,Reason,_KilledStreams},SrvState=#httpcstate{loc_id=Loc_id,conn_state=online,conn_pid=ConnPid}) ->
  
  % Report that the controller is no longer connected with the remote REST server
- %% [TODO]: Remove
+ %% [TODO]: Remove when ready?
  io:format("[ctr_httpclient-~w]: Gun Down! (reason = ~p) ~n",[Loc_id,Reason]),
  
  % Inform the 'ctr_manager' in the JANET Simulator passing by the 'ctr_simserver'
@@ -280,10 +280,6 @@ handle_info({gun_response,ConnPid,StreamRef,_Fin,Status,_Headers},SrvState=#http
  
   % If it is, do nothing
   200 ->
-   
-   % Logging purposes
-   %% [TODO]: Remove
-   %io:format("[ctr_httpclient-~w]: Server returned OK for request with StreamRef = ~p~n",[Loc_id,StreamRef]);
    ok;
    
   % If it is not, log the error
@@ -350,7 +346,6 @@ handle_info({gun_error,ConnPid,Reason},SrvState=#httpcstate{loc_id=Loc_id,conn_p
 handle_info({'DOWN',ConnRef,process,ConnPid,Reason},SrvState=#httpcstate{loc_id=Loc_id,conn_state=ConnState,conn_pid=ConnPid,conn_ref=ConnRef}) ->
 
  % Report that the Gun connection process has terminated
- %% [TODO]: Possibly remove, note that this happens periodically if the remote REST server is not reachable
  io:format("[ctr_httpclient-~w]: The Gun connection process has terminated (reason = ~p)~n",[Loc_id,Reason]),
  
  % Depending on whether the controller was previously connected with the remote REST server

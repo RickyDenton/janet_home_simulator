@@ -23,7 +23,6 @@ init(_) ->
   {
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
    {
-    %% [TODO]: Currently In the devices if something goes wrong the entire node must be shut down and recreated, since the environment variables may be outdated (think if this should be the case)
 	one_for_all,  % RestartStrategy
 	0,            % MaxRestarts
 	1             % TimePeriod for MaxRestarts

@@ -4,7 +4,7 @@
 -behaviour(application). 
 
 %% ---------------------------------- JANET SIMULATOR RUN AND STOP ---------------------------------- %%
--export([run/0,run/4,stop/0,shutdown/0]).
+-export([run/0,stop/0,shutdown/0]).
 
 %% ---------------------------------- DATABASE INTERFACE FUNCTIONS ---------------------------------- %%
 -export([add_location/4,add_sublocation/2,add_device/4]).            % Create
@@ -41,57 +41,23 @@
 %%                                                   JANET SIMULATOR RUN AND STOP                                                       
 %%====================================================================================================================================
 
-%% DESCRIPTION:  Starts the JANET Simulator application
+%% DESCRIPTION:  Attempts to start the JANET Simulator application
 %%
-%% ARGUMENTS:    (none):                 Attempt to start the JANET Simulator with the default remote
-%%                                       host configuration parameters (file "config/sys.config")
-%%               - SimRESTPort:          The OS port to be used by the JANET Simulator REST server
-%%                                       (int >= 30000 for preventing port allocation conflicts)
-%%               - RemoteRESTClient:     The address of the remote client issuing REST requests
-%%                                       to the JANET Simulator and Controller nodes (a list)
-%%               - RemoteRESTServerAddr: The address of the remote server accepting REST
-%%                                       requests from the JANET Controller nodes (a list)
-%%               - RemoteRESTServerPort: The port of the remote server accepting REST
-%%                                       requests from the JANET Controller nodes (int > 0)
+%% ARGUMENTS:    none
 %%
 %% RETURNS:      - ok                      -> JANET Simulator succesfully started
 %%               - {error,already_running} -> The janet_simulator application is already running on the node
 %%               - {mnesia_error,Reason}   -> The Mnesia database is not in a consistent state
 %%                                            (probably a wrong or no schema is installed)
-%%               - {error,port_conflict}   ->  
+%%               - {error,port_conflict}   -> The default port to be used by the JANET Simulator
+%%                                            REST server is not available in the host OS 
 %%               - {error,Reason}          -> Internal error in starting the application
-%%               - {error,badarg}          -> Invalid arguments
 %%
-
-%% Default remote host configuration parameters
 run() ->
- 
- % Retrieve the default remote host configuration parameters
- {ok,SimRESTPort} = application:get_env(janet_simulator,default_sim_rest_port),
- {ok,RemoteRESTClient} = application:get_env(janet_simulator,default_remote_rest_client),
- {ok,RemoteRESTServerAddr} = application:get_env(janet_simulator,default_remote_rest_server_addr),
- {ok,RemoteRESTServerPort} = application:get_env(janet_simulator,default_remote_rest_server_port),
- 
- % Attempt to start the JANET Simulator application with the default remote host configuration parameters
- janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort).
- 
-%% Custom remote host configuration parameters
-run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) 
-    when is_number(SimRESTPort), SimRESTPort >= 30000, is_list(RemoteRESTClient),
-         is_list(RemoteRESTServerAddr), is_number(RemoteRESTServerPort), RemoteRESTServerPort > 0 ->
 
- % Attempt to start the JANET Simulator application with such custom remote host configuration parameters
- janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort);
- 
-%% Invalid custom remote host configuration parameters (print help message) 
-run(_SimRESTPort,_RemoteRESTClient,_RemoteRESTServerAddr,_RemoteRESTServerPort) ->
- io:format("usage: run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort)~n~n"),
- io:format("- SimRESTPort:          The OS port to be used by the JANET Simulator REST server (int >= 30000 for preventing port allocation conflicts)~n"),
- io:format("- RemoteRESTClient:     The address of the remote client issuing REST requests to the JANET Simulator and Controller nodes (a list)~n"),
- io:format("- RemoteRESTServerAddr: The address of the remote server accepting REST requests from the JANET Controller nodes (a list)~n"),
- io:format("- RemoteRESTServerPort: The port of the remote server accepting REST requests from the JANET Controller nodes (int > 0)~n~n"),
- {error,badarg}.
- 
+ % Attempt to start the JANET Simulator application with its default configuration
+ janet_start().
+
 
 %% DESCRIPTION:  Stops the JANET Simulator application
 %%
@@ -859,12 +825,12 @@ dev_command(_,_,_,_) ->
 %%====================================================================================================================================%
 
 %%====================================================================================================================================
-%%                                                   JANET SIMULATOR RUN AND STOP                                                       
+%%                                            JANET SIMULATOR RUN AND STOP HELPER FUNCTIONS                                                      
 %%====================================================================================================================================
 
-%% Attempts to start the JANET Simulator application with a set of remote host configuration parameters
-%% (run(), run(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort)  helper function)
-janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort) ->
+%% Performs a set of preliminary checks and attempts to start the
+%% JANET Simulator application (run(), run(CfgMap) helper function)
+janet_start() ->
 
  try 
  
@@ -874,7 +840,11 @@ janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPo
   % Ensure Mnesia to be running and in a consistent state 
   ok = db:start_check_mnesia(),
   
-  % Ensure the "SimRESTPort" to be available in the host OS
+  % Retrieve the value of the 'sim_rest_port' configuration parameter 
+  {ok,SimRESTPort} = application:get_env(janet_simulator,sim_rest_port),
+  
+  % Ensure te port to be used by the JANET Simulator
+  % REST server to be available in the host OS
   case utils:is_os_port_available(SimRESTPort) of
   
    % If it is not, throw an error
@@ -885,12 +855,6 @@ janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPo
    true ->
     ok
   end,
-  
-  % Initialize the remote host configuration parameters of the JANET Simulator application
-  application:set_env(janet_simulator,sim_rest_port,SimRESTPort),
-  application:set_env(janet_simulator,remote_rest_client,RemoteRESTClient),
-  application:set_env(janet_simulator,sim_rest_server_addr,RemoteRESTServerAddr),
-  application:set_env(janet_simulator,sim_rest_server_port,RemoteRESTServerPort),
 	 
   %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
 
@@ -909,13 +873,13 @@ janet_start(SimRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPo
    {mnesia_error,Reason};
 	 
   % If the port used by the JANET Simulator REST server is not available in the host OS, return the error
-  {port_conflict,SimRESTPort} -> 
-   io:format("The port that would be used by the JANET Simulator REST server (~w) is not available in the host OS, please use another one~n",[SimRESTPort]),
+  {port_conflict,RESTPort} -> 
+   io:format("The port that would be used by the JANET Simulator REST server (~w) is not available in the host OS, please use another one~n",[RESTPort]),
    {error,port_conflict}
    
  end.
 
-
+ 
 %% Attempts to stop the JANET Simulator application and clears its Mnesia ram_copies tables (stop(), shutdown() helper function) 
 janet_stop() ->
 

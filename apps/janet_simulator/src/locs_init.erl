@@ -3,7 +3,7 @@
 -module(locs_init).
 
 -export([locs_init/0]).   % Process Body
--export([spawn_link/0]).  % Start Function (spawn_link/0 instead of start_link/0 because this is no OTP Behaviour callback module)
+-export([spawn_link/0]).  % Start Function
 
 %%====================================================================================================================================
 %%                                                         PROCESS BODY                                                        
@@ -55,4 +55,4 @@ spawn_sup_loc([Loc_id|NextLoc_Id]) ->
 
 %% Called by the Janet Simulator top-level supervisor (sup_jsim) at boot time
 spawn_link() ->
- {ok,spawn_link(?MODULE,locs_init,[])}.  % The first 'ok' parameter is for attuning to standard interface of an OTP supervision tree
+ {ok,proc_lib:spawn_link(?MODULE,locs_init,[])}.  % The first 'ok' parameter is for attuning to standard interface of an OTP supervision tree

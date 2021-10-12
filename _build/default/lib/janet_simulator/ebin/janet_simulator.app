@@ -1,5 +1,5 @@
 {application,janet_simulator,
-             [{description,"JANET Erlang Simulator"},
+             [{description,"JANET Home Simulator"},
               {vsn,"0.0.1"},
               {modules,[ctr_manager,db,dev_manager,gen_resthandler,jsim,
                         loc_devs_init,locs_init,sim_resthandler,sup_jsim,

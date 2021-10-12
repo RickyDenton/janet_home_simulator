@@ -842,7 +842,7 @@ parse_devcommands([DevCommand|NextDevCommand],ValidCommands,InvalidCommands,ValD
   
   % "Dev_id" not an integer
   {not_an_integer,InvalidDevId} ->
-   {error,#{dev_id => invalid, status => 400, errorReason => list_to_binary(lists:flatten(io_lib:format("Parameter 'dev_id' is not an integer (~s)",[catch(utils:jsone_term_to_list(InvalidDevId,dev_id))])))}};
+   {error,#{dev_id => invalid, status => 400, errorReason => list_to_binary(lists:flatten(io_lib:format("Parameter 'dev_id' is not an integer (~s)",[catch(gen_resthandler:jsone_term_to_list(InvalidDevId,dev_id))])))}};
   
   % "Dev_id" <= 0
   {out_of_range,dev_id,InvalidDevId} ->
@@ -1184,7 +1184,7 @@ get_trait_value(onoff,Action=#{<<"onOff">> := OnOff}) when OnOff =:= <<"on">> or
 
 % Invalid "OnOff" action 
 get_trait_value(onoff,#{<<"onOff">> := InvalidOnOff}) ->
- throw({invalid_action,"onOff",utils:jsone_term_to_list(InvalidOnOff,onoff)});
+ throw({invalid_action,"onOff",gen_resthandler:jsone_term_to_list(InvalidOnOff,onoff)});
 
 %% ------------- "fanSpeed" action -> 'fanspeed' trait ------------- %%
 % Valid "fanSpeed" action (0 < fanSpeed <= 100)
@@ -1193,7 +1193,7 @@ get_trait_value(fanspeed,Action=#{<<"fanSpeed">> := FanSpeed}) when is_integer(F
   
 % Invalid "fanSpeed" action
 get_trait_value(fanspeed,#{<<"fanSpeed">> := InvalidFanSpeed}) ->
- throw({invalid_action,"fanSpeed",utils:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
+ throw({invalid_action,"fanSpeed",gen_resthandler:jsone_term_to_list(InvalidFanSpeed,fanspeed)});
  
 %% ----------- "brightness" action -> 'brightness' trait ----------- %%
 % Valid "brightness" action (0 < brightness <= 100)
@@ -1202,12 +1202,12 @@ get_trait_value(brightness,Action=#{<<"brightness">> := Brightness}) when is_int
 
 % Invalid "brightness" action
 get_trait_value(brightness,#{<<"brightness">> := InvalidBrightness}) ->
- throw({invalid_action,"brightness",utils:jsone_term_to_list(InvalidBrightness,brightness)});
+ throw({invalid_action,"brightness",gen_resthandler:jsone_term_to_list(InvalidBrightness,brightness)});
   
 %% ------------- "color" action -> 'colorsetting' trait ------------- %% 
 % Valid "color" action (any)
 get_trait_value(colorsetting,Action=#{<<"color">> := Color}) ->
- {utils:jsone_term_to_list(Color,colorsetting),maps:remove(<<"color">>,Action)};
+ {gen_resthandler:jsone_term_to_list(Color,colorsetting),maps:remove(<<"color">>,Action)};
  
 % NOTE: The "color" action cannot be invalid, with its value always being interpreted as a list
 
@@ -1218,7 +1218,7 @@ get_trait_value(openclose,Action=#{<<"openClose">> := OpenClose}) when OpenClose
  
 % Invalid "openClose" action
 get_trait_value(openclose,#{<<"openClose">> := InvalidOpenClose}) ->
- throw({invalid_action,"openClose",utils:jsone_term_to_list(InvalidOpenClose,openclose)});
+ throw({invalid_action,"openClose",gen_resthandler:jsone_term_to_list(InvalidOpenClose,openclose)});
  
 %% ------------ "lockUnlock" action -> 'lockunlock' trait ------------ %%  
 % Valid "lockUnlock" action ("lock"|"unlock")
@@ -1227,7 +1227,7 @@ get_trait_value(lockunlock,Action=#{<<"lockUnlock">> := LockUnlock}) when LockUn
  
 % Invalid "lockUnlock" action
 get_trait_value(lockunlock,#{<<"lockUnlock">> := InvalidLockUnlock}) ->
- throw({invalid_action,"lockUnlock",utils:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
+ throw({invalid_action,"lockUnlock",gen_resthandler:jsone_term_to_list(InvalidLockUnlock,lockunlock)});
 
 %% ------------ "tempTarget" action -> 'temp_target' trait ------------ %%  
 
@@ -1237,7 +1237,7 @@ get_trait_value(temp_target,Action=#{<<"tempTarget">> := TempTarget}) when is_in
 
 % Invalid "tempTarget" action
 get_trait_value(temp_target,#{<<"tempTarget">> := InvalidTempTarget}) ->
- throw({invalid_action,"tempTarget",utils:jsone_term_to_list(InvalidTempTarget,temp_target)});
+ throw({invalid_action,"tempTarget",gen_resthandler:jsone_term_to_list(InvalidTempTarget,temp_target)});
  
 %% NOTE: The 'temp_current' trait has no associated action (it cannot be changed via a command)
 

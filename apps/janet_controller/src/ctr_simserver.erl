@@ -48,7 +48,7 @@ handle_continue(init,_SrvState) ->
 %% CTR_COMMAND
 %% -----------
 %% SENDER:    The controller node's manager in the JANET Simulator node
-%% WHEN:      (varies) [TODO]: Double-check
+%% WHEN:      When the JANET Simulator is executing a function requiring synchronization in the Controller node
 %% PURPOSE:   Execute a command on the controller node and return the result of the operation
 %% CONTENTS:  The Module, Function and ArgsList to be evaluated via apply()
 %% MATCHES:   (always) (when the requests comes from the controller manager in the JANET Simulator)
@@ -85,7 +85,20 @@ handle_call({sim_command,Module,Function,ArgsList},{CtrRESTHdlPID,_},SrvState=#s
  end,
  
  % Return the 'ctr_manager' response (or the timeout expiration)
- {reply,Res,SrvState}.
+ {reply,Res,SrvState};
+
+
+%% Unexpected call
+handle_call(Request,From,SrvState) ->
+  
+ % Retrieve the controller's location ID for logging purposes
+ {ok,Loc_id} = application:get_env(loc_id),
+ 
+ % Report that an unexpected call was received by this gen_server
+ io:format("[ctr_simserver-~w]: <WARNING> Unexpected call (Request = ~p, From = ~p, SrvState = ~p)~n",[Loc_id,Request,From,SrvState]),
+
+ % Reply with a stub message and keep the SrvState
+ {reply,unsupported,SrvState}.
 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
@@ -110,8 +123,21 @@ handle_cast({ctr_conn_update,ConnState,CtrHTTPCliPID},SrvState=#simsrvstate{mgr_
  gen_server:cast(MgrPid,{ctr_conn_update,ConnState,self()}),
  
  % Update the 'ctr_state' variable to the passed connection state
- {noreply,SrvState#simsrvstate{ctr_state = ConnState}}.
+ {noreply,SrvState#simsrvstate{ctr_state = ConnState}};
 
+
+%% Unexpected cast
+handle_cast(Request,SrvState) ->
+ 
+ % Retrieve the controller's location ID for logging purposes
+ {ok,Loc_id} = application:get_env(loc_id),
+ 
+ % Report that an unexpected cast was received by this gen_server
+ io:format("[ctr_simserver-~w]: <WARNING> Unexpected cast (Request = ~p, SrvState = ~w)~n",[Loc_id,Request,SrvState]),
+
+ % Keep the SrvState
+ {noreply,SrvState}. 
+ 
 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        

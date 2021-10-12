@@ -130,8 +130,8 @@ add_location(_,_,_,_) ->
 %%
 %% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
 %%               either in the "jsim:add_sublocation()" (if the operation originated from the JANET Simulator) or
-%%               in the "ctr_restserver:add_sublocation()" (if the operation originated from the JANET Controller)
-%%               functions [TODO]: Check names 
+%%               in the "ctr_resthandler:add_sublocation_handler()" (if the operation originated from the JANET
+%%               Controller) functions.
 %%
 add_sublocation({Loc_id,Subloc_id},Name) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 ->
  F = fun() ->
@@ -187,9 +187,9 @@ add_sublocation(_,_) ->
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
-%%               either in the "jsim:add_device()" (if the operation originated from the JANET Simulator) or in
-%%               the "ctr_restserver:add_device()" (if the operation originated from the JANET Controller) functions [TODO]: Check names 
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced either
+%%               in the "jsim:add_device()" (if the operation originated from the JANET Simulator) or in the
+%%               "ctr_resthandler:add_device_handler()" (if the operation originated from the JANET Controller) functions
 %%
 add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
@@ -963,10 +963,9 @@ get_suploc_pid(Loc_id) ->
 %%               - {error,different_locations}    -> The specified and the current sublocations are in different locations
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
-%%               either in the "jsim:update_dev_subloc()" (if the operation originated from the JANET Simulator) or
-%%               in the "ctr_restserver:update_dev_subloc()" (if the operation originated from the JANET Controller)
-%%               functions [TODO]: Check names 
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced either
+%%               in the "jsim:update_dev_subloc()" (if the operation originated from the JANET Simulator) or in the
+%%               "ctr_resthandler:update_dev_subloc_handler()" (if the operation originated from the JANET Controller) functions.
 %%
 update_dev_subloc(Dev_id,{Loc_id,Subloc_id}) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
  F = fun() ->
@@ -1309,10 +1308,9 @@ delete_suploc(Loc_id) ->
 %%
 %% NOTE:         Default sublocations cannot be removed (Subloc_id > 0)
 %%
-%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
-%%               either in the "jsim:delete_sublocation()" (if the operation originated from the JANET Simulator) or
-%%               in the "ctr_restserver:delete_sublocation()" (if the operation originated from the JANET Controller)
-%%               functions [TODO]: Check names 
+%% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced either
+%%               in the "jsim:delete_sublocation()" (if the operation originated from the JANET Simulator) or in the
+%%               "ctr_resthandler:delete_sublocation_handler()" (if the operation originated from the JANET Controller) functions.
 %%
 delete_sublocation({Loc_id,Subloc_id}) when is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>0 -> 
  F = fun() ->
@@ -1373,8 +1371,8 @@ move_devlist_to_default_subloc([Dev_id|NextDev_id],Loc_id) ->
 %%
 %% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced
 %%               either in the "jsim:delete_device()" (if the operation originated from the JANET Simulator) or
-%%               in the "ctr_restserver:delete_device()" (if the operation originated from the JANET Controller)
-%%               functions [TODO]: Check names 
+%%               in the "ctr_resthandler:delete_device_handler()" (if the operation originated from the JANET
+%%               Controller) functions.
 %%
 delete_device(Dev_id) when is_number(Dev_id), Dev_id>0 ->
  F = fun() ->

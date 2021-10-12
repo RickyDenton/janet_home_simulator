@@ -55,17 +55,17 @@ handle_continue(init,SrvState) ->
  
  % Retrieve the environment parameters that will be used
  % by the controller for interfacing with the remote host
- CtrRESTPort = LocationRecord#location.port,                            % The OS port to be used by the controller's REST server (int >= 30000)
- {ok,RemoteRESTClient} = application:get_env(remote_rest_client),        % The address of the remote client issuing REST requests to the controller (a list)
- {ok,RemoteRESTServerAddr} = application:get_env(sim_rest_server_addr),  % The address of the remote server accepting REST requests from the controller (a list)  
- {ok,RemoteRESTServerPort} = application:get_env(sim_rest_server_port),  % The port of the remote server accepting REST requests from the controller (int > 0)
- Loc_user = LocationRecord#location.user,                               % The user the location belongs to [REMOTE SERVER COMPATIBILITY]
+ CtrRESTPort = LocationRecord#location.port,                              % The OS port to be used by the controller's REST server (int >= 30000)
+ {ok,RemoteRESTClient} = application:get_env(remote_rest_client),          % The address of the remote client issuing REST requests to the controller (a list)
+ {ok,RemoteRESTServerAddr} = application:get_env(remote_rest_server_addr), % The address of the remote server accepting REST requests from the controller (a list)  
+ {ok,RemoteRESTServerPort} = application:get_env(remote_rest_server_port), % The port of the remote server accepting REST requests from the controller (int > 0)
+ Loc_user = LocationRecord#location.user,                                 % The user the location belongs to [REMOTE SERVER COMPATIBILITY]
  
  %% ---------------------------- Controller Node Creation ---------------------------- %% 
  
  % Set the cookie for allowing the Janet Simulator to connect with the controller's node
  % NOTE: The use of atoms is required by the erlang:set_cookie BIF 
- erlang:set_cookie(utils:str_to_atom("ctr-" ++ Loc_id_str ++ "@localhost"),utils:str_to_atom(Loc_id_str)),
+ erlang:set_cookie(list_to_atom("ctr-" ++ Loc_id_str ++ "@localhost"),list_to_atom(Loc_id_str)),
  
  % Prepare the Host, Name and Args parameters of the controller's node
  NodeHost = "localhost",
@@ -171,14 +171,16 @@ handle_call({sim_command,Module,Function,ArgsList},{ReqPid,_},SrvState) when Srv
  {reply,apply(Module,Function,ArgsList),SrvState};
  
  
+%% Unexpected call
+handle_call(Request,From,SrvState=#ctrmgrstate{loc_id=Loc_id}) ->
+ 
+ % Report that an unexpected call was received by this gen_server
+ io:format("[ctr_mgr-~w]: <WARNING> Unexpected call (Request = ~p, From = ~p, SrvState = ~p)~n",[Loc_id,Request,From,SrvState]),
+
+ % Reply with a stub message and keep the SrvState
+ {reply,unsupported,SrvState}.
  
  
-%% DEBUGGING PURPOSES [TODO]: REMOVE
-handle_call(_,{ReqPid,_},SrvState) ->
- io:format("[ctr_mgr-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#ctrmgrstate.loc_id,ReqPid]),
- {reply,gen_response,SrvState}.
-
-
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
 %% CTR_CONN_UPDATE
@@ -212,15 +214,15 @@ handle_cast({ctr_conn_update,online,CtrSimSrvPid},SrvState=#ctrmgrstate{ctr_stat
  {noreply,SrvState#ctrmgrstate{ctr_state = online}};
 
 
-%% Unexpected Cast
+%% Unexpected cast
 handle_cast(Request,SrvState=#ctrmgrstate{loc_id=Loc_id}) ->
  
- % Report that this gen_server should not receive cast requests
+ % Report that an unexpected cast was received by this gen_server
  io:format("[ctr_mgr-~w]: <WARNING> Unexpected cast (Request = ~p, SrvState = ~w)~n",[Loc_id,Request,SrvState]),
 
  % Keep the SrvState
- {noreply,SrvState}.
- 
+ {noreply,SrvState}. 
+
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 

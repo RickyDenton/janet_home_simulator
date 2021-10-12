@@ -2,13 +2,16 @@
 
 -module(utils).
 
--export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,      % Devices Utility Functions
-         check_merge_devconfigs/3,get_devtype_default_config/1,
-		 get_devtype_default_config_json/1,deprefix_dev_config/1,
+%% ----------------------------------- DEVICES UTILITY FUNCTIONS ----------------------------------- %%
+-export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,check_merge_devconfigs/3,
+         get_devtype_default_config/1,get_devtype_default_config_json/1,deprefix_dev_config/1,
 		 devconfig_to_map_all/1,devconfig_to_map_diff/2]). 
--export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).   % Nodes Utility Functions
--export([ensure_jsim_state/1,is_running/1]).                                       %Applications Utility Functions
--export([jsone_term_to_list/2,str_to_atom/1,sign/1]).                              % Conversions Utility Functions
+		 
+%% ------------------------------------ NODES UTILITY FUNCTIONS ------------------------------------ %%		 
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).  
+
+%% --------------------------------- APPLICATIONS UTILITY FUNCTIONS --------------------------------- %%
+-export([ensure_jsim_state/1,is_running/1]).
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
 
@@ -709,62 +712,3 @@ resolve_appname_shorthand(AppShorthand) ->
   true ->
    AppShorthand
  end.
-
-
-%%====================================================================================================================================
-%%                                                  CONVERSIONS UTILITY FUNCTIONS
-%%==================================================================================================================================== 
-
-%% DESCRIPTION:  Converts a term() returned by the jsone:decode(Json_Object) function to list 
-%%
-%% ARGUMENTS:    - Param:     The term() to be converted to list
-%%               - ParamName: The atom() name associated with the term()
-%%
-%% RETURNS:      - ParamList -> The term() converted to stringThe string converted to atom 
-%% 
-%% THROWS:       - {unknown_jsone_cast,ParamName,Param} -> The parameter was cast to an unknown
-%%                                                         term() type by the JSONE library
-%%
-jsone_term_to_list(Param,_) when is_binary(Param) ->
- binary_to_list(Param);
-jsone_term_to_list(Param,_) when is_integer(Param) ->
- integer_to_list(Param);
-jsone_term_to_list(Param,_) when is_float(Param) ->
- float_to_list(Param);
-jsone_term_to_list(Param,_) when is_tuple(Param) ->
- tuple_to_list(Param);
-jsone_term_to_list(Param,_) when is_atom(Param) ->
- atom_to_list(Param);
-jsone_term_to_list(Param,_) when is_list(Param) ->
- Param;
-
-% If the parameter was mapped by the JSONE library to an
-% unknown Erlang type (which should NOT happen), throw an error
-jsone_term_to_list(_,ParamName)  ->
- throw({unknown_jsone_cast,ParamName}).
- 
-
-%% DESCRIPTION:  Converts a string to atom using the Erlang BIFs
-%%
-%% ARGUMENTS:    - Str: The string to be converted to an atom
-%%
-%% RETURNS:      - 'Str' -> The string converted to atom 
-%% 
-%% NOTE:         While generating dynamic atoms is strongly discouraged in general, this is required
-%%               by some BIFs used in the application (e.g. erlang:set_cookie('node','cookie'))
-%%               [TODO]: Also used by 'dev_server's when attempting to register with their controller nodes
-%%
-str_to_atom(Str) ->
- list_to_atom(lists:flatten(io_lib:format("~s",[Str]))).
-
-
-%% DESCRIPTION:  A simple sign function
-%%
-%% ARGUMENTS:    - X: A number
-%%
-%% RETURNS:      - sign(X) (1 if X =:= 0) 
-%%
-sign(X) when is_number(X), X >= 0 ->
- 1; 
-sign(X) when is_number(X), X < 0 ->
- -1.

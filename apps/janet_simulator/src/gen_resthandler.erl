@@ -6,7 +6,7 @@
 -export([init/3,system_continue/3,system_terminate/4]).
 
 %% ----------------------------------- GEN_RESTHANDLER PUBLIC API ----------------------------------- %%
--export([start_link/2,handle_req/3,get_check_method/2,get_check_int_binding/3]).
+-export([start_link/2,handle_req/3,get_check_method/2,get_check_int_binding/3,jsone_term_to_list/2]).
 
 
 %% This record describes an error that may occur in the handling of an HTTP request
@@ -222,6 +222,35 @@ get_check_int_binding(Req,ParamName,MinValue) ->
  end.
  
 
+%% DESCRIPTION:  Converts a term() returned by the jsone:decode(Json_Object) function to list 
+%%
+%% ARGUMENTS:    - Param:     The term() to be converted to list
+%%               - ParamName: The atom() name associated with the term()
+%%
+%% RETURNS:      - ParamList -> The term() converted to stringThe string converted to atom 
+%% 
+%% THROWS:       - {unknown_jsone_cast,ParamName,Param} -> The parameter was cast to an unknown
+%%                                                         term() type by the JSONE library
+%%
+jsone_term_to_list(Param,_) when is_binary(Param) ->
+ binary_to_list(Param);
+jsone_term_to_list(Param,_) when is_integer(Param) ->
+ integer_to_list(Param);
+jsone_term_to_list(Param,_) when is_float(Param) ->
+ float_to_list(Param);
+jsone_term_to_list(Param,_) when is_tuple(Param) ->
+ tuple_to_list(Param);
+jsone_term_to_list(Param,_) when is_atom(Param) ->
+ atom_to_list(Param);
+jsone_term_to_list(Param,_) when is_list(Param) ->
+ Param;
+
+% If the parameter was mapped by the JSONE library to an
+% unknown Erlang type (which should NOT happen), throw an error
+jsone_term_to_list(_,ParamName)  ->
+ throw({unknown_jsone_cast,ParamName}).
+ 
+
 %%====================================================================================================================================
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
@@ -430,7 +459,7 @@ extract_expected_bodymap_params([{ParamName,ParamType,ParamConstraint}|NextParam
 			   % If the parameter is expected to be a list,
 			   % ensure it to be depending on the type on
 			   % which it was mapped by the JSONE library
-               utils:jsone_term_to_list(Param,ParamName);
+               jsone_term_to_list(Param,ParamName);
 		  
 		      integer ->
 		        
@@ -591,85 +620,38 @@ err_to_code_msg(UnknownError) ->
 %%
 init(Parent,Module,Args) ->
     
- {Dbg,ListenerName} =
  try
 
-   %% ---------------------------------------- Initial Setup ---------------------------------------- %	
+  % Trap exit signals so to allow cleanup operations when terminating ({'EXIT',Parent,Reason} in main receive loop)
+  process_flag(trap_exit,true),
+ 
+  % Set a default debug structure for the
+  % process (sys debug facilities support)
+  DbgStruct = sys:debug_options([]),
+ 
+  % Call the init_handler() callback function with the Args passed by the
+  % start_link() function, which returns the following information as a tuple:
+  %
+  % - RESTPort:     The port to be used by the Cowboy listener
+  % - RemoteHost:   The name/ip of the remote host from which
+  %                 accept REST requests (in addition to localhost)
+  % - ListenerName: The name (atom) by which register the
+  %                 callback module as a cowboy listener
+  % - Paths:        The list of resource handlers paths
+  %                 implemented by the callback module
+  % 
+  {ok,RESTPort,RemoteHost,ListenerName,Paths} = Module:init_handler(Args),
+ 
+  % Ensure the port to be used by the Cowboy listener to be available
+  case utils:is_os_port_available(RESTPort) of
    
-   % Trap exit signals so to allow cleanup operations when terminating ({'EXIT',Parent,Reason} in main receive loop)
-   process_flag(trap_exit,true),
- 
-   % Set a default debug structure for the
-   % process (sys debug facilities support)
-   DbgStruct = sys:debug_options([]),
- 
-   % Call the init_handler() callback function with the Args passed by the
-   % start_link() function, which returns the following information as a tuple:
-   %
-   % - RESTPort:     The port to be used by the Cowboy listener
-   % - RemoteHost:   The name/ip of the remote host from which
-   %                 accept REST requests (in addition to localhost)
-   % - ListenerName: The name (atom) by which register the
-   %                 callback module as a cowboy listener
-   % - Paths:        The list of resource handlers paths
-   %                 implemented by the callback module
-   % 
-   {ok,RESTPort,RemoteHost,ListenerName_,Paths} = Module:init_handler(Args),
- 
-   try
-	
-	 %% ---------------------------------------- Cowboy Setup ---------------------------------------- %	
-
-     % Ensure that all Cowboy application dependencies are running
-     {ok, _StartedApps} = application:ensure_all_started(cowboy),
-   
-     % Initialize the list of Cowboy routes by merging the list of resource
-     % paths with the list of accepted hosts (the RemoteHost and localhost)
-     Routes = [{"localhost",Paths},{RemoteHost,Paths}],
-    
-	 % Compile the Cowboy Routes
-     CompiledRoutes = cowboy_router:compile(Routes),
- 
-     % Attempt to start the Cowboy Listener
-     {ok,_} = cowboy:start_clear(ListenerName_,                           % Listener Name
-                                 [{port, RESTPort}],                      % Listener Port
-		 					      #{
-								    env => #{dispatch => CompiledRoutes},  % Listener Routes
-								    request_timeout => infinity            % Connection persistence
-	   						       }
-							     ),
-	
-      % Log that the REST handler has started
-      %% [TODO]: Remove
-	  %io:format("[~p]: Successfully initialized~n",[ListenerName_]),
-
-      % Inform the parent process that the
-	  % synchronous initialization is complete	
-	  proc_lib:init_ack(Parent,{ok,self()}),
-	
-	  % Return the {Dbg,ListenerName} tuple
-	  {DbgStruct,ListenerName_}
+   false ->
 	  
-   catch
-	
-	%% ------------------------------------- Cowboy Setup Errors ------------------------------------- %
-	
-	% If the REST port is not available in the host OS, rethrow the error
-    error:{badmatch,{error,eaddrinuse}} ->
-	 throw({os_port_conflict,RESTPort})
+    %% -------------------------------- Port Allocation Conflict -------------------------------- %
 	  
-   end
-	  
-  catch
-  
-   %% ----------------------------------------- Setup Errors ----------------------------------------- %
-   
-   % If the REST port is not available in the host OS
-   {os_port_conflict,RESTPortConflict} ->
-  
-    % Determine the gen_resthandler shutdown strategy by
-	% calling the 'os_port_conflict' callback function
-    case Module:os_port_conflict(RESTPortConflict) of
+    % It it is not, determine the gen_resthandler shutdown
+    % strategy via the 'os_port_conflict' callback function
+    case Module:os_port_conflict(RESTPort) of
 	 ignore ->
 	 
 	  % Inform the parent supervisor that
@@ -689,24 +671,55 @@ init(Parent,Module,Args) ->
 	  % Exit with the same Reason
 	  exit(Reason)
 	end;
+ 
+   true -> 
+	
+    %% -------------------------------------- Cowboy Setup -------------------------------------- %	
+	 
+	% If the port is available, start the Cowboy application and all its dependencies
+    {ok, _StartedApps} = application:ensure_all_started(cowboy),
+   
+    % Initialize the list of Cowboy routes by merging the list of resource
+    % paths with the list of accepted hosts (the RemoteHost and localhost)
+    Routes = [{"localhost",Paths},{RemoteHost,Paths}],
+    
+	% Compile the Cowboy Routes
+    CompiledRoutes = cowboy_router:compile(Routes),
+ 
+    % Attempt to start the Cowboy Listener
+    {ok,_} = cowboy:start_clear(ListenerName,                             % Listener Name
+                                [{port, RESTPort}],                       % Listener Port
+		     		            #{
+								  env => #{dispatch => CompiledRoutes},  % Listener Routes
+								  request_timeout => infinity            % Connection persistence
+	   						     }
+							   ),
+
+    % Inform the parent process that the
+	% synchronous initialization is complete	
+	proc_lib:init_ack(Parent,{ok,self()}),
+	
+    % Enter the 'gen_resthandler' main loop
+    loop(Parent,DbgStruct,ListenerName)
+	  
+  end
+
+ catch
   
-   % Unhandled error in the gen_resthandler initialization
-   _:Reason ->
+  % Unhandled error in the gen_resthandler initialization
+  error:UnhandledError ->
    
     % Log the error
-    io:format("[gen_resthandler]: <FATAL> Unhandled error: ~p",[Reason]),
+    io:format("[gen_resthandler]: <FATAL> Unhandled error: ~p",[UnhandledError]),
 	
-	% Inform the parent supervisor that this child process
-	% is stopping for an error of the given Reason
-	proc_lib:init_ack(Parent,{error,Reason}),
+	% Inform the parent supervisor that this child
+	% process is stopping for an error of of such reason
+	proc_lib:init_ack(Parent,{error,UnhandledError}),
    
-	% Exit with the same Reason
-    exit(Reason)  
+	% Exit with the same reason as the unhandled error
+    exit(UnhandledError)  
 	
-  end,
-  
- % Enter the process main loop
- loop(Parent,Dbg,ListenerName).
+ end.
 
 
 %% DESCRIPTION:  Called by the 'sys' module after parsing a message received via the

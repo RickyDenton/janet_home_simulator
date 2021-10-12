@@ -97,10 +97,14 @@ handle_call({dev_config_change,NewCfg},{ReqPid,_},SrvState) when node(ReqPid) =:
  end;
 
 
-%% DEBUGGING PURPOSES [TODO]: REMOVE
-handle_call(_,{ReqPid,_},SrvState) ->
- io:format("[ctr_devhandler-~w]: <WARNING> Generic response issued to ReqPid = ~w~n",[SrvState#devhandlerstate.dev_id,ReqPid]),
- {reply,gen_response,SrvState}.
+%% Unexpected call
+handle_call(Request,From,SrvState=#devhandlerstate{dev_id = Dev_id}) ->
+  
+ % Report that an unexpected call was received by this gen_server
+ io:format("[ctr_devhandler-~w]: <WARNING> Unexpected call (Request = ~p, From = ~p, SrvState = ~p)~n",[Dev_id,Request,From,SrvState]),
+
+ % Reply with a stub message and keep the SrvState
+ {reply,unsupported,SrvState}.
 
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
@@ -114,7 +118,8 @@ handle_call(_,{ReqPid,_},SrvState) ->
 %%            2) The updated configuration of the device's state machine
 %%            3) The timestamp of the updated configuration
 %% MATCHES:   (always) (the request comes from the device's 'dev_server' process)
-%% ACTIONS:   Push the updated device configuration and timestamp to the remote MongoDB database [TODO]: CHECK
+%% ACTIONS:   Parse the updated device configuration and send it
+%%            to the remote REST server via the 'ctr_httpclient'
 %% NEW STATE: -
 %%
 handle_cast({dev_config_update,DevSrvPid,CfgUpdatesList},SrvState) when DevSrvPid =:= SrvState#devhandlerstate.dev_srv_pid ->
@@ -142,7 +147,17 @@ handle_cast({dev_config_update,DevSrvPid,CfgUpdatesList},SrvState) when DevSrvPi
  end,
   
  % Keep the server state
- {noreply,SrvState}.
+ {noreply,SrvState};
+
+
+%% Unexpected cast
+handle_cast(Request,SrvState=#devhandlerstate{dev_id = Dev_id}) ->
+
+ % Report that an unexpected cast was received by this gen_server
+ io:format("[ctr_devhandler-~w]: <WARNING> Unexpected cast (Request = ~p, SrvState = ~w)~n",[Dev_id,Request,SrvState]),
+
+ % Keep the SrvState
+ {noreply,SrvState}. 
  
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
@@ -301,9 +316,6 @@ parse_new_devconfigs_record([{NewConfig,Timestamp}|NextConfig],Dev_id,CtrDevReco
   true -> 
    utils:devconfig_to_map_diff(CtrDevRecord#ctr_device.config,NewConfig)
  end,
- 
- %% [TODO]: Remove
- %io:format("Recursive case (NewConfig = ~p, Timestamp = ~p, NextConfig = ~p, Dev_id = ~w, CtrDevRecord = ~p, NewCfgMap = ~p)~n",[NewConfig,Timestamp,NextConfig,Dev_id,CtrDevRecord,NewCfgMap]),
  
  % Append the map and timestamp into the list of updated configuration maps and parse the next
  % updated device configuration, passing directly the updated device record for optimization purposes
