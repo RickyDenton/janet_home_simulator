@@ -1,0 +1,20 @@
+%% This is the resource file of the JANET Controller application %%
+
+{application,
+ janet_controller,				                     % Application Name
+ [
+  {description,"JANET Home Controller"},	         % Application Description
+  {vsn,"0.0.1"},							         % Application Version
+  {modules,[jctr,ctr_db,sup_jctr,ctr_simserver,      % Application-specific Modules
+            sup_devhandlers,ctr_devhandler,
+			ctr_pairserver,ctr_resthandler,
+			ctr_httpclient]},                
+  {registered,[ctr_simserver,sup_devhandlers,        % Application Registered Names
+               ctr_resthandler,ctr_httpclient,             
+               ctr_simserver]},             
+  {applications,[mnesia,stdlib,kernel]},             % Application Dependencies
+  {mod,{jctr,[]}},                                   % Application Callback Module and Arguments([] = 'normal')
+  {licenses, ["Apache 2.0"]},                        % Licenses (added by Rebar3)
+  {links, []}                                        % Links    (added by Rebar3)
+ ]
+}.

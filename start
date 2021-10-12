@@ -1,0 +1,2 @@
+#!/bin/bash
+REBAR3_ERL_ARGS="-sname janet-simulator@localhost -hidden -setcookie janet-simulator" rebar3 shell

@@ -1,0 +1,6 @@
+-sname janet_simulator
+
+-setcookie janet_simulator_cookie
+
++K true
++A30

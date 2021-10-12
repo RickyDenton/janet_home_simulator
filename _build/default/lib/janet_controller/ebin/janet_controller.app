@@ -1,0 +1,12 @@
+{application,janet_controller,
+             [{description,"JANET Home Controller"},
+              {vsn,"0.0.1"},
+              {modules,[ctr_db,ctr_devhandler,ctr_httpclient,ctr_pairserver,
+                        ctr_resthandler,ctr_simserver,jctr,sup_devhandlers,
+                        sup_jctr]},
+              {registered,[ctr_simserver,sup_devhandlers,ctr_resthandler,
+                           ctr_httpclient,ctr_simserver]},
+              {applications,[mnesia,stdlib,kernel]},
+              {mod,{jctr,[]}},
+              {licenses,["Apache 2.0"]},
+              {links,[]}]}.
