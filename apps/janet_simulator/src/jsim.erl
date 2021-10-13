@@ -26,6 +26,10 @@
          print_ctr_tree/1,ctr_command/4]).   
 -export([dev_config_change/2,dev_command/4]).                        % Device Nodes interaction
 	  
+%% ------------------------------------- OTHER UTILITY FUNCTIONS ------------------------------------ %%
+-export([monitor_tree/0,monitor_tree/1,demonitor_tree/0,help/0]).
+
+	  
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
 
@@ -818,6 +822,55 @@ dev_command(_,_,_,_) ->
  {error,badarg}.
 
 
+%% =================================================== OTHER UTILITY FUNCTIONS =================================================== %%
+
+%% DESCRIPTION:  Spawns a process which periodically prints the JANET Simulator
+%%               database contents indented as a tree (as of jsim:print_tree())
+%%
+%% ARGUMENTS:    - (none):        The database tree is printed with
+%%                                a default period of 10 seconds
+%%               - PeriodSeconds: The database tree is prented with a
+%%                                custom period of PeriodSeconds seconds
+%%
+%% RETURNS:      - ok -> Database monitoring process spawned
+%%
+%% NOTE:         Use demonitor_tree() for stopping the monitoring process
+%%
+
+% Default monitoring period (10 seconds)
+monitor_tree() ->
+ start_tree_monitor(10).
+
+% Custom monitoring period 
+monitor_tree(PeriodSeconds) ->
+ start_tree_monitor(PeriodSeconds).
+
+
+%% DESCRIPTION:  Stops the active monitoring of the JANET Simulator database contents by stopping the its
+%%               associated process spawned via the monitor_tree()/monitor_tree(PeriodSeconds) function
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok                 -> Database contents monitoring stopped
+%%               - {error,no_monitor} -> No database monitoring is currently active
+%%
+%% NOTE:         Use monitor_tree()/monitor_tree(PeriodSeconds) for starting the monitoring process
+%%
+demonitor_tree() ->
+ stop_tree_monitor().
+
+
+%% DESCRIPTION:  Prints an help message outlining the main functionalities
+%%               exported by the JANET Simulator application
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok -> Help message printed
+%%
+help() ->
+ print_help().
+ 
+ 
 %%====================================================================================================================================%
 %%                                                                                                                                    %
 %%                                                     PRIVATE HELPER FUNCTIONS                                                       %
@@ -887,6 +940,9 @@ janet_stop() ->
  
   % Ensure the JANET Simulator to be running
   ok = utils:ensure_jsim_state(running),
+  
+  % Stop the database monitor process, if it is active
+  stop_tree_monitor(),
   
   % Attempt to stop the JANET Simulator application
   case application:stop(janet_simulator) of
@@ -1601,7 +1657,7 @@ print_mgrs_list(StrHeader,MgrsList) ->
  io:format("~n~s ",[StrHeader]),
  if
   length(MgrsList) > 0 ->
-   io:format("~p",[MgrsList]);
+   io:format("~0p",[MgrsList]);
   true ->
    io:format("(none)")
  end.
@@ -1728,6 +1784,218 @@ gen_dev_command(Dev_id,Module,Function,ArgsList) ->
    end	   
  end.
 
+%%====================================================================================================================================
+%%                                                  OTHER UTILITY HELPER FUNCTIONS                                                       
+%%====================================================================================================================================
+ 
+%% Spawns a process which periodically prints the JANET Simulator database contents
+%% indented as a tree (monitor_tree(),monitor_tree(PeriodSeconds) helper function)
+start_tree_monitor(PeriodSeconds) ->
+
+ % Check whether the database monitoring process is already
+ % active via the 'db_monitor' environment variable
+ case application:get_env(janet_simulator,db_monitor) of
+ 
+  % If it is, send it a poison
+  % pill for stopping its execution 
+  {ok,OldDBMonitor} when is_pid(OldDBMonitor) ->
+   OldDBMonitor ! stop;
+  
+  % Otherwise, proceed
+  undefined ->
+   ok
+ end,
+ 
+ % Spawn the database monitoring process
+ DBMonitor = spawn(fun() -> db_monitor(PeriodSeconds) end),
+
+ % Register the PID of the database monitoring process in an
+ % environment variable of the JANET Simulator application
+ application:set_env(janet_simulator,db_monitor,DBMonitor).
+ 
+
+%% Stops the active monitoring of the JANET Simulator database contents by stopping the its associated process
+%% spawned via the monitor_tree()/monitor_tree(PeriodSeconds) function (demonitor_tree() helper function)
+stop_tree_monitor() ->
+ 
+ % Check whether the database monitoring process is
+ % active via the 'db_monitor' environment variable
+ case application:get_env(janet_simulator,db_monitor) of
+  {ok,DBMonitor} when is_pid(DBMonitor) ->
+  
+   % If it is, send it a poison
+   % pill for stopping its execution 
+   DBMonitor ! stop,
+   
+   % Delete the 'db_monitor' environment variable
+   application:unset_env(janet_simulator,db_monitor),
+   
+   % Return 'ok'
+   ok;
+   
+  % Otherwise, return that no database
+  % monitoring is currently active
+  undefined ->
+   {error,no_monitor}
+ end.
+ 
+ 
+%% DESCRIPTION:  Body function of the database monitor process, which periodically prints the
+%%               JANET Simulator database contents indented as a tree (as of jsim:print_tree())
+%%
+%% ARGUMENTS:    - PeriodSeconds: The period by which printing the database tree
+%%
+%% RETURNS:      - (can only exit by receiving the 'stop' poison pill)
+%%
+%% NOTE:         - Use monitor_tree()/monitor_tree(PeriodSeconds) for spawning this process
+%%               - Use demonitor_tree() for stopping this process
+%%
+db_monitor(PeriodSeconds) ->
+ 
+ % Await the 'stop' poison pill for up to "PeriodSeconds" seconds
+ receive
+ 
+  % If the poison pill was received,
+  % exit with reason 'normal'
+  stop ->
+   exit(normal)
+    
+ % After the "PeriodSeconds" timeeout (or period)
+ after PeriodSeconds * 1000 ->
+ 
+  % Print the tree monitoring header
+  io:format("~nJANET Simulator Database @ ~s~n",[string:slice(calendar:system_time_to_rfc3339(erlang:system_time(second),[{time_designator,$\s}]),0,19)]),
+  io:format("===================================================================================================="),
+  
+  % Print the JANET Simulator database contents indented as a tree
+  print_tree(),
+  
+  % Recursively call the process body
+  db_monitor(PeriodSeconds)
+ end. 
+
+
+%% Prints an help message outlining the main functionalities exported
+%% by the JANET Simulator application (help() helper function)
+print_help() ->
+
+ % Initial newline
+ io:format("~n"),
+
+ % SIMULATION START AND STOP
+ io:format("SIMULATION START AND STOP~n"),
+ io:format("=========================~n"),
+ io:format(" - jsim:run()      -> Starts the JANET Simulator~n"),
+ io:format(" - jsim:stop()     -> Stops the JANET Simulator~n"),
+ io:format(" - jsim:shutdown() -> Stops the JANET Simulator and the Erlang Run-Time System (ERTS)~n"),
+ io:format("~n~n"),
+ 
+ % SIMULATION MONITORING FUNCTIONS
+ io:format("SIMULATION MONITORING FUNCTIONS~n"),
+ io:format("===============================~n~n"),
+ io:format("Print Database Tree~n"),
+ io:format("-------------------~n"),
+ io:format(" - jsim:print_tree()                     -> Prints the database contents indented as a tree~n"),
+ io:format(" - jsim:print_tree(user,\"Username\")      -> Prints the database contents associated with a specific user~n"),
+ io:format(" - jsim:print_tree(loc,Loc_id)           -> Prints the database contents associated with a specific location~n"),
+ io:format(" - jsim:print_tree(sub,Sub_id)           -> Prints the database contents associated with a specific sublocation~n"),
+ io:format("~n"),
+ io:format("Monitor Database Tree~n"),
+ io:format("---------------------~n"),
+ io:format(" - jsim:monitor_tree()                   -> Prints the database contents indented as a tree every 10 seconds~n"),
+ io:format(" - jsim:monitor_tree(PeriodSeconds)      -> Prints the database contents indented as a tree with the given period~n"),
+ io:format(" - jsim:demonitor_tree(PeriodSeconds)    -> Stops the periodic printing of the database contents~n"),
+ io:format("~n"),
+ io:format("Print running and stopped nodes~n"),
+ io:format("-------------------------------~n"),
+ io:format(" - jsim:print_nodes()                    -> Prints the lists of running and stopped nodes~n"),
+ io:format(" - jsim:print_nodes(running|stopped)     -> Prints the lists of running or stopped nodes~n"),
+ io:format("~n"),
+ io:format("Print simulator tables~n"),
+ io:format("----------------------~n"),
+ io:format(" - jsim:print_table()                    -> Prints the contents of the database tables~n"),
+ io:format(" - jsim:print_table(SimTable)            -> Prints the contents of a specific database table~n"),
+ io:format(" - jsim:get_record(SimTable,RecordID)    -> Prints a specific record in a given table~n"),
+ io:format("~n"),
+ io:format("Print controllers databases~n"),
+ io:format("---------------------------~n"),
+ io:format(" - jsim:print_ctr_tree(Loc_id)           -> Print the contents of a controller database indented as a tree~n"),
+ io:format(" - jsim:print_ctr_table(Loc_id)          -> Prints all database tables in a controller database~n"),
+ io:format(" - jsim:print_ctr_table(Loc_id,CtrTable) -> Prints a specific database table in a controller database~n"),
+ io:format("~n~n"),
+ 
+ % NODES START AND STOP
+ io:format("NODES START AND STOP~n"),
+ io:format("====================~n~n"),
+ io:format("Per-node start/stop~n"),
+ io:format("-------------------~n"),
+ io:format(" - jsim:stop_node(ctr|dev,Loc_id|Dev_id)    -> Stops the controller/device node of the given ID~n"),
+ io:format(" - jsim:restart_node(ctr|dev,Loc_id|Dev_id) -> Restarts the controller/device node of the given ID~n"),
+ io:format("~n"),
+ io:format("Per-sublocation start/stop~n"),
+ io:format("--------------------------~n"),
+ io:format(" - jsim:stop_subloc(Sub_id)                 -> Stops all devices in the given sublocation~n"),
+ io:format(" - jsim:restart_subloc(Sub_id)              -> Stops all devices in the given sublocation~n"),
+ io:format("~n"),
+ io:format("Per-location start/stop~n"),
+ io:format("-----------------------~n"),
+ io:format(" - jsim:stop_loc(Loc_id)                    -> Stops the controller and all devices in the location~n"),
+ io:format(" - jsim:restart_loc(Loc_id)                 -> Restarts the controller and all devices in the location~n"),
+ io:format("~n"),
+ io:format("All-nodes start/stop~n"),
+ io:format("--------------------~n"),
+ io:format(" - jsim:stop_all_nodes()                    -> Stops all controller and device nodes in the application~n"),
+ io:format(" - jsim:restart_all_nodes()                 -> Restarts all controller and device nodes in the application~n"),
+ io:format("~n~n"),
+ 
+ % DATABASE STATE MANIPULATION
+ io:format("DATABASE STATE MANIPULATION~n"),
+ io:format("===========================~n~n"),
+ io:format("NOTE: Using this functions WILL lead to inconsistencies with the remote database~n"),
+ io:format("~n"),
+ io:format("Create~n"),
+ io:format("------~n"),
+ io:format(" - jsim:add_location(Loc_id,Name,User,Port) -> Adds a new location in the system, also starting its controller node~n"),
+ io:format(" - jsim:add_sublocation(Sub_id,Name)        -> Adds a new sublocation in a location~n"),
+ io:format(" - jsim:add_device(Dev_id,Name,Sub_id,Type) -> Adds a new device in a sublocation, also starting its node~n"),
+ io:format("~n"),
+ io:format("Update~n"),
+ io:format("------~n"),
+ io:format(" - jsim:dev_config_change(Dev_id,DevConfig) -> Changes a device configuration~n"),
+ io:format(" - jsim:update_dev_subloc(Dev_id,Sub_id)    -> Moves a device into a sublocation within the same location~n"),
+ io:format(" - jsim:update_loc_name(Loc_id,Name)        -> Updates a location's name~n"),
+ io:format(" - jsim:update_subloc_name(Sub_id,Name)     -> Updates a sublocation's name~n"),
+ io:format(" - jsim:update_dev_name(Dev_id,Name)        -> Updates a device's name~n"),
+ io:format("~n"),
+ io:format("Delete~n"),
+ io:format("------~n"),
+ io:format(" - jsim:delete_location(Loc_id)             -> Deletes a location, along with all its sublocation and devices~n"),
+ io:format(" - jsim:delete_sublocation(Sub_id)          -> Deletes a sublocation, moving its devices in the default sublocation~n"),
+ io:format(" - jsim:delete_device(Dev_id)               -> Deletes a device, also stopping its node~n"),
+ io:format("~n~n"),
+  
+ % DATABASE BACKUP AND RESTORE
+ io:format("DATABASE BACKUP AND RESTORE~n"),
+ io:format("===========================~n~n"),
+ io:format("NOTE: Using this functions WILL lead to inconsistencies with the remote database~n"),
+ io:format("~n"),
+ io:format("Backup~n"),
+ io:format("------~n"),
+ io:format(" - db:backup()            -> Backs up the database contents to the \"db/mnesia_backup.db\" file~n"),
+ io:format(" - db:backup(\"FileName\")  -> Backs up the database contents to \"FileName\" under the \"db/\" directory~n"),
+ io:format("~n"),
+ io:format("Restore~n"),
+ io:format("------~n"),
+ io:format(" - db:restore()           -> Restores the database to the contents of the \"db/mnesia_backup.db\" file~n"),
+ io:format(" - db:restore(\"FileName\") -> Restores the database to the contents of \"FileName\" under the \"db/\" directory~n"),
+ io:format("~n"),
+ io:format("Clear~n"),
+ io:format("------~n"),
+ io:format(" - db:clear()             -> Clears all database contents~n"),
+ 
+ % Trailing newline
+ io:format("~n").
+ 
  
 %%====================================================================================================================================
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
