@@ -50,9 +50,6 @@ handle_continue(init,SrvState) ->
  % Retrieve the location record
  {ok,LocationRecord} = db:get_record(location,Loc_id),
  
- % Derive the initial contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
- {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
- 
  % Retrieve the environment parameters that will be used
  % by the controller for interfacing with the remote host
  CtrRESTPort = LocationRecord#location.port,                              % The OS port to be used by the controller's REST server (int >= 30000)
@@ -68,23 +65,36 @@ handle_continue(init,SrvState) ->
  erlang:set_cookie(list_to_atom("ctr-" ++ Loc_id_str ++ "@localhost"),list_to_atom(Loc_id_str)),
  
  % Prepare the Host, Name and Args parameters of the controller's node
- NodeHost = "localhost",
+ NodeHost = LocationRecord#location.hostname,
  NodeName = "ctr-" ++ Loc_id_str,
  NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_controller/ebin/ _build/default/lib/janet_simulator/ebin/ " ++
             "_build/default/lib/cowboy/ebin/ _build/default/lib/cowlib/ebin/ _build/default/lib/ranch/ebin/ _build/default/lib/jsone/ebin/ _build/default/lib/gun/ebin/",
  
- % Instantiate the controller's node and link it to the manager
- {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),
+ % Attempt to start the controller node and link it to
+ % the manager for a predefined maximum number of attempts
+ case utils:start_link_node(NodeHost,NodeName,NodeArgs,"ctr_mgr",Loc_id,"controller") of
+  {error,Reason} ->
+   
+   % If an error persists in starting the controller node, report it and stop the manager
+   io:format("[ctr_mgr-~w]: <ERROR> Controller node could not be started (reason = ~p), stopping the manager~n",[Loc_id,Reason]),
+   
+   % Stop with reason 'normal' to prevent the 'sup_loc' supervisor from reattempting to respawn the manager
+   % (which would be useless in the current situation given the persistent error in starting its controller node) 
+   {stop,normal,SrvState};
+
+  {ok,Node} ->
+  
+   % Otherwise if the controller node was successfully started and linked with the
+   % manager, derive the initial contents of its 'ctr_sublocation' and 'ctr_device' tables
+   {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
-  % Derive the initial contents of the controller's 'ctr_sublocation' and 'ctr_device' tables
- {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
+   % Launch the Janet Controller application on the controller node
+   ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort,Loc_user]),
  
- % Launch the Janet Controller application on the controller node
- ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort,Loc_user]),
- 
- % Set the ctr_node in the server state and wait for the
- % registration request of the controller's 'ctr_simserver' process
- {noreply,SrvState#ctrmgrstate{ctr_node = Node}}.
+   % Set the ctr_node in the server state and wait for the
+   % registration request of the controller's 'ctr_simserver' process
+   {noreply,SrvState#ctrmgrstate{ctr_node = Node}}
+ end.
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %% 
@@ -276,23 +286,21 @@ terminate(_,SrvState) ->
  % Update the controller node state as "STOPPED" and deregister the manager's PID from the 'ctrmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid='-',status="STOPPED"}) end),
  
- % If the JANET Simulator is not stopping ('janet_stopping' environment
- % variable to 'true'), report that the controller node has stopped
- case application:get_env(janet_simulator,janet_stopping) of
+ % Retrieve the value of the 'janet_stopping' environment variable
+ {ok,JANETStopping} = application:get_env(janet_simulator,janet_stopping),
  
-  % JANET Simulator not stopping (report)
-  {ok,false} ->
+ if
+ 
+  % If the JANET Simulator is not stopping and the controller was
+  % booted, print a message reporting that its node is stopping
+  JANETStopping =:= false andalso SrvState#ctrmgrstate.ctr_state =/= booting ->
    io:format("[ctr_mgr-~w]: Controller node stopped~n",[SrvState#ctrmgrstate.loc_id]);
  
-  % JANET Simulator stopping (do not report)
-  {ok,true} ->
-   ok;
-   
-  % Environment variable not found (error)
-  _ ->
-   io:format("[ctr_mgr-~w]: <WARNING> Undefined or unexpected value of the 'janet_stopping' environment variable (controller node stopped)~n",[SrvState#ctrmgrstate.loc_id])
+  % In all other cases, do not report anything
+  true -> 
+   ok
  end.
- 
+
  %% NOTE: At this point, if is still running, being it linked to the manager the controller node is automatically terminated 
 
 

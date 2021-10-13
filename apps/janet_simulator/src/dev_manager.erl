@@ -3,19 +3,20 @@
 -module(dev_manager).
 -behaviour(gen_server).
 
--export([start_link/2,init/1,terminate/2,handle_call/3,handle_cast/2,handle_continue/2,handle_info/2]).  % gen_server Behaviour Callback Functions
+-export([start_link/3,init/1,terminate/2,handle_call/3,handle_cast/2,handle_continue/2,handle_info/2]).  % gen_server Behaviour Callback Functions
 
 -include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %% This record represents the state of a dev_manager gen_server
 -record(devmgrstate,    
         {
-		 dev_state,       % The state of the managed device node
-		 dev_node,        % The reference to the managed node
-		 dev_srv_pid,     % The PID of the device's 'dev_server' process
-		 dev_srv_mon,     % A reference used for monitoring the device's 'dev_server' process (and consequently the node)
-		 dev_id,          % The device's ID
-		 loc_id           % The device's location ID
+		 dev_state,     % The state of the managed device node
+		 dev_node,      % The reference to the managed node
+		 dev_srv_pid,   % The PID of the device's 'dev_server' process
+		 dev_srv_mon,   % A reference used for monitoring the device's 'dev_server' process (and consequently the node)
+		 dev_id,        % The device's ID
+		 loc_id,        % The device's location ID
+		 ctr_hostname   % The name of the host where the location controller node is deployed
 		}).
 
 %%====================================================================================================================================
@@ -23,7 +24,7 @@
 %%====================================================================================================================================
 
 %% ============================================================ INIT ============================================================ %%
-init({Dev_id,Loc_id}) ->
+init({Dev_id,Loc_id,CtrHostName}) ->
 
  % Trap exit signals so to allow cleanup operations when terminating (terminate(Reason,SrvState) callback function)
  process_flag(trap_exit,true),
@@ -33,7 +34,7 @@ init({Dev_id,Loc_id}) ->
  
  % Return the server initial state, where the initialization of the device node will continue
  % in the "handle_continue(Continue,State)" callback function for parallelization purposes  
- {ok,#devmgrstate{dev_state = booting, dev_id = Dev_id, loc_id = Loc_id, _ = none},{continue,init}}.
+ {ok,#devmgrstate{dev_state = booting, dev_id = Dev_id, loc_id = Loc_id, ctr_hostname = CtrHostName, _ = none},{continue,init}}.
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
@@ -63,19 +64,32 @@ handle_continue(init,SrvState) ->
  erlang:set_cookie(list_to_atom("dev-" ++ Dev_id_str ++ "@localhost"),list_to_atom(Loc_id_str)),
  
  % Prepare the Host, Name and Args parameters of the controller's node
- NodeHost = "localhost",
+ NodeHost = DeviceRecord#device.hostname,
  NodeName = "dev-" ++ Dev_id_str,
  NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_device/ebin/ _build/default/lib/janet_simulator/ebin/",
  
- % Instantiate the controller's node and link it to the manager
- {ok,Node} = slave:start_link(NodeHost,NodeName,NodeArgs),
-
- % Launch the Janet Device application on the controller node
- ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,self(),Type,Config]),
+ % Attempt to start the device node and link it to the
+ % manager for a predefined maximum number of attempts
+ case utils:start_link_node(NodeHost,NodeName,NodeArgs,"dev_mgr",Dev_id,"device") of
+  {error,Reason} ->
+  
+   % If an error persists in starting the device node, report it and stop the manager
+   io:format("[dev_mgr-~w]: <ERROR> Device node could not be started (reason = ~p), stopping the manager~n",[Dev_id,Reason]),
+   
+   % Stop with reason 'normal' to prevent the 'sup_loc' supervisor from reattempting to respawn the manager
+   % (which would be useless in the current situation given the persistent error in starting its device node) 
+   {stop,normal,SrvState};
+   
+  {ok,Node} ->
+  
+   % Otherwise if the device node was successfully started and linked
+   % with the manager, launch on it the Janet Device application
+   ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,self(),Type,Config,SrvState#devmgrstate.ctr_hostname]),
  
- % Set the 'dev_node' state variable and wait for the
- % registration request of the device's dev_server process
- {noreply,SrvState#devmgrstate{dev_node = Node}}.
+   % Set the 'dev_node' state variable and wait for the
+   % registration request of the device's dev_server process
+   {noreply,SrvState#devmgrstate{dev_node = Node}}
+ end.
   
  
 %% ========================================================= HANDLE_CALL ========================================================= %% 
@@ -332,21 +346,19 @@ terminate(_,SrvState) ->
  % Update the device node state as "STOPPED" and deregister the manager's PID from the 'devmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid='-',status="STOPPED"}) end),
  
- % If the JANET Simulator is not stopping ('janet_stopping' environment
- % variable to 'true'), report that the device node has stopped
- case application:get_env(janet_simulator,janet_stopping) of
+ % Retrieve the value of the 'janet_stopping' environment variable
+ {ok,JANETStopping} = application:get_env(janet_simulator,janet_stopping),
  
-  % JANET Simulator not stopping (report)
-  {ok,false} ->
+ if
+ 
+  % If the JANET Simulator is not stopping and the device was
+  % booted, print a message reporting that the its node is stopping
+  JANETStopping =:= false andalso SrvState#devmgrstate.dev_state =/= booting ->
    io:format("[dev_mgr-~w]: Device node stopped~n",[SrvState#devmgrstate.dev_id]);
  
-  % JANET Simulator stopping (do not report)
-  {ok,true} ->
-   ok;
-   
-  % Environment variable not found (error)
-  _ ->
-   io:format("[dev_mgr-~w]: <WARNING> Undefined or unexpected value of the 'janet_stopping' environment variable (device node stopped)~n",[SrvState#devmgrstate.dev_id])
+  % In all other cases, print nothing
+  true ->
+   ok
  end.
 
  %% NOTE: At this point, if is still running, being it linked to the manager the device node is automatically terminated 
@@ -359,5 +371,5 @@ terminate(_,SrvState) ->
 %% Called by its 'sup_loc' location supervisor whenever a new device is started in the location, which may happen:
 %%  - At boot time by the location devices' initializer      (locs_devs_init)
 %%  - At run time when a new device is added in the location (db:add_device(Dev_id,Name,{Loc_id,Subloc_id},Type))
-start_link(Dev_id,Loc_id) ->
- gen_server:start_link(?MODULE,{Dev_id,Loc_id},[]).
+start_link(Dev_id,Loc_id,CtrHostName) ->
+ gen_server:start_link(?MODULE,{Dev_id,Loc_id,CtrHostName},[]).

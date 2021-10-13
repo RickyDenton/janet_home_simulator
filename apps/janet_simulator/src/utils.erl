@@ -8,12 +8,22 @@
 		 devconfig_to_map_all/1,devconfig_to_map_diff/2]). 
 		 
 %% ------------------------------------ NODES UTILITY FUNCTIONS ------------------------------------ %%		 
--export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).  
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_localhost_port_available/1,
+         is_nodehost_port_available/2,is_allowed_node_host/1,start_link_node/6]).  
+
+% Maximum number of attempts for starting a linking a controller
+% or device node with its manager before returning an error
+-define(Nodes_start_max_attempts,2).      % Default: 2
+
+% Delay in second between consecutive attempts of of starting
+% and linking a controller or device node with its manager
+-define(Nodes_start_attempts_delay_sec,3). % Default: 3
 
 %% --------------------------------- APPLICATIONS UTILITY FUNCTIONS --------------------------------- %%
 -export([ensure_jsim_state/1,is_running/1]).
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
+
 
 %%====================================================================================================================================
 %%                                                    DEVICES UTILITY FUNCTIONS
@@ -594,15 +604,15 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
  prefix_node_id(NodeType,Node_id).
  
 
-%% DESCRIPTION:  Checks if a port is currently available in the host OS
+%% DESCRIPTION:  Checks if a port is currently available in the local host OS
 %%
-%% ARGUMENTS:    - Port: The port to check the availability (integer > 0)
+%% ARGUMENTS:    - Port:   The port to check the availability (integer > 0)
 %%
-%% RETURNS:      - true           -> Port currently available in the host OS
-%%               - false          -> Port not currently available in the host OS
+%% RETURNS:      - true           -> Port currently available in the local host OS
+%%               - false          -> Port not currently available in the local host OS
 %%               - {error,badarg} -> Invalid arguments
 %%
-is_os_port_available(Port) when is_integer(Port), Port > 0 ->
+is_localhost_port_available(Port) when is_integer(Port), Port > 0 ->
 
  % Attempt to bind the process to the port in
  % the host OS using a default configuration
@@ -617,15 +627,124 @@ is_os_port_available(Port) when is_integer(Port), Port > 0 ->
   
   _ ->
   
-   % If the binding was unsuccessful the port
-   % is not currently available in the host OS
+   % If the binding was unsuccessful the port is
+   % not currently available in the local host OS
    false
  end;
    
-is_os_port_available(_) ->
+is_localhost_port_available(_Port) ->
+ {error,badarg}.
+
+
+%% [TODO]: IMPLEMENT
+is_nodehost_port_available(_HostName,_Port) ->
+ true. 
+ 
+
+%% DESCRIPTION:  Checks if a host name belongs to the list of allowed
+%%               hosts where controller and device nodes can be spawned
+%%
+%% ARGUMENTS:    - HostName: The host name to check
+%%
+%% RETURNS:      - true           -> The host belongs to the list of allowed
+%%                                   hosts where nodes can be spawned
+%%               - false          -> The host does NOT belong to the list of
+%%                                   allowed hosts where nodes can be spawned
+%%               - {error,badarg} -> Invalid arguments
+%%
+is_allowed_node_host(HostName) when is_list(HostName) ->
+
+  % Retrieve the 'allowed_nodes_host' environment variable
+  {ok,AllowedHosts} = application:get_env(janet_simulator,allowed_nodes_hosts),
+ 
+  % If the HostName belongs to the list of allowed
+  % hosts return 'true', otherwise return 'false'
+  lists:member(HostName,AllowedHosts);
+  
+is_allowed_node_host(_NonListHostName) ->
+ {error,badarg}.
+  
+    
+%% DESCRIPTION:  Attempts for a predefined maximum number of times to start a controller or
+%%               device node and link it to the calling 'ctr_manager' or 'dev_manager' process
+%%
+%% ARGUMENTS:    - NodeHost:  The host IP address where the node must be started (a list)
+%%               - NodeName:  The relative name of the node to be started (a list)
+%%               - NodeArgs:  The command-line arguments to be applied
+%%                            when starting the node (a list)
+%%               - MgrHeader: The node manager header string (a list, logging purposes)
+%%               - NodeID:    The node ID   (integer > 0, logging purposes) 
+%%               - NodeType:  The node type (a list, logging purposes)
+%%
+%% RETURNS:      - {ok,StartedNode} -> Node of complete name "StartedNode" successfully
+%%                                     started and linked with its manager process
+%%               - {error,Reason}   -> The error that occured in starting the node
+%%                                     after the predefined maximum number of attempts
+%%  
+start_link_node(NodeHost,NodeName,NodeArgs,MgrHeader,NodeID,NodeType) when is_list(NodeHost), is_list(NodeName), is_list(NodeArgs),
+                                                                            is_list(MgrHeader), is_integer(NodeID), NodeID > 0, is_list(NodeType) ->
+
+ % Initialize the maximum number of attempts and attempt to start and link the node
+ start_link_node(NodeHost,NodeName,NodeArgs,MgrHeader,NodeID,NodeType,?Nodes_start_max_attempts-1);
+
+% Invalid arguments
+start_link_node(_,_,_,_,_,_) ->
  {error,badarg}.
  
+%% Attempt for a predefined maximum number of times to start the controller or
+%% device node and link it to the calling 'ctr_manager' or 'dev_manager' process
+%% (start_link_node(NodeHost,NodeName,NodeArgs,MgrHeader,NodeID,NodeType) helper function)
+start_link_node(NodeHost,NodeName,NodeArgs,MgrHeader,NodeID,NodeType,AttemptsLeft) ->
+
+ % Attempt to start the node and link it with the current process
+ StartRes = slave:start_link(NodeHost,NodeName,NodeArgs),
  
+ % Depending on the result of the operation
+ % and the number of attempts left
+ case {StartRes,AttemptsLeft} of 
+  {{ok,StartedNode},_} ->
+  
+   % If the operation was successful,
+   % return the node complete name
+   {ok,StartedNode};
+   
+  {{error,Reason},0} ->
+  
+   % If the operation was unsuccessful and there are
+   % no attempts left, return the error to the manager
+   {error,Reason};
+   
+  {{error,Reason},AttemptsLeft} ->
+  
+   % If the operation was unsuccessful and there is at least
+   % another attempt left, report the error that has occured 
+   case Reason of
+   
+    % Node host timeout
+    timeout ->
+	 io:format("[~s-~w]: <WARNING> Timeout in connecting with the ~s node's host, retrying in ~w seconds...~n",[MgrHeader,NodeID,NodeType,?Nodes_start_attempts_delay_sec]);
+	 
+	% A node with such complete name (NodeName@NodeHost) already exists
+    {already_running,NodeNameConflict} ->
+	 io:format("[~s-~w]: <ERROR> Attempting to start a ~s node that already exists (\"~s\"), retrying in ~w seconds...~n",[MgrHeader,NodeID,NodeType,NodeNameConflict,?Nodes_start_attempts_delay_sec]);
+	 
+	% No 'ssh' program was found in the remote host
+    no_rsh ->
+	 io:format("[~s-~w]: <ERROR> No 'ssh' program was found in the ~s node's host, retrying in ~w seconds...~n",[MgrHeader,NodeID,NodeType,?Nodes_start_attempts_delay_sec]);
+	
+    % Unknown error	
+	UnknownReason ->
+     io:format("[~s-~w]: <UNKNOWN ERROR> Unknown error in starting the ~s node (Reason = ~p), retrying in ~w seconds...~n",[MgrHeader,NodeID,NodeType,UnknownReason,?Nodes_start_attempts_delay_sec])
+   end,
+   
+   % Wait for the predefined delay between nodes start attempts
+   timer:sleep(?Nodes_start_attempts_delay_sec * 1000),
+   
+   % Perform another attempt by recursively calling the function and decrementing the number of attempts left
+   start_link_node(NodeHost,NodeName,NodeArgs,MgrHeader,NodeID,NodeType,AttemptsLeft-1)
+ end.
+
+  
 %%====================================================================================================================================
 %%                                                  APPLICATIONS UTILITY FUNCTIONS
 %%====================================================================================================================================

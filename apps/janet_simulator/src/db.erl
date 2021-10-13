@@ -5,7 +5,7 @@
 -include("sim_mnesia_tables_definitions.hrl").  % Janet Simulator Mnesia Tables Records Definitions
 
 %% ------------------------------------- PUBLIC CRUD OPERATIONS ------------------------------------- %%
--export([add_location/4,add_sublocation/2,add_device/4]).                                                    % Create
+-export([add_location/5,add_sublocation/2,add_device/5]).                                                    % Create
 -export([print_table/0,print_table/1,print_tree/0,print_tree/1,print_tree/2,get_record/2,                    % Read
          get_table_records/1,get_table_keys/0,get_table_keys/1,get_records_num/0,get_records_num/1,
 		 get_loc_devs/1,get_subloc_devs/1,get_manager_info/2,get_suploc_pid/1]).  
@@ -26,10 +26,11 @@
 
 %% DESCRIPTION:  Adds an empty location to the database with its (default) sublocation {Loc_id,0}, and starts up its controller
 %%
-%% ARGUMENTS:    - Loc_id: The ID of the location to add, which must not already exist and be >0
-%%               - Name:   The name of the location (optional)
-%%               - User:   The username of the location's owner (optional)
-%%               - Port:   The port by which the location's controller listens for REST requests, which must not be already taken and be >=30000
+%% ARGUMENTS:    - Loc_id:   The ID of the location to add, which must not already exist and be >0
+%%               - Name:     The name of the location (optional)
+%%               - User:     The username of the location's owner (optional)
+%%               - Port:     The port by which the location's controller listens for REST requests (unique int >= 30000)
+%%               - HostName: The name of the host where to spawn the location controller node (a list)
 %%
 %% RETURNS:      - {ok,ok}                         -> The location was successfully added and its controller node was started
 %%               - {ok,Error}                      -> The location was successfully added, but starting its controller returned an Error
@@ -38,9 +39,10 @@
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
 %%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
+%%               - {error,invalid_hostname}        -> The host name does not belong to the list of allowed hosts where nodes can be spawned
 %%               - {error,badarg}                  -> Invalid arguments
 %%
-add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(Port), Port >= 30000 ->
+add_location(Loc_id,Name,User,Port,HostName) when is_number(Loc_id), Loc_id>0, is_number(Port), Port >= 30000, is_list(HostName) ->
  F = fun() ->
  
       % Check if the location already exists
@@ -51,41 +53,60 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
 		case mnesia:match_object(#location{port = Port, _ = '_'}) of
 		 [] ->
 		 
-		  % If no location name was provided, use a default one
-		  if
-		   Name =:= "" ->
-		    LocName = "loc-" ++ integer_to_list(Loc_id);
+		  % Check the HostName to belong to the list of
+		  % allowed hosts where nodes can be spawned
+		  case utils:is_allowed_node_host(HostName) of
+		  
 		   true ->
-		    LocName = Name
-		  end,
-		 
-		  % If no user name was provided, use a default one
-		  if
-		   User =:= "" ->
-		    LocUser = "(anonymous)";
-		   true ->
-		    LocUser = User
-		  end, 
-		 
-		  % Check if the port is available on the host OS
-		  case utils:is_os_port_available(Port) of
-		   false ->
-		   
-		    % If it is not, return an error
-			mnesia:abort(host_port_taken);
+		  
+	        % If it is, ensure the specified Port to be
+			% currently available on the node host OS
+		    case utils:is_nodehost_port_available(HostName,Port) of
 			
-		   true ->
-		   
-		    % If it is, insert the new location and its default sublocation
-		    mnesia:write(#location{loc_id=Loc_id,name=LocName,user=LocUser,port=Port}),
-		    mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)", devlist=[]})
-		  end;
+			 true ->
+			 
+			  % If it is and no location name was provided, use a default one
+		      if
+		       Name =:= "" ->
+		        LocName = "loc-" ++ integer_to_list(Loc_id);
+		       true ->
+		        LocName = Name
+		      end,
+		 
+		      % If no user name was provided, use a default one
+		      if
+		       User =:= "" ->
+		        LocUser = "(anonymous)";
+		       true ->
+		        LocUser = User
+		      end, 
+		 
+              % Insert the new location and its default sublocation
+              mnesia:write(#location{loc_id=Loc_id,name=LocName,user=LocUser,port=Port,hostname=HostName}),
+		      mnesia:write(#sublocation{sub_id={Loc_id,0}, name="(default)", devlist=[]});
+		  
+		     false ->
+			
+			  % If the Port is NOT available in the host OS, return an error
+		      mnesia:abort(host_port_taken)
+		    end;
+			
+		   false ->
+		  
+		    % If the HostName does not belong to the list of allowed
+		    % hosts where nodes can be spawned, return an error 
+		    mnesia:abort(invalid_hostname)
+		  end;		  
 		  
 		 [_LocationRecord] ->
+		 
+		  % If the port is already taken, return an error
 		  mnesia:abort(port_already_taken)
 		end;
 		
 	   [_LocationRecord] ->
+	   
+	    % If the location already exists, return an error
 	    mnesia:abort(location_already_exists)
       end
      end,
@@ -113,7 +134,7 @@ add_location(Loc_id,Name,User,Port) when is_number(Loc_id), Loc_id>0, is_number(
    {error,Reason}
  end;
  
-add_location(_,_,_,_) ->
+add_location(_,_,_,_,_) ->
  {error,badarg}.
 
 
@@ -175,8 +196,10 @@ add_sublocation(_,_) ->
 %%               - Name:               The device's name (optional)
 %%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
 %%               - Type:               The device's type, which must belong to the set of valid device types
+%%               - HostName:           The name of the host where to spawn the device node (a list)
 %%
-%% RETURNS:      - {ok,ok}                        -> The device was successfully added and its device node was started
+%% RETURNS:      - {ok,ok}                        -> The device was successfully added
+%%                                                   and its device node was started
 %%               - {ok,Error}                     -> The device was successfully added, but
 %%                                                   an Error occured in starting its node
 %%               - ok                             -> The device was successfully added, but the device node
@@ -184,13 +207,16 @@ add_sublocation(_,_) ->
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
+%%               - {error,invalid_hostname}       -> The host name does not belong to the list
+%%                                                   of allowed hosts where nodes can be spawned
 %%               - {error,badarg}                 -> Invalid arguments
 %%
 %% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced either
 %%               in the "jsim:add_device()" (if the operation originated from the JANET Simulator) or in the
 %%               "ctr_resthandler:add_device_handler()" (if the operation originated from the JANET Controller) functions
 %%
-add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0, is_number(Subloc_id), Subloc_id>=0 ->
+add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) when is_number(Dev_id), Dev_id>0, is_number(Loc_id), Loc_id>0,
+                                                               is_number(Subloc_id), Subloc_id>=0, is_list(HostName) ->
  F = fun() ->
  
       % Check the target sublocation to exist
@@ -201,27 +227,47 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
 		case mnesia:read({device,Dev_id}) of
 		 [] ->
 		 
-		  % If empty, use a default name
-		  if
-		   Name =:= "" ->
-		    DevName = "dev-" ++ integer_to_list(Dev_id);
+		  % Check the HostName to belong to the list of
+		  % allowed hosts where nodes can be spawned
+		  case utils:is_allowed_node_host(HostName) of
+		  
 		   true ->
-		    DevName = Name
-		  end,
+ 
+            % If it does and its name is empty, use a default one
+		    if
+		     Name =:= "" ->
+		      DevName = "dev-" ++ integer_to_list(Dev_id);
+		     true ->
+		      DevName = Name
+		    end,
 		  
-		  % Insert the new device in the Device table
-	      mnesia:write(#device{dev_id=Dev_id, name=DevName, sub_id={Loc_id,Subloc_id}, type=Type, config=utils:get_devtype_default_config(Type), lastupdate = erlang:system_time(second)}),
+		    % Insert the new device in the Device table
+	        mnesia:write(#device{dev_id=Dev_id,name=DevName,sub_id={Loc_id,Subloc_id},type=Type,
+			                     config=utils:get_devtype_default_config(Type),lastupdate=erlang:system_time(second),hostname = HostName}),
 		  
-		  % Update the "DevList" in the sublocation table  
-		  UpdatedDevList = lists:append(Sublocation#sublocation.devlist,[Dev_id]),
-		  UpdatedSublocation = Sublocation#sublocation{devlist=UpdatedDevList},
-		  mnesia:write(UpdatedSublocation);
+		    % Update the "DevList" in the sublocation table  
+		    UpdatedDevList = lists:append(Sublocation#sublocation.devlist,[Dev_id]),
+		    UpdatedSublocation = Sublocation#sublocation{devlist=UpdatedDevList},
+		    mnesia:write(UpdatedSublocation);
+		  
+		   false ->
+		  
+		    % If the HostName does not belong to the list of allowed
+		    % hosts where nodes can be spawned, return an error 
+		    mnesia:abort(invalid_hostname)
+		  end;		
 		  
 		 [_DeviceRecord] ->
+		 
+		  % If a device with such "Dev_id"
+		  % already exists, return an error
 		  mnesia:abort(device_already_exists)
 		end;
 		
 	   [] ->
+	   
+	    % If the target sublocation does
+		% not exist, return an error
 	    mnesia:abort(sublocation_not_exists)
       end
      end,
@@ -256,7 +302,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) when is_number(Dev_id), Dev_id>0
    end
  end;
  
-add_device(_,_,_,_) ->
+add_device(_,_,_,_,_) ->
  {error,badarg}.
 
 
@@ -275,15 +321,21 @@ spawn_devmanager(Dev_id,Loc_id) ->
 	
   Sup_pid ->
 	
+   % Retrieve the HostName of the location controller from its record in the 'location' table
+   %
+   % NOTE: A dirty_read is used being we interested in a single constant field
+   %
+   [{location,Loc_id,_Name,_User,_Port,HostName}] = mnesia:dirty_read({location,Loc_id}),
+	
    % If the PID of the location's 'sup_loc' supervisor was successfully retrieved,
    % define the child specification of the device manager to be spawned
    DevMgrSpec = {
-                 "dev-" ++ integer_to_list(Dev_id),         % ChildID
-                 {dev_manager,start_link,[Dev_id,Loc_id]},  % Child Start Function
-	             permanent,                                 % Child Restart Policy
-                 8000,                                      % Child Sub-tree Max Shutdown Time
-	             worker,                  	              % Child Type
-	             [dev_manager]                              % Child Modules (For Release Handling Purposes)
+                 "dev-" ++ integer_to_list(Dev_id),                  % ChildID
+                 {dev_manager,start_link,[Dev_id,Loc_id,HostName]},  % Child Start Function
+	             transient,                                          % Child Restart Policy (transient to account for node host connection failures)
+                 5000,                                               % Child Sub-tree Max Shutdown Time
+	             worker,                  	                         % Child Type
+	             [dev_manager]                                       % Child Modules (For Release Handling Purposes)
                 },
 
    % Attempt to spawn the device manager as a child of the 'sup_loc' supervisor
@@ -354,11 +406,11 @@ print_table() ->
  
 %% Prints a table's header (print_table() helper function) 
 print_table_header(location) ->
- io:format("LOCATION TABLE {loc_id,name,user,port}~n==============~n");
+ io:format("LOCATION TABLE {loc_id,name,user,port,hostname}~n==============~n");
 print_table_header(sublocation) ->
  io:format("SUBLOCATION TABLE {sub_id,name,devlist}~n=================~n");
 print_table_header(device) -> 
- io:format("DEVICE TABLE {dev_id,name,sub_id,type,config,lastupdate}~n============~n");
+ io:format("DEVICE TABLE {dev_id,name,sub_id,type,config,lastupdate,hostname}~n============~n");
 print_table_header(suploc) -> 
  io:format("SUPLOC TABLE {loc_id,sup_pid}~n============~n");
 print_table_header(ctrmanager) -> 
@@ -537,7 +589,8 @@ print_tree_location([Loc|Nextloc],Indent) ->
  end,
  
  % Print information on the location
- io:format("~s~s - ~s~n",[Indent,io_lib:format("~p",[Loc]),CtrMgrStatus]),
+ io:format("~s{location,~w,~p,~p,~w,~s} - ~s~n",[Indent,Loc#location.loc_id,Loc#location.name,
+                                                 Loc#location.user,Loc#location.port,Loc#location.hostname,CtrMgrStatus]),
  
  % Print information on all location's sublocations and devices as a tree, taking the indentation into account
  case {Indent, Nextloc} of
@@ -600,8 +653,8 @@ print_tree_device([Dev|NextDev],Indent) ->
  end,
  
  % Print information on the device
- io:format("~s{device,~w,~s,~w,~w,~p,~s} - ~s~n",[Indent, Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]), Dev#device.sub_id, Dev#device.type, utils:deprefix_dev_config(Dev#device.config),
-										  		 string:slice(calendar:system_time_to_rfc3339(Dev#device.lastupdate,[{time_designator,$\s}]),0,19), DevMgrStatus]),
+ io:format("~s{device,~w,~s,~w,~w,~p,~s,~s} - ~s~n",[Indent, Dev#device.dev_id,io_lib:format("~p",[Dev#device.name]), Dev#device.sub_id, Dev#device.type, utils:deprefix_dev_config(Dev#device.config),
+										     		 string:slice(calendar:system_time_to_rfc3339(Dev#device.lastupdate,[{time_designator,$\s}]),0,19),Dev#device.hostname, DevMgrStatus]),
  % Parse the next device in the list
  print_tree_device(NextDev,Indent).
 

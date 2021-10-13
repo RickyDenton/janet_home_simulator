@@ -7,7 +7,7 @@
 -export([run/0,stop/0,shutdown/0]).
 
 %% ---------------------------------- DATABASE INTERFACE FUNCTIONS ---------------------------------- %%
--export([add_location/4,add_sublocation/2,add_device/4]).            % Create
+-export([add_location/5,add_sublocation/2,add_device/5]).            % Create
 -export([print_table/0,print_table/1,print_tree/0,                   % Read
          print_tree/1,print_tree/2,get_record/2]).
 -export([update_dev_subloc/2,update_loc_name/2,                      % Update
@@ -104,6 +104,7 @@ shutdown() ->
 %%               - Name:   The name of the location (optional)
 %%               - User:   The username of the location's owner (optional)
 %%               - Port:   The port by which the location's controller listens for REST requests, which must not be already taken and be >=30000
+%%               - HostName: The name of the host where to spawn the location controller node (a list)
 %%
 %% RETURNS:      - {ok,ok}                         -> The location was successfully added and its controller node was started
 %%               - {ok,Error}                      -> The location was successfully added, but starting its controller returned an Error
@@ -112,12 +113,13 @@ shutdown() ->
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
 %%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
+%%               - {error,invalid_hostname}        -> The host name does not belong to the list of allowed hosts where nodes can be spawned
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 
 % Simulator database interface function (no synchronization is required with the location's controller)
-add_location(Loc_id,Name,User,Port) ->
- db:add_location(Loc_id,Name,User,Port).
+add_location(Loc_id,Name,User,Port,HostName) ->
+ db:add_location(Loc_id,Name,User,Port,HostName).
 
 
 %% DESCRIPTION:  Adds a new empty sublocation to the database and, if it is running,
@@ -153,6 +155,7 @@ add_sublocation({Loc_id,Subloc_id},Name) ->
 %%               - Name:               The device's name (optional)
 %%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
 %%               - Type:               The device's type, which must belong to the set of valid device types
+%%               - HostName:           The name of the host where to spawn the device node (a list)
 %%
 %% RETURNS:      - {ok,ok,ok}                     -> The device was successfully added, its device node
 %%                                                   was started and its controller was informed of it
@@ -170,13 +173,15 @@ add_sublocation({Loc_id,Subloc_id},Name) ->
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
+%%               - {error,invalid_hostname}       -> The host name does not belong to the list
+%%                                                   of allowed hosts where nodes can be spawned
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) ->
+add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) ->
 
  % Attempt to add the device in the JANET Simulator database and, if successful, attempt to add it in the database of
  % associated location controller, taking into account the situations where it or the JANET Simulator are not running
- ctr_db_sync(add_device,[Dev_id,Name,{Loc_id,Subloc_id},Type],[Dev_id,Subloc_id,Type],Loc_id).
+ ctr_db_sync(add_device,[Dev_id,Name,{Loc_id,Subloc_id},Type,HostName],[Dev_id,Subloc_id,Type],Loc_id).
 
 
 %% =========================================================== READ ================================================================%%  
@@ -897,8 +902,8 @@ janet_start() ->
   {ok,SimRESTPort} = application:get_env(janet_simulator,sim_rest_port),
   
   % Ensure te port to be used by the JANET Simulator
-  % REST server to be available in the host OS
-  case utils:is_os_port_available(SimRESTPort) of
+  % REST server to be available in the local host OS
+  case utils:is_localhost_port_available(SimRESTPort) of
   
    % If it is not, throw an error
    false ->
@@ -1196,14 +1201,14 @@ print_ctr_status_change_summary(Pre_Ctr_id,{error,already_running},restart) ->
  io:format("The controller ~p is already running~n",[Pre_Ctr_id]);
  
 % The controller successfully stopped
-print_ctr_status_change_summary(Pre_Ctr_id,{ok,stop},stop) ->
+print_ctr_status_change_summary(_Pre_Ctr_id,{ok,stop},stop) ->
  
  %% NOTE: Superseeded by the 'ctr_manager's directly printing their termination
  % io:format("The controller ~p was successfully stopped~n",[Pre_Ctr_id]);
  ok;
  
 % The controller successfully restarted
-print_ctr_status_change_summary(Pre_Ctr_id,{ok,restart},restart) ->
+print_ctr_status_change_summary(_Pre_Ctr_id,{ok,restart},restart) ->
 
  %% NOTE: Superseeded by the 'ctr_manager's directly printing when
  %%       their controllers register with them (BOOTING -> CONNECTING)
@@ -1972,17 +1977,17 @@ print_help() ->
  io:format("~n"),
  io:format("Create~n"),
  io:format("------~n"),
- io:format(" - jsim:add_location(Loc_id,Name,User,Port) -> Adds a new location in the system, also starting its controller node~n"),
- io:format(" - jsim:add_sublocation(Sub_id,Name)        -> Adds a new sublocation in a location~n"),
- io:format(" - jsim:add_device(Dev_id,Name,Sub_id,Type) -> Adds a new device in a sublocation, also starting its node~n"),
+ io:format(" - jsim:add_location(Loc_id,\"Name\",User,Port,\"HostName\") -> Adds a new location in the system, also starting its controller node~n"),
+ io:format(" - jsim:add_sublocation(Sub_id,Name)                     -> Adds a new sublocation in a location~n"),
+ io:format(" - jsim:add_device(Dev_id,\"Name\",Sub_id,Type,\"HostName\") -> Adds a new device in a sublocation, also starting its node~n"),
  io:format("~n"),
  io:format("Update~n"),
  io:format("------~n"),
  io:format(" - jsim:dev_config_change(Dev_id,DevConfig) -> Changes a device configuration~n"),
  io:format(" - jsim:update_dev_subloc(Dev_id,Sub_id)    -> Moves a device into a sublocation within the same location~n"),
- io:format(" - jsim:update_loc_name(Loc_id,Name)        -> Updates a location's name~n"),
- io:format(" - jsim:update_subloc_name(Sub_id,Name)     -> Updates a sublocation's name~n"),
- io:format(" - jsim:update_dev_name(Dev_id,Name)        -> Updates a device's name~n"),
+ io:format(" - jsim:update_loc_name(Loc_id,\"Name\")      -> Updates a location's name~n"),
+ io:format(" - jsim:update_subloc_name(Sub_id,\"Name\")   -> Updates a sublocation's name~n"),
+ io:format(" - jsim:update_dev_name(Dev_id,\"Name\")      -> Updates a device's name~n"),
  io:format("~n"),
  io:format("Delete~n"),
  io:format("------~n"),

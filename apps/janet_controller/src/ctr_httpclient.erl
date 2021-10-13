@@ -199,7 +199,7 @@ handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_us
  
  % Log that the controller is now connected to the remote REST server
  %% [TODO]: Remove when ready?
- io:format("[ctr_httpclient-~w]: Gun up!~n",[Loc_id]),
+ io:format("[ctr_httpclient-~w]: Uplink established~n",[Loc_id]),
  
  % Inform the 'ctr_manager' in the JANET Simulator passing by the 'ctr_simserver'
  % that the controller is now connected with the remote REST server
@@ -243,7 +243,7 @@ handle_info({gun_down,ConnPid,_Protocol,Reason,_KilledStreams},SrvState=#httpcst
  
  % Report that the controller is no longer connected with the remote REST server
  %% [TODO]: Remove when ready?
- io:format("[ctr_httpclient-~w]: Gun Down! (reason = ~p) ~n",[Loc_id,Reason]),
+ io:format("[ctr_httpclient-~w]: Uplink down (reason = ~p)~n",[Loc_id,Reason]),
  
  % Inform the 'ctr_manager' in the JANET Simulator passing by the 'ctr_simserver'
  % that the controller is no longer connected with the remote REST server

@@ -643,7 +643,7 @@ init(Parent,Module,Args) ->
   {ok,RESTPort,RemoteHost,ListenerName,Paths} = Module:init_handler(Args),
  
   % Ensure the port to be used by the Cowboy listener to be available
-  case utils:is_os_port_available(RESTPort) of
+  case utils:is_localhost_port_available(RESTPort) of
    
    false ->
 	  

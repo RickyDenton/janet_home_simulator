@@ -5,14 +5,15 @@
 -behaviour(gen_server).
 
 -export([start_link/0,init/1,handle_call/3,handle_cast/2,handle_continue/2,handle_info/2]).  % gen_server Behaviour Callback Functions
--export([ctr_pairer/3]).                                                                     % The 'dev_server' controller pairing client
 
 %% This record represents the state of a 'dev_server' gen_server
 -record(devsrvstate,    
         {
 		 dev_state,       % The device's current state (booting|connecting|online)
+		 devsrv_pid,      % The PID of the dev_server process
 		 dev_id,          % The device's ID
 		 loc_id,          % The device's location ID
+		 ctr_hostname,    % The name of the host where the location controller node is deployed
 		 mgr_pid,         % The PID of the device manager in the JANET Simulator node
 		 devhandler_pid,  % The PID of the device handler in the JANET Controller node
 		 devhandler_mon,  % A reference used for monitoring the device handler assigned to the 'dev_server' in the controller node
@@ -62,16 +63,20 @@ handle_continue(init,SrvState) when SrvState#devsrvstate.dev_state =:= booting -
  %
  {ok,{InitCfg,Timestamp}} = gen_statem:call(dev_statem,get_config,4500),
  
- % Retrieve the device and location IDs from the
- % 'dev_id' and 'loc_id' environment variables
+ % Retrieve the device ID, the location ID, and the host name where the
+ % location controller is deployed in from the environment variables
  {ok,Loc_id} = application:get_env(loc_id),
  {ok,Dev_id} = application:get_env(dev_id),
+ {ok,CtrHostName} = application:get_env(ctr_hostname),
+
+ % Get the current process ID
+ DevSrvPID = self(),
 
  % Spawn the 'ctr_pairer' client for attempting to pair the device with its controller node
- proc_lib:spawn_link(?MODULE,ctr_pairer,[Loc_id,Dev_id,self()]),
+ proc_lib:spawn_link(fun() -> ctr_pairer(Loc_id,Dev_id,DevSrvPID,CtrHostName) end),
 
  % Return the server initial state
- {noreply,#devsrvstate{dev_state = connecting, dev_id = Dev_id, loc_id = Loc_id, mgr_pid = MgrPid, _ = none, cfg_backlog = [{InitCfg,Timestamp}]}}.
+ {noreply,#devsrvstate{dev_state = connecting, devsrv_pid = DevSrvPID, dev_id = Dev_id, loc_id = Loc_id, ctr_hostname = CtrHostName, mgr_pid = MgrPid, cfg_backlog = [{InitCfg,Timestamp}], _ = none}}.
 
 
 %% ========================================================= HANDLE_CALL ========================================================= %%
@@ -287,7 +292,7 @@ handle_info({'DOWN',MonRef,process,Devhandler_pid,Reason},SrvState) when MonRef 
  gen_server:cast(SrvState#devsrvstate.mgr_pid,{dev_srv_state_update,connecting,self()}),
  
  % Respawn the 'ctr_pairer' client for attempting to re-pair the device with the controller node
- proc_lib:spawn_link(?MODULE,ctr_pairer,[SrvState#devsrvstate.loc_id,SrvState#devsrvstate.dev_id,self()]),
+ proc_lib:spawn_link(fun() -> ctr_pairer(SrvState#devsrvstate.loc_id,SrvState#devsrvstate.dev_id,SrvState#devsrvstate.devsrv_pid,SrvState#devsrvstate.ctr_hostname) end),
  
  % Update the device state to 'connecting' and reset the 'devhandler_pid' and 'devhandler_mon' variables
  {noreply,SrvState#devsrvstate{dev_state = connecting, devhandler_pid = none, devhandler_mon = none}}.
@@ -300,21 +305,22 @@ handle_info({'DOWN',MonRef,process,Devhandler_pid,Reason},SrvState) when MonRef 
 %% DESCRIPTION:  Body function of the homonymous process spawned by the 'dev_server'
 %%               for attempting to pair the device with its location controller
 %%
-%% ARGUMENTS:    - Loc_id:    The device's location ID
-%%               - Dev_id:    The device's ID
-%%               - DevSrvPid: The PID of its parent 'dev_server' process
+%% ARGUMENTS:    - Loc_id:      The device's location ID
+%%               - Dev_id:      The device's ID
+%%               - DevSrvPid:   The PID of its parent 'dev_server' process
+%%               - CtrHostName: The name of the host where the location controller node is deployed
 %%
 %% RETURNS:      - ok -> The pairing was successful, and the PID of the handler assigned to the device
 %%                       in the controller node was returned to the 'dev_server' process via a cast()
 %%
-ctr_pairer(Loc_id,Dev_id,DevSrvPid) ->
+ctr_pairer(Loc_id,Dev_id,DevSrvPid,CtrHostName) ->
  
  % Sleep for 1 second (this is to account the initial delay when the JANET
  % Simulator is started as well as an interval between consecutive attempts)
  timer:sleep(1000),
  
  % Attempt to pair the device to the location controller via a synchronous request, catching possible exceptions
- PairingResult = try gen_server:call({ctr_pairserver,list_to_atom("ctr-" ++ integer_to_list(Loc_id) ++ "@localhost")},{pair_request,Dev_id,DevSrvPid},1500)
+ PairingResult = try gen_server:call({ctr_pairserver,list_to_atom("ctr-" ++ integer_to_list(Loc_id) ++ "@" ++ CtrHostName)},{pair_request,Dev_id,DevSrvPid},1500)
  catch
   exit:{timeout,_} ->
   
@@ -334,7 +340,7 @@ ctr_pairer(Loc_id,Dev_id,DevSrvPid) ->
  
   % If a timeout occured, re-attempt the pairing with no further delay
   {error,ctr_timeout} ->
-   ctr_pairer(Loc_id,Dev_id,DevSrvPid);
+   ctr_pairer(Loc_id,Dev_id,DevSrvPid,CtrHostName);
    
   % If the pairing was successful, return the 'dev_server' parent process the
   % PID of the handler assigned to it in the controller node via a cast()
@@ -345,7 +351,7 @@ ctr_pairer(Loc_id,Dev_id,DevSrvPid) ->
   % attempt of a set interval before retrying   
   _ ->
    timer:sleep(1000),
-   ctr_pairer(Loc_id,Dev_id,DevSrvPid) 
+   ctr_pairer(Loc_id,Dev_id,DevSrvPid,CtrHostName) 
  end.
 
 
