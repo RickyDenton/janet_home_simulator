@@ -413,7 +413,7 @@ gun_spawn() ->
  {ok,RemoteRESTServerAddr} = application:get_env(remote_rest_server_addr),
  {ok,RemoteRESTServerPort} = application:get_env(remote_rest_server_port),
 
- % Spawn the Gun connection process by passing the remote REST server as the connection targe
+ % Spawn the Gun connection process by passing the remote REST server as the connection target
  %
  % NOTE: The 'retry' map parameter defines the maximum number of connection attempts towards
  %       the remote REST server before the Gun connection process gives up and terminates
