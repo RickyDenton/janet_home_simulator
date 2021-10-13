@@ -909,8 +909,6 @@ janet_start() ->
     ok
   end,
 	 
-  %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
-
   % Attempt to start the JANET Simulator application
   ok = application:start(janet_simulator)
   
@@ -944,18 +942,19 @@ janet_stop() ->
   % Stop the database monitor process, if it is active
   stop_tree_monitor(),
   
+  % Set the 'janet_stopping' environment variable to 'true' so to prevent the controller
+  % and device managers from reporting the termination of their nodes during shutdown
+  application:set_env(janet_simulator,janet_stopping,true),
+  
   % Attempt to stop the JANET Simulator application
   case application:stop(janet_simulator) of
    ok ->
 	 
 	% If the JANET Simulator was successfully stopped, clear its Mnesia ram_copies tables
     [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
-   
-	%% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
-    timer:sleep(5),                            
-	
+                       
     % Report that the JANET Simulator has successfully stopped
-    io:format("Janet Simulator stopped~n");
+    io:format("~nJanet Simulator stopped~n");
 	 
    {error,StopReason} ->
 	
@@ -973,6 +972,12 @@ janet_stop() ->
   {error,{janet_stop,Reason}} ->
    {error,{janet_stop,Reason}}
    
+ after
+
+  % Regardless of whether the JANET Simulator was successfully stopped,
+  % reset the 'janet_stopping' environment variable to 'false'
+  application:set_env(janet_simulator,janet_stopping,false)
+  
  end.
 
 
@@ -1189,15 +1194,22 @@ print_ctr_status_change_summary(Pre_Ctr_id,{error,not_running},stop) ->
 % The controller is already running
 print_ctr_status_change_summary(Pre_Ctr_id,{error,already_running},restart) ->
  io:format("The controller ~p is already running~n",[Pre_Ctr_id]);
-
+ 
 % The controller successfully stopped
 print_ctr_status_change_summary(Pre_Ctr_id,{ok,stop},stop) ->
- io:format("The controller ~p was successfully stopped~n",[Pre_Ctr_id]);
-
+ 
+ %% NOTE: Superseeded by the 'ctr_manager's directly printing their termination
+ % io:format("The controller ~p was successfully stopped~n",[Pre_Ctr_id]);
+ ok;
+ 
 % The controller successfully restarted
 print_ctr_status_change_summary(Pre_Ctr_id,{ok,restart},restart) ->
- io:format("The controller ~p was successfully restarted~n",[Pre_Ctr_id]);
 
+ %% NOTE: Superseeded by the 'ctr_manager's directly printing when
+ %%       their controllers register with them (BOOTING -> CONNECTING)
+ % io:format("The controller ~p was successfully restarted~n",[Pre_Ctr_id]);
+ ok;
+ 
 % Error in stopping the controller
 print_ctr_status_change_summary(Pre_Ctr_id,{error,Reason},stop) ->
  io:format("The controller ~p raised an error in its stopping: {error,~p}~n",[Pre_Ctr_id,Reason]);
@@ -1441,19 +1453,22 @@ change_devices_statuses(DevIdList,Sup_pid,Mode) ->
   
 %% Prints a summary of the statuses change operation of multiple devices 
 %% (change_subloc_status({Loc_id,Subloc_id},Mode),print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode) helper function)
-print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,SuccessStoppedMgrs,FailedStoppedMgrs},stop) ->
- if
+print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,_SuccessStoppedMgrs,FailedStoppedMgrs},stop) ->
  
-  % If one or more devices were successfully stopped
-  length(SuccessStoppedMgrs) > 0 ->
-   
-   % Prefix all devices that were successfully stopped and print them
-   SuccessStoppedMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessStoppedMgrs ],
-   io:format("The following devices were successfully stopped: ~p~n",[SuccessStoppedMgrsStr]);
- 
-  true ->
-   ok
- end,
+ %% NOTE: The reporting of successfully stopped devices has been superseeded by the 'dev_managers'
+ %%       directly printing their termination (if the JANET Simulator is not stopping)
+ %if
+ %
+ % % If one or more devices were successfully stopped
+ % length(SuccessStoppedMgrs) > 0 ->
+ %  
+ %  % Prefix all devices that were successfully stopped and print them
+ %  SuccessStoppedMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessStoppedMgrs ],
+ %  io:format("The following devices were successfully stopped: ~p~n",[SuccessStoppedMgrsStr]);
+ %
+ % true ->
+ %  ok
+ %end,
  
  if
   
@@ -1482,19 +1497,21 @@ print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,SuccessStoppedMgrs,Fail
    ok
  end;
  
-print_devs_statuses_change_summary({_,AlreadyRunningMgrs,SuccessRestartMgrs,FailedRestartMgrs},restart) ->
- if
+print_devs_statuses_change_summary({_,AlreadyRunningMgrs,_SuccessRestartMgrs,FailedRestartMgrs},restart) ->
  
-  % If one or more devices were successfully restarted
-  length(SuccessRestartMgrs) > 0 ->
-  
-   % Prefix all devices that were successfully restarted and print them
-   SuccessRestartMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessRestartMgrs ],
-   io:format("The following devices were successfully restarted: ~p~n",[SuccessRestartMgrsStr]);
-   
-  true ->
-   ok
- end,
+ %% NOTE: The reporting of successfully restarted devices is superseeded by the 'dev_managers'
+ %%       directly printing when their devices register with them (BOOTING -> CONNECTING)
+ %if
+ % % If one or more devices were successfully restarted
+ % length(SuccessRestartMgrs) > 0 ->
+ % 
+ %  % Prefix all devices that were successfully restarted and print them
+ %  SuccessRestartMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessRestartMgrs ],
+ %  io:format("The following devices were successfully restarted: ~p~n",[SuccessRestartMgrsStr]);
+ %  
+ % true ->
+ %  ok
+ %end,
  
  if
  

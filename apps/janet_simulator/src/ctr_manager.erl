@@ -276,9 +276,24 @@ terminate(_,SrvState) ->
  % Update the controller node state as "STOPPED" and deregister the manager's PID from the 'ctrmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid='-',status="STOPPED"}) end),
  
- % Note that if still running the controller node is
- % also terminated, being it linked to its manager
- ok.
+ % If the JANET Simulator is not stopping ('janet_stopping' environment
+ % variable to 'true'), report that the controller node has stopped
+ case application:get_env(janet_simulator,janet_stopping) of
+ 
+  % JANET Simulator not stopping (report)
+  {ok,false} ->
+   io:format("[ctr_mgr-~w]: Controller node stopped~n",[SrvState#ctrmgrstate.loc_id]);
+ 
+  % JANET Simulator stopping (do not report)
+  {ok,true} ->
+   ok;
+   
+  % Environment variable not found (error)
+  _ ->
+   io:format("[ctr_mgr-~w]: <WARNING> Undefined or unexpected value of the 'janet_stopping' environment variable (controller node stopped)~n",[SrvState#ctrmgrstate.loc_id])
+ end.
+ 
+ %% NOTE: At this point, if is still running, being it linked to the manager the controller node is automatically terminated 
 
 
 %%====================================================================================================================================

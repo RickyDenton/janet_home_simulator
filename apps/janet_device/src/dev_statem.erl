@@ -161,7 +161,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
     % Otherwise, simulate an appropriate new state for the 'dev_statem'
 	CandidateState = simulate_activity(State,Data#statemdata.type),
 
-    % Logging purposes [TODO]: Remove when ready
+    % Logging purposes
     % io:format("[statem_~w]: State = ~p, CandidateState = ~p~n",[Data#statemdata.type,State,CandidateState]),
 
     % Merge the simulated with the current state and check the validity of the resulting new state
@@ -182,7 +182,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
 	   
 	    % If instead the current and simulated states are the same, just restart the Simulated Activity Timer
 		
-		% Logging purposes [TODO]: Remove when ready
+		% Logging purposes
 	    % io:format("[statem_~w]: SAME simulated new Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
 	    
 		{keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]}
@@ -195,7 +195,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
 	   % NOTE: This is more of a failsafe, and should NOT happen during the execution
        %
        
-	   % Logging purposes [TODO]: Remove when ready
+	   % Logging purposes
        % io:format("[statem_~w]: INVALID simulated new Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
 	   
 	   {keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]}
@@ -234,7 +234,7 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
  % Compute the difference between the equilibrium and the current temperature
  TempDiff = temp_diff_from_eq(State),
 
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("dev_amb_traits = {~w,~w} (TempCurrent,TempDiff)~n",[TempCurrent,TempDiff]),
 
  % Randomly determine a new "temp_current" for the device, which may drift from its current value of at most
@@ -259,7 +259,7 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
    % Send the new state along with the current time to the 'dev_server'
    gen_server:cast(dev_server,{dev_config_update,{NewState,Now}}),
 
-   % Logging purposes [TODO]: Remove when ready
+   % Logging purposes
    % io:format("[statem_~w]: NEW simulated TempCurrent: ~w~n",[Data#statemdata.type,NewTempCurrent]),
   
    % Update the 'dev_statem' State and "LastUpdate" variables and reinitialize
@@ -271,7 +271,7 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
    % If instead the new and current 'temp_current' values are the same, just
    % restart the Ambient Temperature Timer as explained in the notes above
    
-   % Logging purposes [TODO]: Remove when ready
+   % Logging purposes
    % io:format("[statem_~w]: SAME simulated new TempCurrent: ~w~n",[Data#statemdata.type,NewTempCurrent]),
    
    {keep_state_and_data,[{{timeout,ambient_temperature_update_timer},next_amb_time(State),none}]}
@@ -310,7 +310,7 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
   % Otherwise, if the new state is invalid
   {error,invalid_devconfig} ->
   
-   % Logging purposes [TODO]: Remove when ready
+   % Logging purposes
    % io:format("[statem_~w]: WRONG New Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
    
    % Preserve the 'dev_statem' State and Data and return the error to the 'dev_server'
@@ -465,7 +465,7 @@ next_sim_time() ->
 
  Res = max(200,trunc(rand:normal(?Sim_mean,?Sim_var))),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("Next sim_time: ~wms~n",[Res]),
  
  Res.
@@ -482,7 +482,7 @@ simulate_fan_onoff_trait() ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("fan 'onoff' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'onoff' trait, which is affected by:
@@ -531,7 +531,7 @@ simulate_fan_fanspeed_trait(on,CurrFanSpeed) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("fan 'fanspeed' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'fanspeed' trait, which is affected by:
@@ -579,7 +579,7 @@ simulate_light_onoff_trait() ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("light 'onoff' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'onoff' trait, which is affected by:
@@ -628,7 +628,7 @@ simulate_light_brightness_trait(on,CurrBrightness) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("light 'brightness' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'brightness' trait, which is affected by:
@@ -676,7 +676,7 @@ simulate_light_colorsetting_trait(on) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("light 'colorsetting' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'colorsetting' trait
@@ -714,7 +714,7 @@ simulate_door_traits(State) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("door traits Rand = ~w~n",[Rand]),
  
  % Generate a random candidate for the 'openclose' and 'lockunlock' traits, which are affected by:
@@ -904,7 +904,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("'temp_current' update Rand = ~w (TempCurrent = ~w, TempDiff = ~w)~n",[Rand,TempCurrent,TempDiff]),
 
  % Generate a new random value for the 'temp_current' trait drifting at most 1 degree
@@ -1022,7 +1022,7 @@ next_amb_time(State) ->
   % fact that the higher the distance from equilibrium, the faster the evolution of the ambient temperature)
   Res = max(3000,trunc(rand:normal(?Amb_base_mean-(1500 * TempDistEq),?Amb_base_var/max(1,TempDistEq)))),
   
-  % Logging purposes [TODO]: Remove when ready
+  % Logging purposes
   % io:format("Next_amb_time: ~wms~n",[Res]),  
   Res. 
  

@@ -332,11 +332,26 @@ terminate(_,SrvState) ->
  % Update the device node state as "STOPPED" and deregister the manager's PID from the 'devmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid='-',status="STOPPED"}) end),
  
- % Note that if still running the device node is
- % also terminated, being it linked to its manager
- ok.
+ % If the JANET Simulator is not stopping ('janet_stopping' environment
+ % variable to 'true'), report that the device node has stopped
+ case application:get_env(janet_simulator,janet_stopping) of
  
+  % JANET Simulator not stopping (report)
+  {ok,false} ->
+   io:format("[dev_mgr-~w]: Device node stopped~n",[SrvState#devmgrstate.dev_id]);
+ 
+  % JANET Simulator stopping (do not report)
+  {ok,true} ->
+   ok;
+   
+  % Environment variable not found (error)
+  _ ->
+   io:format("[dev_mgr-~w]: <WARNING> Undefined or unexpected value of the 'janet_stopping' environment variable (device node stopped)~n",[SrvState#devmgrstate.dev_id])
+ end.
 
+ %% NOTE: At this point, if is still running, being it linked to the manager the device node is automatically terminated 
+
+ 
 %%====================================================================================================================================
 %%                                                         START FUNCTION                                                        
 %%====================================================================================================================================

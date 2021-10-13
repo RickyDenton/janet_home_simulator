@@ -53,7 +53,6 @@ run(Loc_id,CtrSublocTable,CtrDeviceTable,MgrPid,CtrRESTPort,RemoteRESTClient,Rem
    ok = ctr_db:init_mnesia(CtrSublocTable,CtrDeviceTable),
    
    % Start the JANET Controller in permanent mode
-   %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
    application:start(janet_controller,permanent)
  end;
  

@@ -20,8 +20,7 @@
 %%                                                     PUBLIC CRUD OPERATIONS                                                        
 %%==================================================================================================================================== 
 
-%% NOTE: All the public CRUD functions crash if Mnesia is NOT started on the node (which is automatically performed by the 'init' process at startup)
-%% [TODO]: Check if this is still true
+%% NOTE: All the public CRUD operations crash if Mnesia is NOT started on the node (which should be performed automatically at its start)
 
 %% ========================================================== CREATE =============================================================== %%
 
