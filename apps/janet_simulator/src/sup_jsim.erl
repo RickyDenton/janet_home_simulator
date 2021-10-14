@@ -51,14 +51,14 @@ init(_) ->
 	 [sim_resthandler]                  % Child Modules (For Release Handling Purposes)
     },
 
-	%% -------- The JANET Simulator remote resource monitor (sim_resmonitor) -------- %%
+    %% --------- The JANET Simulator remote hosts monitor (sim_hostsmonitor) --------- %%
     {
-     sim_resmonitor,		            % ChildID
-     {sim_resmonitor,start_link,[]},    % Child Start Function
+     sim_hostsmonitor,		            % ChildID
+     {sim_hostsmonitor,start_link,[]},  % Child Start Function
  	 permanent,                         % Child Restart Policy 
-	 10000,                             % Child Sub-tree Max Shutdown Time
+	 8000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
-	 [sim_resmonitor]                   % Child Modules (For Release Handling Purposes)
+	 [sim_hostsmonitor]                 % Child Modules (For Release Handling Purposes)
     }
    ] 
   }

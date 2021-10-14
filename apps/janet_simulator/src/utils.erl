@@ -639,27 +639,28 @@ is_localhost_port_available(_Port) ->
 %% [TODO]: IMPLEMENT
 is_nodehost_port_available(_HostName,_Port) ->
  true. 
- 
 
-%% DESCRIPTION:  Checks if a host name belongs to the list of allowed
-%%               hosts where controller and device nodes can be spawned
+
+%% DESCRIPTION:  Checks if a hostname belongs to the list of
+%%               allowed hosts JANET nodes can be deployed in
 %%
 %% ARGUMENTS:    - HostName: The host name to check
 %%
 %% RETURNS:      - true           -> The host belongs to the list of allowed
-%%                                   hosts where nodes can be spawned
+%%                                   hosts where JANET nodes can be deployed in
 %%               - false          -> The host does NOT belong to the list of
-%%                                   allowed hosts where nodes can be spawned
+%%                                   allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg} -> Invalid arguments
 %%
 is_allowed_node_host(HostName) when is_list(HostName) ->
 
-  % Retrieve the 'allowed_nodes_host' environment variable
-  {ok,AllowedHosts} = application:get_env(janet_simulator,allowed_nodes_hosts),
+ % Retrieve the list of nodes JANET nodes can be
+ % deployed in from the 'nodes_hosts' environment variable
+ {ok,NodesHosts} = application:get_env(janet_simulator,nodes_hosts),
  
-  % If the HostName belongs to the list of allowed
-  % hosts return 'true', otherwise return 'false'
-  lists:member(HostName,AllowedHosts);
+ % If the HostName belong to the list of allowed
+ % hosts return 'true', otherwise 'false'
+ lists:member(HostName,NodesHosts);
   
 is_allowed_node_host(_NonListHostName) ->
  {error,badarg}.

@@ -113,7 +113,7 @@ shutdown() ->
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
 %%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
-%%               - {error,invalid_hostname}        -> The host name does not belong to the list of allowed hosts where nodes can be spawned
+%%               - {error,invalid_hostname}        -> The hostname does not belong to the list of allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 
@@ -173,8 +173,8 @@ add_sublocation({Loc_id,Subloc_id},Name) ->
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
-%%               - {error,invalid_hostname}       -> The host name does not belong to the list
-%%                                                   of allowed hosts where nodes can be spawned
+%%               - {error,invalid_hostname}        -> The hostname does not belong to the list of
+%%                                                    allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg}                 -> Invalid arguments
 %%
 add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) ->

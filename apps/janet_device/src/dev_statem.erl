@@ -34,8 +34,8 @@
 %% ------------------- State Machine State and Data Definitions ------------------- %%
 
 %% State: Config#devtypecfg
+%% Data:  #statemdata
 
-%% Data
 -record(statemdata,    
         {
 		 lastupdate,  % The last time the state of the 'dev_statem' was sent to the 'dev_server'
@@ -83,12 +83,12 @@ init({Config,Type}) ->
  
  % Return the initialization tuple to the 'gen_statem' engine:
  {
-  ok,                                                                 % Indicates to the engine that the 'dev_statem' can start
-  Config,                                                             % The initial State of the 'dev_statem'
+  ok,                                                                  % Indicates to the engine that the 'dev_statem' can start
+  Config,                                                              % The initial State of the 'dev_statem'
   #statemdata{lastupdate = erlang:system_time(second), type = Type},  % The initial Data of the 'dev_statem'
-                                                                      % NOTE: The 'lastupdate' variable will be more properly set in the
-																	  %       'get_config' call performed by the 'dev_server' at its initialization
-  StatemTimers                                                        % The list of timers to be initialized
+                                                                       % NOTE: The 'lastupdate' variable will be more properly set in the
+																	   %       'get_config' call performed by the 'dev_server' at its initialization
+  StatemTimers                                                         % The list of timers to be initialized
  }.
 
  
@@ -1092,4 +1092,4 @@ sign(X) when is_number(X), X < 0 ->
 
 %% Called by its 'sup_jdev' supervisor during the JANET Device boot
 start_link(Config,Type) ->
-    gen_statem:start_link({local,?MODULE}, ?MODULE, {Config,Type}, []).  % The spawned process is also registered locally under the 'dev_statem' name
+ gen_statem:start_link({local,?MODULE}, ?MODULE, {Config,Type}, []).  % The spawned process is also registered locally under the 'dev_statem' name

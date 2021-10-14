@@ -30,7 +30,7 @@
 %%               - Name:     The name of the location (optional)
 %%               - User:     The username of the location's owner (optional)
 %%               - Port:     The port by which the location's controller listens for REST requests (unique int >= 30000)
-%%               - HostName: The name of the host where to spawn the location controller node (a list)
+%%               - HostName: The hostname where to deploy the location controller node (a list)
 %%
 %% RETURNS:      - {ok,ok}                         -> The location was successfully added and its controller node was started
 %%               - {ok,Error}                      -> The location was successfully added, but starting its controller returned an Error
@@ -39,7 +39,8 @@
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
 %%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
-%%               - {error,invalid_hostname}        -> The host name does not belong to the list of allowed hosts where nodes can be spawned
+%%               - {error,invalid_hostname}        -> The hostname does not belong to the list of
+%%                                                    allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 add_location(Loc_id,Name,User,Port,HostName) when is_number(Loc_id), Loc_id>0, is_number(Port), Port >= 30000, is_list(HostName) ->
@@ -54,7 +55,7 @@ add_location(Loc_id,Name,User,Port,HostName) when is_number(Loc_id), Loc_id>0, i
 		 [] ->
 		 
 		  % Check the HostName to belong to the list of
-		  % allowed hosts where nodes can be spawned
+		  % allowed hosts JANET nodes can be deployed in
 		  case utils:is_allowed_node_host(HostName) of
 		  
 		   true ->
@@ -94,7 +95,7 @@ add_location(Loc_id,Name,User,Port,HostName) when is_number(Loc_id), Loc_id>0, i
 		   false ->
 		  
 		    % If the HostName does not belong to the list of allowed
-		    % hosts where nodes can be spawned, return an error 
+		    % hosts JANET nodes can be deployed in, return an error
 		    mnesia:abort(invalid_hostname)
 		  end;		  
 		  
@@ -196,7 +197,7 @@ add_sublocation(_,_) ->
 %%               - Name:               The device's name (optional)
 %%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
 %%               - Type:               The device's type, which must belong to the set of valid device types
-%%               - HostName:           The name of the host where to spawn the device node (a list)
+%%               - HostName:           The hostname where to deploy the device node (a list)
 %%
 %% RETURNS:      - {ok,ok}                        -> The device was successfully added
 %%                                                   and its device node was started
@@ -207,8 +208,8 @@ add_sublocation(_,_) ->
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
-%%               - {error,invalid_hostname}       -> The host name does not belong to the list
-%%                                                   of allowed hosts where nodes can be spawned
+%%               - {error,invalid_hostname}       -> The hostname does not belong to the list of
+%%                                                   allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg}                 -> Invalid arguments
 %%
 %% CONSISTENCY:  If the associated location controller is running, consistency with its own database is enforced either
@@ -228,7 +229,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) when is_number(Dev_id),
 		 [] ->
 		 
 		  % Check the HostName to belong to the list of
-		  % allowed hosts where nodes can be spawned
+		  % allowed hosts JANET nodes can be deployed in
 		  case utils:is_allowed_node_host(HostName) of
 		  
 		   true ->
@@ -253,7 +254,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) when is_number(Dev_id),
 		   false ->
 		  
 		    % If the HostName does not belong to the list of allowed
-		    % hosts where nodes can be spawned, return an error 
+		    % hosts JANET nodes can be deployed in, return an error
 		    mnesia:abort(invalid_hostname)
 		  end;		
 		  
