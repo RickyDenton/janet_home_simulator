@@ -9,8 +9,9 @@
             sup_locs,locs_init,sup_loc,
 			loc_devs_init,ctr_manager,
 			dev_manager,gen_resthandler,
-			sim_resthandler]},
-  {registered,[sup_locs]},                  % Application Registered Names
+			sim_resthandler,
+			sim_hostsmonitor]},
+  {registered,[sup_locs,sim_hostsmonitor]}, % Application Registered Names
   {applications,[mnesia,stdlib,kernel]},    % Application Dependencies
   {mod,{jsim,[]}},                          % Application Callback Module and Arguments([] = 'normal')
   {licenses, ["Apache 2.0"]},               % Licenses (added by Rebar3)

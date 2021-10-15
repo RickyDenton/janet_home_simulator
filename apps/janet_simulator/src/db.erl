@@ -62,7 +62,7 @@ add_location(Loc_id,Name,User,Port,HostName) when is_number(Loc_id), Loc_id>0, i
 		  
 	        % If it is, ensure the specified Port to be
 			% currently available on the node host OS
-		    case utils:is_nodehost_port_available(HostName,Port) of
+		    case utils:is_remotehost_port_available(HostName,Port) of
 			
 			 true ->
 			 

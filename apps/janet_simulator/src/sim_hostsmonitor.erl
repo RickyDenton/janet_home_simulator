@@ -8,11 +8,11 @@
 %% ---------------------------------  Constants --------------------------------- %%
 
 % Delay before the startup report of the remote hosts monitor
--define(Startup_report_delay,6 * 1000).       % Default: 10 * 1000 (10 seconds)
+-define(Startup_report_delay,6 * 1000).       % Default: 6 * 1000 (6 seconds)
 
 % Period between protracted reports of the remote
 % hosts monitor (MUST be > Startup_report_delay)
--define(Protracted_report_period,60 * 1000).  % Default: 60 * 1000 (60 seconds)
+-define(Protracted_report_period,90 * 1000).  % Default: 90 * 1000 (90 seconds)
 
 % Host watchdogs ping period
 -define(Wdg_ping_period,15 * 1000).           % Default: 15 * 1000 (15 seconds)
@@ -56,60 +56,66 @@ init(_) ->
  
  % Retrieve the PID of the remote hosts monitor
  SimMonPid = self(),
- 
- % Retrieve the JANET Simulator node name
- JANETNodeName = net_adm:localhost(),
 
- % Retrieve the 'nodes_hosts' and 'remote_rest_server_addr' environment variables
- {ok,NodesHosts} = application:get_env(nodes_hosts), 
+ % Retrieve the 'distributed_mode' environment variable
+ {ok,DistributedMode} = application:get_env(distributed_mode),
+ 
+ % Define a fun() for filtering host mapping to the localhost
+ LocalHostFilter = fun(HostName) -> utils:is_remote_host(HostName) end,
+
+ %% ----------------- Remote REST Server and Node Hosts Retrieval and Filtering ----------------- %%
+
+ % Retrieve the 'remote_rest_server_addr' environment variable
  {ok,RESTSrvAddr} = application:get_env(remote_rest_server_addr),
- 
- %% ---------------------------- Remote but Localhost Hosts Filtering ---------------------------- %%
 
- % If present, delete the remote REST server address from the nodes hosts list
- NodesHostsNoREST = NodesHosts -- RESTSrvAddr,
- 
- % Define a fun for filtering hostnames mapping to the localhost
- LocalhostFilter = fun(HostName) ->
-                    if
-					
-					 % Hostnames mapping to localhost
-				     HostName == JANETNodeName orelse
-					 HostName == "localhost"   orelse
-					 HostName == "127.0.0.1"   ->
-                      false;
-					  
-					 % Hostnames not mapping to localhost
-					 true ->
-					  true
-                    end
-				   end,
- 
- % Filter both the nodes hosts list and the remote REST server
- % address so to remove hostnames mapping in fact to the localhost
- RemNodesHosts = lists:filter(LocalhostFilter,NodesHostsNoREST),
- RemRESTSrvAddr = lists:filter(LocalhostFilter,[RESTSrvAddr]),
- 
- %% ------------------------- Remote Node Hosts monitors initialization ------------------------- %%
+ % Filter the remote REST server address so to obtain
+ % an empty list if in fact it maps to the localhost
+ RemRESTSrvAddr = lists:filter(LocalHostFilter,[RESTSrvAddr]),
+
+ % Retrieve the list of hostnames of remote nodes hosts
+ RemNodesHosts = 
+ case DistributedMode of
+  false ->
+  
+   % If distributed mode is disabled, there are no remote nodes hosts
+   [];
+   
+  true ->
+  
+   % If distributed mode is enabled, retrieve the 'nodes_hosts' environment variable
+   {ok,NodesHosts} = application:get_env(nodes_hosts), 
+
+   % If present, delete the remote REST server address from the nodes hosts list
+   NodesHostsNoRESTSrv = NodesHosts -- [RESTSrvAddr],
+
+   % Filter from the nodes hosts list all hostnames mapping in fact to the localhost
+   lists:filter(LocalHostFilter,NodesHostsNoRESTSrv)
+ end,
+
+ %% ------------------------- Remote Nodes Hosts Monitors Initialization ------------------------- %%
+  
+ % Initialize the list of host monitors associated with remote nodes hosts, if any
  RemNodesHostsMons =
  case RemNodesHosts of
   
-  % If all remote nodes hosts reside in fact in
-  % the localhost, no host monitor is required
+  % If there are no remote nodes
+  % hosts, no host monitor is required
   [] ->
    [];
    
-  % Otherwise if at least one nodes host is a remote host
+  % Otherwise if there is at least a remote nodes host
   _ ->
   
    % Spawn a 'host_watchdog' process for each remote nodes host
    RemNodesHostsWdgs = [ {RemNodesHost,proc_lib:spawn(fun() -> host_watchdog(SimMonPid,RemNodesHost) end)} || RemNodesHost <- RemNodesHosts],
  
-   % Initialize the list of node hosts monitors
+   % Initialize and return the list of host monitors associated with remote nodes hosts
    [#hostmon{name = RemNodesHost, state = offline, type = nodeshost, wdg_pid = WdgPID, wdg_ref = monitor(process,WdgPID)} || {RemNodesHost,WdgPID} <- RemNodesHostsWdgs]
  end,
  
- %% ----------------------- Remote REST Server host monitor initialization ----------------------- %%
+ %% ----------------------- Remote REST Server Host Monitor Initialization ----------------------- %%
+ 
+ % Initialize the host monitor associated with the remote REST server, if any
  RemRESTSrvMonList =
  case RemRESTSrvAddr of
  
@@ -118,8 +124,8 @@ init(_) ->
   [] ->
    [];
    
-  % Otherwise if the REST server
-  % address refers to a remote host
+  % Otherwise if the remote REST server
+  % maps indeed to a remote host
   _ ->
    
    % Spawn a 'host_watchdog' process for the remote REST server
@@ -136,7 +142,7 @@ init(_) ->
                  {{timeout,startup_report},?Startup_report_delay,none},
                  {{timeout,protracted_report},?Startup_report_delay + ?Protracted_report_period,none}
                 ],
-
+ 
  % Return the initialization tuple to the 'gen_statem' engine:
  {
   ok,                                      % Indicates to the engine that the 'dev_statem' can start
@@ -175,7 +181,7 @@ handle_event({timeout,startup_report},_,startup,[]) ->
 
  % Print a message informing the user that all hosts used by the JANET Simulator reside
  % in the localhost, and so that no further host states updated will be reported
- io:format("~n[sim_hostsmonitor]: In its current configuration all hosts used by the JANET Simulator reside in the localhost, no further remote hosts states updates will be reported~n"),
+ io:format("~n[sim_hostsmonitor]: In its current configuration all hosts used by the JANET Simulator reside in the localhost, no further hosts states updates will be reported~n"),
  
  % Update the state to 'idle', delete the
  % 'protracted_report' timer, and hibernate the gen_statem

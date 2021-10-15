@@ -2111,15 +2111,58 @@ print_help() ->
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-%% Called during the "application:start(janet_simulator)"
-%% call for starting the JANET Simulator application
+%% ============================================================ START ============================================================ %% 
+
+%% Called during the "application:start(janet_simulator)" call for starting the JANET Simulator application
 start(normal,_Args) ->
+
+ % Ensure the JANET Simulator to be started in the appropriate
+ % distributed mode depending on the OS host family
+ check_os_distributed_mode(),
 
  % Start the root supervision tree of the JANET Simulator application
  sup_jsim:start_link().
  
  
-%% Called during the "application:stop(janet_simulator)"
-%% call AFTER the application has been stopped
+%% Ensures the JANET Simulator to be started in the appropriate distributed
+%% mode depending on the OS host family (start(normal,_Args) helper function)
+check_os_distributed_mode() ->
+
+ % Retrieve the host OS family ('unix'|'win32')
+ {OSFamily,_OSName} = os:type(),
+ 
+ % Retrieve the 'distributed_mode' environment variable
+ {ok,DistributedMode} = application:get_env(distributed_mode), 
+ 
+ % Depending on the combination of the two
+ case {OSFamily,DistributedMode} of
+  {unix,true} ->
+  
+   % If distributed mode is enabled on a Unix-based system, do nothing
+   ok;
+   
+  {win32,false} ->
+  
+   % If distributed mode is disabled on a Windows system, do nothing 
+   ok;
+   
+  {unix,false} ->
+  
+    % If distributed mode is disabled on a Unix-based system, notify the user that
+    % all nodes will be spawned in the JANET Simulator host (i.e. the localhost)
+   io:format("<NOTICE> JANET Simulator started in non-distributed mode: all nodes will be spawned in the localhost~n");
+   
+  {win32,true} ->
+  
+   % If distributed mode is enabled on a Windows system, warn the user that such mode
+   % is not supported on Windows hosts and fallback to the non-distributed mode
+   io:format("<WARNING> The JANET Simulator distributed mode is NOT supported on Windows hosts, falling back to the non-distributed mode (all nodes will be spawned in the localhost)~n"),
+   application:set_env(janet_simulator,distributed_mode,false)
+ end.   
+ 
+
+%% ============================================================ STOP ============================================================ %% 
+
+%% Called during the "application:stop(janet_simulator)" call AFTER the application has been stopped
 stop(_State) ->
  ok.

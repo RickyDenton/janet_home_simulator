@@ -4,7 +4,7 @@
               {modules,[ctr_manager,db,dev_manager,gen_resthandler,jsim,
                         loc_devs_init,locs_init,sim_hostsmonitor,
                         sim_resthandler,sup_jsim,sup_loc,sup_locs,utils]},
-              {registered,[sup_locs]},
+              {registered,[sup_locs,sim_hostsmonitor]},
               {applications,[mnesia,stdlib,kernel]},
               {mod,{jsim,[]}},
               {licenses,["Apache 2.0"]},

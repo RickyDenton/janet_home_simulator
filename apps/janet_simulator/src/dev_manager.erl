@@ -59,14 +59,14 @@ handle_continue(init,SrvState) ->
  
  %% ------------------------------ Device Node Creation ------------------------------ %% 
  
- % Set the cookie for allowing the Janet Simulator to connect with the device's node
- % NOTE: The use of atoms is required by the erlang:set_cookie BIF  
- erlang:set_cookie(list_to_atom("dev-" ++ Dev_id_str ++ "@localhost"),list_to_atom(Loc_id_str)),
- 
  % Prepare the Host, Name and Args parameters of the controller's node
- NodeHost = DeviceRecord#device.hostname,
+ NodeHost = utils:get_effective_hostname(DeviceRecord#device.hostname),
  NodeName = "dev-" ++ Dev_id_str,
  NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_device/ebin/ _build/default/lib/janet_simulator/ebin/",
+ 
+ % Set the cookie for allowing the Janet Simulator to connect with the device's node
+ % NOTE: The use of atoms is required by the erlang:set_cookie BIF  
+ erlang:set_cookie(list_to_atom("dev-" ++ Dev_id_str ++ "@" ++ NodeHost),list_to_atom(Loc_id_str)),
  
  % Attempt to start the device node and link it to the
  % manager for a predefined maximum number of attempts

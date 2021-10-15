@@ -60,15 +60,15 @@ handle_continue(init,SrvState) ->
  
  %% ---------------------------- Controller Node Creation ---------------------------- %% 
  
- % Set the cookie for allowing the Janet Simulator to connect with the controller's node
- % NOTE: The use of atoms is required by the erlang:set_cookie BIF 
- erlang:set_cookie(list_to_atom("ctr-" ++ Loc_id_str ++ "@localhost"),list_to_atom(Loc_id_str)),
- 
  % Prepare the Host, Name and Args parameters of the controller's node
- NodeHost = LocationRecord#location.hostname,
+ NodeHost = utils:get_effective_hostname(LocationRecord#location.hostname),
  NodeName = "ctr-" ++ Loc_id_str,
  NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_controller/ebin/ _build/default/lib/janet_simulator/ebin/ " ++
             "_build/default/lib/cowboy/ebin/ _build/default/lib/cowlib/ebin/ _build/default/lib/ranch/ebin/ _build/default/lib/jsone/ebin/ _build/default/lib/gun/ebin/",
+ 
+ % Set the cookie for allowing the Janet Simulator to connect with the controller's node
+ % NOTE: The use of atoms is required by the erlang:set_cookie BIF 
+ erlang:set_cookie(list_to_atom("ctr-" ++ Loc_id_str ++ "@" ++ NodeHost),list_to_atom(Loc_id_str)),
  
  % Attempt to start the controller node and link it to
  % the manager for a predefined maximum number of attempts
