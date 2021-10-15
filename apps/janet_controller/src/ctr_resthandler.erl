@@ -64,7 +64,7 @@ init_handler(_) ->
 		
           % RESOURCE: /device/:dev_id
 		  % ALLOWED METHODS: 
-          %   - PUT    -> add_device(Dev_id,Name,{Loc_id,Subloc_id},Type)
+          %   - PUT    -> add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName)
 		  %   - POST   -> update_dev_subloc(Dev_id,{Loc_id,Subloc_id})
           %   - DELETE -> delete_device(Dev_id)
 		  %		
@@ -114,6 +114,10 @@ err_to_code_msg({invalid_devtype,Type}) ->
 % Trying to add a device that already exists
 err_to_code_msg({device_already_exists,Dev_id}) ->
  {409,io_lib:format("<ERROR> A device with such \"dev_id\" (~w) already exists",[Dev_id])};
+
+% Trying to deploy the device on an unallowed nodes host
+err_to_code_msg({invalid_hostname,HostName}) ->
+ {406,io_lib:format("<ERROR> The specified \"hostname\" (~s) does not belong to the list of allowed hosts where JANET nodes can be deployed in",[HostName])};
 
 % The device was added into the database, but an internal error occured in starting its node
 err_to_code_msg({device_not_started,Dev_id,InternalError}) ->
@@ -322,7 +326,7 @@ delete_sublocation_handler(Req,[Subloc_id]) ->
 
 %% ALLOWED METHODS:
 %% ---------------
-%%   - PUT    -> add_device(Dev_id,Name,{Loc_id,Subloc_id},Type)
+%%   - PUT    -> add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName)
 %%   - POST   -> update_dev_subloc(Dev_id,{Loc_id,Subloc_id})
 %%   - DELETE -> delete_device(Dev_id)
 %%
@@ -346,13 +350,14 @@ res_dev_handler(Req) ->
  {OpHandlerName,ExpBodyParams} =
  case Method of
  
-  % PUT -> add_device(Dev_id,Name,{Loc_id,Subloc_id},Type)
+  % PUT -> add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName)
   <<"PUT">> ->
    {add_device_handler,        % Operation handler name
     [
-	 {name,list,optional},     % "Name" parameter (optional)
+	 {name,list,optional},     % "Name" parameter      (optional)
 	 {subloc_id,integer,0},    % "Subloc_id" parameter (>= 0)
-	 {type,list,required}      % "Type" parameter (required)
+	 {type,list,required},     % "Type" parameter      (required)
+	 {hostname,list,required}  % "HostName" parameter  (required)
 	]
    };
 
@@ -378,7 +383,7 @@ res_dev_handler(Req) ->
  
 %% ADD_DEVICE (PUT /device/:dev_id)
 %% ==========
-add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType]) ->
+add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType,HostName]) ->
  
  % Cast the device CapsType to lowercase
  % (server-side compatibility) and then to an atom
@@ -391,7 +396,7 @@ add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType]) ->
  DBFun = add_device,
  
  % Define the list of parameters of the operation in the Simulator database
- SimArgsList = [Dev_id,Name,{Loc_id,Subloc_id},Type],
+ SimArgsList = [Dev_id,Name,{Loc_id,Subloc_id},Type,HostName],
 
  % Define the list of parameters of the operation in the Controller database
  CtrArgsList = [Dev_id,Subloc_id,Type],
@@ -401,7 +406,7 @@ add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType]) ->
   {ok,ok,ok} ->
    
    % If the device was added in both databases and its node was started, report the success of the operation
-   io:format("[~p-~w]: Added device (dev_id = ~w, name = ~p, sub_id = {~w,~w}, type = ~p)~n",[?FUNCTION_NAME,Loc_id,Dev_id,Name,Loc_id,Subloc_id,Type]),
+   io:format("[~p-~w]: Added device (dev_id = ~w, name = ~p, sub_id = {~w,~w}, type = ~p, hostname = ~s)~n",[?FUNCTION_NAME,Loc_id,Dev_id,Name,Loc_id,Subloc_id,Type,HostName]),
  
    % Build the response body in JSON format by concatenating
    % the "Dev_id" with the device initial configuration
@@ -428,6 +433,10 @@ add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType]) ->
   % Trying to add a device in a sublocation that does not exist
   {error,sublocation_not_exists} ->
    throw({sublocation_not_exists,{Loc_id,Subloc_id}});
+   
+  % Trying to deploy the device on an unallowed nodes host
+  {error,invalid_hostname} ->
+   throw({invalid_hostname,HostName});   
    
   % The device was added into the database, but an internal error occured in starting its node
   {ok,InternalError,ok} ->
