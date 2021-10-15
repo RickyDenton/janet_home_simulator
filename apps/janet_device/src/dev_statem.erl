@@ -286,14 +286,14 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
 %% WHEN:      A configuration/state change request is forwarded to the device
 %% PURPOSE:   Attempt to change the 'dev_statem' configuration/state
 %% CONTENTS:  The Candidate State requested to the device
-%% MATCHES:   (always)
+%% MATCHES:   (always) (when the request comes from the JANET Device node)
 %% ACTIONS:   1) Merge the candidate with the current state and check the validity of the resulting new state
 %%            2.1) If the new state is valid, return it to the 'dev_server' along with the
 %%                 current time, and update the 'dev_statem' State and "LastUpdate" variables
 %%            2.2) If the new state is NOT valid, return the error to the
 %%                 'dev_server' and preserve the 'dev_statem' State and Data 
 %%   
-handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
+handle_event({call,{DevSrvPid,_Tag}},{dev_config_change,CandidateState},State,Data) when node() =:= node(DevSrvPid) ->
 
  % Merge the simulated with the current state and check the validity of the resulting new state
  case catch(utils:check_merge_devconfigs(State,CandidateState,Data#statemdata.type)) of
@@ -305,7 +305,7 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
    Now = erlang:system_time(second),
 
    % Update the 'dev_statem' state and "LastUpdate" variables and return them to the 'dev_server'
-   {next_state,NewState,Data#statemdata{lastupdate = Now},[{reply,DevSrvPid,{ok,{NewState,Now}}}]};
+   {next_state,NewState,Data#statemdata{lastupdate = Now},[{reply,{DevSrvPid,_Tag},{ok,{NewState,Now}}}]};
 
   % Otherwise, if the new state is invalid
   {error,invalid_devconfig} ->
@@ -314,7 +314,7 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
    % io:format("[statem_~w]: WRONG New Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
    
    % Preserve the 'dev_statem' State and Data and return the error to the 'dev_server'
-   {keep_state_and_data,[{reply,DevSrvPid,{error,invalid_devconfig}}]}
+   {keep_state_and_data,[{reply,{DevSrvPid,_Tag},{error,invalid_devconfig}}]}
  end;
 
 
@@ -324,17 +324,17 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
 %% WHEN:      During the 'dev_server' initialization
 %% PURPOSE:   Retrieve the initial state and time of the 'dev_statem'
 %% CONTENTS:  -
-%% MATCHES:   (always)
+%% MATCHES:   (always) (when the request comes from the JANET Device node)
 %% ACTIONS:   Update the "LastUpdate" data variable and return
 %%            it along with the State to the 'dev_server'
 %%   
-handle_event({call,DevSrvPid},get_config,State,Data) ->
+handle_event({call,{DevSrvPid,_Tag}},get_config,State,Data) when node() =:= node(DevSrvPid) ->
 
  % Get the current OS time in seconds (UNIX time)
  Now = erlang:system_time(second),
  
  % Update the "LastUpdate" data variable and return it along with the State to the 'dev_server'
- {keep_state,Data#statemdata{lastupdate = Now},[{reply,DevSrvPid,{ok,{State,Now}}}]}.
+ {keep_state,Data#statemdata{lastupdate = Now},[{reply,{DevSrvPid,_Tag},{ok,{State,Now}}}]}.
 
 
 %%====================================================================================================================================

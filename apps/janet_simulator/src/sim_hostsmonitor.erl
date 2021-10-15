@@ -19,17 +19,25 @@
 		
 %% ------------------- State Machine State and Data Definitions ------------------- %%
 
-%% State: {startup,protracted}   (Whether the startup report was printed or not)
-%% Data:  [HostMonitor#hostmon]
+%% State: {'startup'|'protracted'|'idle'}
+%% 
+%%          - startup    -> Before the startup report on the connectivity states of the remote
+%%                          hosts used by the JANET Simulator application (?Start_report_delay ms)
+%%          - protracted -> After the startup report if at least one remote host
+%%                          host is used in the JANET Simulator current configuration
+%%          - idle       -> After the startup report if all hosts used in the JANET
+%%                          Simulator current configuration reside in fact in the local host
+%%
+%% Data:  [HostMonitor#hostmon]  (A list of hosts monitor records, defined below)
 
 %% This record represents a host monitor
 -record(hostmon,    
         {
-		 name,             % The name of the monitored host
-		 state,            % The state of the monitored host ('offline'|'online')
-		 type,             % The type of the monitored host ('nodehost'|'restsrv')
-		 wdg_pid,          % The PID of the 'host_watchdog' process monitoring such host
-		 wdg_ref           % A reference used for monitoring the 'host_watchdog' process monitoring such host
+		 name,      % The name of the monitored host
+		 state,     % The state of the monitored host ('offline'|'online')
+		 type,      % The type of monitored host ('nodeshost'|'restsrv')
+		 wdg_pid,   % The PID of the 'host_watchdog' process monitoring such host
+		 wdg_ref    % A reference used for monitoring the 'host_watchdog' process
 		}).
 		
 %%====================================================================================================================================
@@ -46,31 +54,80 @@ callback_mode() ->
 %% ============================================================ INIT ============================================================ %%
 init(_) ->
  
- % Retrieve the 'remote_rest_server_addr' environment variable
- {ok,RemRESTSrvAddr} = application:get_env(remote_rest_server_addr),
- 
- % Retrieve the hostnames of remote node hosts
- RemNodesHosts = get_remote_node_hosts(RemRESTSrvAddr),
- 
- % Retrieve the PID of the 'sim_hostsmonitor' process
+ % Retrieve the PID of the remote hosts monitor
  SimMonPid = self(),
  
- %% ------------------------- Remote Node Hosts monitors initialization ------------------------- %%
-  
- % Spawn a 'host_watchdog' process for each remote node host
- RemNodesHostsWdgs = [ {RemNodeHost,proc_lib:spawn(fun() -> host_monitor(SimMonPid,RemNodeHost) end)} || RemNodeHost <- RemNodesHosts],
+ % Retrieve the JANET Simulator node name
+ JANETNodeName = net_adm:localhost(),
+
+ % Retrieve the 'nodes_hosts' and 'remote_rest_server_addr' environment variables
+ {ok,NodesHosts} = application:get_env(nodes_hosts), 
+ {ok,RESTSrvAddr} = application:get_env(remote_rest_server_addr),
  
- % Initialize the list of host monitors towards the nodes hosts
- RemNodesHostsMons = [ #hostmon{name = RemNodeHost, state = offline, type = nodehost, wdg_pid = WdgPID,
-                                 wdg_ref = monitor(process,WdgPID)} || {RemNodeHost,WdgPID} <- RemNodesHostsWdgs],
+ %% ---------------------------- Remote but Localhost Hosts Filtering ---------------------------- %%
+
+ % If present, delete the remote REST server address from the nodes hosts list
+ NodesHostsNoREST = NodesHosts -- RESTSrvAddr,
+ 
+ % Define a fun for filtering hostnames mapping to the localhost
+ LocalhostFilter = fun(HostName) ->
+                    if
+					
+					 % Hostnames mapping to localhost
+				     HostName == JANETNodeName orelse
+					 HostName == "localhost"   orelse
+					 HostName == "127.0.0.1"   ->
+                      false;
+					  
+					 % Hostnames not mapping to localhost
+					 true ->
+					  true
+                    end
+				   end,
+ 
+ % Filter both the nodes hosts list and the remote REST server
+ % address so to remove hostnames mapping in fact to the localhost
+ RemNodesHosts = lists:filter(LocalhostFilter,NodesHostsNoREST),
+ RemRESTSrvAddr = lists:filter(LocalhostFilter,[RESTSrvAddr]),
+ 
+ %% ------------------------- Remote Node Hosts monitors initialization ------------------------- %%
+ RemNodesHostsMons =
+ case RemNodesHosts of
+  
+  % If all remote nodes hosts reside in fact in
+  % the localhost, no host monitor is required
+  [] ->
+   [];
+   
+  % Otherwise if at least one nodes host is a remote host
+  _ ->
+  
+   % Spawn a 'host_watchdog' process for each remote nodes host
+   RemNodesHostsWdgs = [ {RemNodesHost,proc_lib:spawn(fun() -> host_watchdog(SimMonPid,RemNodesHost) end)} || RemNodesHost <- RemNodesHosts],
+ 
+   % Initialize the list of node hosts monitors
+   [#hostmon{name = RemNodesHost, state = offline, type = nodeshost, wdg_pid = WdgPID, wdg_ref = monitor(process,WdgPID)} || {RemNodesHost,WdgPID} <- RemNodesHostsWdgs]
+ end,
  
  %% ----------------------- Remote REST Server host monitor initialization ----------------------- %%
+ RemRESTSrvMonList =
+ case RemRESTSrvAddr of
  
- % Spawn a 'host_watchdog' process for the remote REST server
- RemRESTSrvWdg = proc_lib:spawn(fun() -> host_monitor(SimMonPid,RemRESTSrvAddr) end),
+  % If the remote REST server resides in fact
+  % in the localhost, no host monitor is required
+  [] ->
+   [];
+   
+  % Otherwise if the REST server
+  % address refers to a remote host
+  _ ->
+   
+   % Spawn a 'host_watchdog' process for the remote REST server
+   RemRESTSrvWdg = proc_lib:spawn(fun() -> host_watchdog(SimMonPid,RemRESTSrvAddr) end),
  
- % Initialize the host monitor towards the remote REST server
- RemRESTSrvMon = #hostmon{name = RemRESTSrvAddr, state = offline, type = restsrv, wdg_pid = RemRESTSrvWdg, wdg_ref = monitor(process,RemRESTSrvWdg)},
+   % Initialize the remote REST server host monitor and enclose it in a list
+   [#hostmon{name = RemRESTSrvAddr, state = offline, type = restsrv, wdg_pid = RemRESTSrvWdg, wdg_ref = monitor(process,RemRESTSrvWdg)}]
+ end,
  
  %% --------------------------------- Remote Hosts Monitor Start --------------------------------- %%
 
@@ -82,10 +139,10 @@ init(_) ->
 
  % Return the initialization tuple to the 'gen_statem' engine:
  {
-  ok,                                    % Indicates to the engine that the 'dev_statem' can start
-  startup,                               % The initial State of the 'dev_statem'
-  RemNodesHostsMons ++ [RemRESTSrvMon],  % The initial Data of the 'dev_statem'  
-  StatemTimers                           % The list of timers to be initialized
+  ok,                                      % Indicates to the engine that the 'dev_statem' can start
+  startup,                                 % The initial State of the 'dev_statem'
+  RemNodesHostsMons ++ RemRESTSrvMonList,  % The initial Data of the 'dev_statem' (the list of host monitors)
+  StatemTimers                             % The list of timers to be initialized
  }.
 
 
@@ -95,45 +152,73 @@ init(_) ->
 
 %% STARTUP REPORT TIMER
 %% --------------------
-%% PURPOSE:   Report the list of offline remote hosts
-%% ACTIONS:   Print the list of offline remote hosts and, if there are none,
-%%            explicitly state that all JANET remote hosts are online
-%% NEW STATE: Update the state to 'protracted'
+%% PURPOSE:   Report a summary of the connectivity states of the remote hosts
+%%            used in the JANET Simulator application after a startup delay
+%% ACTIONS:   A) If the list of host monitors is non empty, print the list of offline
+%%               remote hosts according to their type ('nodeshost'|'restsrv') or, if
+%%               there are none, inform that all JANET remote nodes appear to be online
+%%            B) If the list of host monitors is empty (meaning that both the only nodes
+%%               host and the remote REST server reside in fact in the localhost, inform
+%%               the user that no further updates will be reported by the remote hosts monitor 
+%% NEW STATE: A) Update the state to 'protracted'
+%%            B) Update the state to 'idle', delete the 'protracted_report'
+%%               timer and hibernate the remote hosts monitor 
 %% NEW DATA:  -
 %%
-handle_event({timeout,startup_report},_,startup,HostsMons) ->
+%% NOTES: 1) In case A) the sim_hostmonitor is not shutdown to allow it to reply to
+%%           the "GET_REMOTE_HOSTS_STATES" call issued from the simulation controller
+%%        2) In any case, this timer will fire only once 
+%%
+
+%% B) No host monitor is present -> Update the remote hosts monitor state to 'idle' and hibernate it
+handle_event({timeout,startup_report},_,startup,[]) ->
+
+ % Print a message informing the user that all hosts used by the JANET Simulator reside
+ % in the localhost, and so that no further host states updated will be reported
+ io:format("~n[sim_hostsmonitor]: In its current configuration all hosts used by the JANET Simulator reside in the localhost, no further remote hosts states updates will be reported~n"),
+ 
+ % Update the state to 'idle', delete the
+ % 'protracted_report' timer, and hibernate the gen_statem
+ {next_state,idle,[],[{{timeout,protracted_report},cancel},hibernate]};
+
+%% A) Host monitors present -> Print a report on the remote hosts connectivity states
+handle_event({timeout,startup_report},_,startup,HostMons) ->
 
  % Report the list of offline remote hosts
- case report_offline_hosts(HostsMons) of
+ % according to their type ('nodeshost'|'restsrv') 
+ case report_offline_hosts(HostMons) of
  
-  % If all remote hosts are online (and so nothing
-  % was reported), explicitly report the fact
+  % If all remote hosts are online (and so nothing was printed),
+  % explicitly report that all JANET remote nodes appear to be online
   all_online ->
-   io:format("~n[sim_hostsmonitor]: All JANET remote hosts appear to be online~n");
+   io:format("~n[sim_hostsmonitor]: All remote hosts used by the JANET Simulator appear to be online~n");
    
-  % Otherwise if at least one remote
+  % Otherwise, if at least one remote
   % host was reported as offline, do nothing
   ok ->
    ok
  end,
  
  % Update the state to 'protracted' and keep the data
- {next_state,protracted,HostsMons};
+ {next_state,protracted,HostMons};
  
 
 %% PROTRACTED REPORT TIMER
 %% -----------------------
-%% PURPOSE:   Report the list of offline remote hosts
-%% ACTIONS:   Print the list of offline remote hosts, if any
+%% PURPOSE:   Periodically report the list of remote hosts used in
+%%            the JANET Simulator application that appear to be offline
+%% ACTIONS:   Report the list of offline remote hosts according
+%%            to their type ('nodeshost'|'restsrv'), if any
 %% NEW STATE: -
 %% NEW DATA:  -
 %%
-handle_event({timeout,protracted_report},_,protracted,HostsMons) ->
+handle_event({timeout,protracted_report},_,protracted,HostMons) ->
 
- % Report the list of offline remote hosts, if any
- report_offline_hosts(HostsMons),
+ % Report the list of offline remote hosts according
+ % to their type ('nodeshost'|'restsrv'), if any
+ report_offline_hosts(HostMons),
  
- % Keep the state and data and reinitialize the protracted report timer
+ % Keep the state and data and reinitialize the 'protracted_report' timer
  {keep_state_and_data,[{{timeout,protracted_report},?Protracted_report_period,none}]};
  
  
@@ -143,83 +228,95 @@ handle_event({timeout,protracted_report},_,protracted,HostsMons) ->
 %% -----------------------
 %% SENDER:    The simulation controller (the user)
 %% WHEN:      -
-%% PURPOSE:   Retrieve the remote hosts states
+%% PURPOSE:   Retrieve a summary of the connectivity states of the
+%%            remote hosts used in the JANET Simulator application
 %% CONTENTS:  -
 %% MATCHES:   (always) (when the request comes from the JANET Simulator node)
-%% ACTIONS:   Return the caller a tuple containing the list of remote nodes
-%%            that are offline and whether the remote REST server is offline 
+%% ACTIONS:   A) If the list of host monitors is non empty, return the caller
+%%               caller a tuple containing the list of remote node hosts that
+%%               are offline and whether the remote REST server is offline 
+%%            B) If the list of host monitors is empty (meaning that both the only
+%%               nodes host and the remote REST server reside in fact in the localhost)
+%%               return a 'nohosts' atom to the caller and go back into hibernation 
 %% NEW STATE: -
 %% NEW DATA:  -
-%%  
-handle_event({call,ReqPID},get_remote_hosts_states,_State,HostsMons) ->
+%%
 
- % Retrieve a tuple containing the list of remote host nodes that
- % are offline and whether the remote REST server is offline
- RemHostsOffline = get_offline_hosts(HostsMons),
- 
- % Keep the state and data, return the list of offline hosts
- % to the caller and reinitialize the recurrent report timer
- {keep_state_and_data,[{reply,ReqPID,RemHostsOffline},{{timeout,protracted_report},?Protracted_report_period,none}]};
+%% B) No host monitor is present
+handle_event({call,{ReqPID,_Tag}},get_remhosts_states,_State,[]) when node() =:= node(ReqPID) ->
+
+ % Keep the state and data, return to the 'nohosts' atom to the caller and go back into hibernation
+ {keep_state_and_data,[{reply,{ReqPID,_Tag},nohosts},hibernate]};
+  
+%% A) At least one host monitor is present
+handle_event({call,{ReqPID,_Tag}},get_remhosts_states,_State,HostMons) when node() =:= node(ReqPID) ->
+
+ % Keep the state and data, return to the caller the list of remote node hosts that are offline
+ % and whether the remote REST server is offline, and reinitialize the 'protracted_report' timer
+ {keep_state_and_data,[{reply,{ReqPID,_Tag},get_offline_hosts(HostMons)},{{timeout,protracted_report},?Protracted_report_period,none}]};
  
  
 %% -------------------------------------------------- EXTERNAL CASTS CALLBACKS -------------------------------------------------- %% 
 
 %% HOST_STATE_UPDATE
 %% -----------------
-%% SENDER:    One of the 'host_watchdog' processes spawned by the 'sim_hostsmonitor'
-%% WHEN:      When its 'ping' towards the remote host completes, either successfully or not
-%% PURPOSE:   Inform the 'sim_hostmonitor' of the remote host state
-%% CONTENTS:  1) The name of the monitored host
-%%            2) Its current state ('offline'|'online')
+%% SENDER:    One of the 'host_watchdog' processes spawned by the remote hosts monitor
+%% WHEN:      When its 'ping' towards its associated remote host completes (whether successfully or not)
+%% PURPOSE:   Inform the remote hosts monitor of the current connectivity state of the remote host
+%% CONTENTS:  1) The monitored HostName
+%%            2) Its sampled connectivity state ('offline'|'online')
 %% MATCHES:   (always) (when the request comes from the JANET Simulator node)
-%% ACTIONS:   If the remote host state changed and the gen_statem is in the 'protracted' state,
-%%            report the state change according to host type ('nodehost' or 'restsrv')
+%% ACTIONS:   If the remote host connectivity state differs from its previous sampling
+%%            and the gen_statem is in the 'protracted' state, report such connectivity
+%%            state change according to the host type ('nodeshost' or 'restsrv')
 %% NEW STATE: -
-%% NEW DATA:  Update the 'state' variable in the associated host monitor
+%% NEW DATA:  Update accordingly the 'state' variable in the host monitor associated with HostName
 %%  
-handle_event(cast,{host_state_update,HostName,HostState,WdgPID},State,HostsMons) when node(WdgPID) =:= node() ->
+handle_event(cast,{host_state_update,HostName,HostState,WdgPID},State,HostMons) when node(WdgPID) =:= node() ->
 
  % Retrieve the monitor associated with the HostName
- {value,HostMon,NewHostsMons} = lists:keytake(HostName,2,HostsMons), 
+ {value,HostMon,NewHostMons} = lists:keytake(HostName,2,HostMons),
 
- % If the remote host state changed and the gen_statem is in the 'protracted'
- % state, report the state change according to host type ('nodehost' or 'restsrv')
+ % If the remote host connectivity state differs from its previous sampling
+ % and the gen_statem is in the 'protracted' state, report such connectivity
+ % state change according to the host type ('nodeshost' or 'restsrv')
  report_host_state_change(State,HostName,HostMon#hostmon.state,HostState,HostMon#hostmon.type),
  
  % Update the 'state' variable in the host monitor
  NewHostMon = HostMon#hostmon{state = HostState},
  
  % Keep the state and update the list of host monitors
- {keep_state,NewHostsMons ++ [NewHostMon]};
+ {keep_state,NewHostMons ++ [NewHostMon]};
  
  
 %% -------------------------------------------------- EXTERNAL INFO CALLBACKS -------------------------------------------------- %% 
 
 %% HOST WATCHDOG DOWN
 %% ------------------
-
 %% SENDER:    The Erlang Run-Time System (ERTS)
-%% WHEN:      When one of the monitored 'host_watchdog' processes terminates
-%% PURPOSE:   Inform the 'sim_hostsmonitor' of the process termination
+%% WHEN:      When one of the monitored 'host_watchdog' processes
+%%            spawned by the remote hosts monitor terminates
+%% PURPOSE:   Inform the remote hosts monitor of the
+%%            'host_watchdog' process termination
 %% CONTENTS:  1) The monitor reference the notification refers to
-%%            2) The PID of the process that terminated
-%%            3) The reason for the monitored process termination
+%%            2) The PID of the process that has terminated
+%%            3) The monitored process termination (or exit) reason
 %% MATCHES:   (always)
 %% ACTIONS:   Ignore the error and attempt to respawn the
-%%            'host_watchdog' process associated with such host
+%%            'host_watchdog' process associated with such HostName
 %% NEW STATE: -
 %% NEW DATA:  Update the 'wdg_pid' and 'wdg_ref' variables in the associated host monitor
 %%  
-handle_event(info,{'DOWN',MonRef,process,_DeadWdgPID,_Reason},_State,HostsMons) ->
+handle_event(info,{'DOWN',MonRef,process,_DeadWdgPID,_Reason},_State,HostMons) ->
 
- % Retrieve the host monitor associated with the watchdog process that terminated
- {value,HostMon,NewHostsMons} = lists:keytake(MonRef,6,HostsMons), 
+ % Retrieve the host monitor associated with the 'host_watchdog' process that terminated
+ {value,HostMon,NewHostMons} = lists:keytake(MonRef,6,HostMons), 
  
- % Retrieve the PID of the 'sim_hostsmonitor' process
+ % Retrieve the PID of the remote hosts monitor process
  SimMonPid = self(),
 
- % Respawn the 'host_watchdog' process for such remote host
- NewWdgPID = proc_lib:spawn(fun() -> host_monitor(SimMonPid,HostMon#hostmon.name) end),
+ % Respawn the 'host_watchdog' process associated with such HostName
+ NewWdgPID = proc_lib:spawn(fun() -> host_watchdog(SimMonPid,HostMon#hostmon.name) end),
 
  % Create a monitor towards the new 'host_watchdog' process
  NewWdgRef = monitor(process,NewWdgPID),
@@ -228,180 +325,190 @@ handle_event(info,{'DOWN',MonRef,process,_DeadWdgPID,_Reason},_State,HostsMons) 
  NewHostMon = HostMon#hostmon{wdg_pid = NewWdgPID, wdg_ref = NewWdgRef},
  
  % Keep the state and update the list of host monitors
- {keep_state,NewHostsMons ++ [NewHostMon]}.
+ {keep_state,NewHostMons ++ [NewHostMon]}.
 
 
 %%====================================================================================================================================
 %%                                                    PRIVATE HELPER FUNCTIONS
 %%==================================================================================================================================== 
 
-%% Returns the list of remote node hostnames (init() helper function)
-get_remote_node_hosts(RemRESTSrvAddr) ->
+%% If the old and new connectivity states associated with a remote host differ and the
+%% remote hosts monitor is in the 'protracted' state, report the HostName connectivity state
+%% change according to its type ('nodeshost' or 'restsrv') (HOST_STATE_UPDATE helper function)
  
- % Retrieve the 'nodes_hosts' environment variable
- {ok,NodesHosts} = application:get_env(nodes_hosts),
- 
- % Return the list of remote node hostnames by
- % subtracting from the list of nodes hosts:
- %  - The hostname of the remote REST server
- %  - The 'localhost' hostname
- %  - The JANET simulator node host name
- %
- NodesHosts -- [RemRESTSrvAddr,"localhost",net_adm:localhost()].
-
-
-%% Reports a host state change according to its type and the current state of the remote hosts monitor
-%% (handle_event({cast,WdgPid},{host_state_update,HostName,HostState},State,HostsMons) helper function
-
 % Remote hosts monitor in the 'startup' state -> do not report
 report_host_state_change(startup,_Hostname,_OldState,_NewState,_Type) ->
  ok;
 
-% No host state change -> do not report
-report_host_state_change(protracted,_Hostname,SameState,SameState,_Type) ->
+% No host connectivity change -> do not report
+report_host_state_change(_State,_Hostname,SameState,SameState,_Type) ->
  ok;
  
 % Remote REST server 'online' -> 'offline'
-report_host_state_change(protracted,RemRESTSrvAddr,online,offline,restsrv) ->
+report_host_state_change(_State,RemRESTSrvAddr,online,offline,restsrv) ->
  io:format("[sim_hostsmonitor]: <WARNING> The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]);
 
 % Remote REST server 'offline' -> 'online'
-report_host_state_change(protracted,RemRESTSrvAddr,offline,online,restsrv) ->
+report_host_state_change(_State,RemRESTSrvAddr,offline,online,restsrv) ->
  io:format("[sim_hostsmonitor]: The remote REST server \"~s\" is now online~n",[RemRESTSrvAddr]);
 
-% Remote node host 'online' -> 'offline'
-report_host_state_change(protracted,RemNodeHost,online,offline,nodehost) ->
- io:format("[sim_hostsmonitor]: <WARNING> Remote node host \"~s\" appears to be offline~n",[RemNodeHost]);
+% Remote nodes host 'online' -> 'offline'
+report_host_state_change(_State,RemNodesHost,online,offline,nodeshost) ->
+ io:format("[sim_hostsmonitor]: <WARNING> Remote nodes host \"~s\" appears to be offline~n",[RemNodesHost]);
 
-% Remote node host 'offline' -> 'online'
-report_host_state_change(protracted,RemNodeHost,offline,online,nodehost) ->
- io:format("[sim_hostsmonitor]: Remote node host \"~s\" is now online~n",[RemNodeHost]).
+% Remote nodes host 'offline' -> 'online'
+report_host_state_change(_State,RemNodesHost,offline,online,nodeshost) ->
+ io:format("[sim_hostsmonitor]: Remote nodes host \"~s\" is now online~n",[RemNodesHost]).
  
 
-%% Reports the list of offline remote hosts
-%% ('startup_report_timer','protracted_report_timer' helper function
-report_offline_hosts(HostsMons) ->
+%% Reports the list of offline remote hosts according to their type ('nodeshost'|'restsrv') 
+%% (STARTUP REPORT TIMER, PROTRACTED REPORT TIMER helper function)
+report_offline_hosts(HostMons) ->
 
- % Retrieve a tuple containing the list of offline remote
- % node hosts and the state of the remote REST server
- {OfflineRemNodesHosts,RemRESTSrvState} = get_offline_hosts(HostsMons),
+ % Retrieve a tuple containing the list of offline remote nodes
+ % hosts and the connectivity state of the remote REST server
+ {OfflineNodesHosts,RemRESTSrvState} = get_offline_hosts(HostMons),
  
- % Print the offline hosts
- print_offline_hosts(OfflineRemNodesHosts,RemRESTSrvState).
+ % Print the list of offline remote hosts according to their type
+ print_offline_hosts(OfflineNodesHosts,RemRESTSrvState).
+
+
+%% Returns a tuple containing the list of offline remote nodes hosts and the connectivity state of
+%% the remote REST server (report_offline_hosts(HostMons), GET_REMOTE_HOSTS_STATES helper function)
+get_offline_hosts(HostMons) ->
  
-%% Returns a tuple containing the list of offline remote node hosts and the state of the remote
-%% REST server (report_offline_hosts(HostMons),'get_remote_hosts_states' helper function)
-get_offline_hosts(HostsMons) ->
+ % Derive the list of nodes hosts monitors and the REST server connectivity
+ % state by attempting to extract its host monitor from the hosts monitors list
+ {NodesHostsMons,RemRESTSrvState} = 
+ case lists:keytake(restsrv,4,HostMons) of
+  false ->
  
- % Extract from the list of host monitors the
- % one associated with the remote REST server
- {value,RemRESTSrvMon,NodesHostsMons} = lists:keytake(restsrv,4,HostsMons), 
- 
- % Represent the remote REST server state as an empty
- % list if its online or its HostName if its offline
- RemRESTSrvState = case RemRESTSrvMon#hostmon.state of
-                    online ->
-		  	         [];
-				    offline ->
-				     RemRESTSrvMon#hostmon.name
-				   end,
-                          
- % Derive the list of offline remote node hosts
- OfflineRemNodesHosts = [ NodeHost || {hostmon,NodeHost,State,_Type,_WdgPid,_WdgRef} <- NodesHostsMons, State =:= offline ],
- 
- % Return the list of offline remote node hosts and the remote REST server state in a tuple
+   % If the remote REST server was not found in the host monitors list, meaning
+   % that resides in fact in the localhost, return the list of nodes hosts
+   % monitors and an empty list as a stub 'online' state for the REST server 
+   {HostMons,[]};
+   
+  {value,RemRESTSrvMon,NodesHostsMons_} ->
+  
+   % If the remote REST server was found in the host monitors list, represent its
+   % connectivity state as an empty list if its online or its HostName if its offline
+   RemRESTSrvState_ = case RemRESTSrvMon#hostmon.state of
+                      online ->
+		    	       [];
+				      offline ->
+				       RemRESTSrvMon#hostmon.name
+				     end,
+                     
+   % Return the required tuple
+   {NodesHostsMons_,RemRESTSrvState_}
+  end,
+			
+ % Derive the list of offline remote nodes hosts
+ OfflineRemNodesHosts = [ NodesHost || {hostmon,NodesHost,State,_Type,_WdgPid,_WdgRef} <- NodesHostsMons, State =:= offline ],
+
+ % Return the list of offline remote nodes hosts and the
+ % connectivity state of the remote REST server in a tuple
  {OfflineRemNodesHosts,RemRESTSrvState}.
 
 
-%% Prints the list of offline hosts according to their
-%% type (report_offline_hosts(HostMons) helper function)
-print_offline_hosts([],[]) ->
+%% Print the list of offline remote hosts according to their type
+%% ('nodeshost'|'restsrv') (report_offline_hosts(HostMons) helper function)
 
- % If no remote host is offline, return the 'all_online'
- % atom (used by the 'startup_report' timer)
+% No remote host is offline -> return the 'all_online'
+% atom (used by the STARTUP REPORT TIMER)
+print_offline_hosts([],[]) ->
  all_online;
 
+% Only the remote REST server is offline
 print_offline_hosts([],RemRESTSrvAddr) ->
- 
- % If only the remote REST server is offline
  io:format("~n[sim_hostsmonitor]: <WARNING> The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]);
  
+% Only a single remote nodes host is offline 
 print_offline_hosts(RemNodesHost,[]) when length(RemNodesHost) == 1 ->
+ io:format("~n[sim_hostsmonitor]: <WARNING> The remote nodes host \"~s\" appears to be offline~n",[RemNodesHost]);
  
- % If only a single remote node host is offline
- io:format("~n[sim_hostsmonitor]: <WARNING> The remote node host \"~s\" appears to be offline~n",[RemNodesHost]);
- 
+% Only (multiple) remote nodes hosts are offline
 print_offline_hosts(RemNodesHosts,[]) ->
+ io:format("~n[sim_hostsmonitor]: <WARNING> The following remote nodes hosts appear to be offline: ~0p~n",[RemNodesHosts]);
  
- % If only remote nodes hosts are offline
- io:format("~n[sim_hostsmonitor]: <WARNING> The following remote node hosts appear to be offline: ~0p~n",[RemNodesHosts]);
- 
+% The remote REST server and a single remote nodes host are offline
 print_offline_hosts(RemNodesHost,RemRESTSrvAddr) when length(RemNodesHost) == 1 ->
- 
- % If the remote REST server and a single remote node host are offline
  io:format("~n[sim_hostsmonitor]: <WARNING>~n"),
  io:format("|-- The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]),
- io:format("|-- The remote node host \"~s\" appears to be offline~n",[RemNodesHost]);
- 
+ io:format("|-- The remote nodes host \"~s\" appears to be offline~n",[RemNodesHost]);
+
+% The remote REST server and multiple remote nodes hosts are offline
 print_offline_hosts(RemNodesHosts,RemRESTSrvAddr) ->
- 
- % If the remote REST server and multiple remote node host are offline
  io:format("~n[sim_hostsmonitor]: <WARNING>~n"),
  io:format("|-- The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]),
  io:format("|-- The following remote nodes hosts appear to be offline: ~0p~n",[RemNodesHosts]).
  
+
+%% ------------------------------------ HOST_WATCHDOG PROCESS ------------------------------------ %%
  
-%% ----------------------------------------- host_monitor process ----------------------------------------- %% 
+%% DESCRIPTION: Body function of the omonymous process used for periodically monitoring the
+%%              connectivity state of a remote host used in the JANET Simulator application
+%%              and report it to the remote hosts monitor parent process 
+%%
+%% ARGUMENTS:    - SimMonPid: The PID of the remote hosts monitor parent process
+%%                            where to report host connectivity state updates
+%%               - HostName:  The host name whose connectivity state is to be monitored
+%%
+%% RETURNS:      - (can only terminate by receiving an exit signal from its parent process)
+%%
+%% NOTE:        The monitoring of the remote host connectivity state is
+%%              implemented by periodically pinging it through the underlying OS       
+%%
+host_watchdog(SimMonPid,HostName) ->
 
-%% DESCRIPTION:  Body function of the omonymous process used for monitoring the reachability of a
-%%               remote host, which is inferred by periodically pinging it via the underlying OS
-%%
-%% ARGUMENTS:    - SimMonPid: The PID of the 'sim_hostsmonitor' process where to report the remote host state
-%%               - HostName:  The remote hostname which to monitor the state
-%%
-%% RETURNS:      - (can only exit by receiving an exit signal from its 'sim_hostsmonitor' parent)
-%%
-host_monitor(SimMonPid,HostName) ->
-
- % Build the OS ping command towards the HostName
- %
- % NOTES: - The "-c 1" option restricts the ping to one attempt
- %        - The >/dev/null reidirection is used
- %          for discarding the ping verbose output
- %        - "; echo $?" allows to extract the result of the ping execution:
- %             + "0" -> ping succeeded
- %             + "_" -> ping failed
- %
- PingCmd = io_lib:format("ping -c 1 ~s >/dev/null ; echo $?",[HostName]),
+ % Retrieve the family of the underlying operating system ('unix'|'win32')
+ {OSFamily,_OSName} = os:type(),
  
- % Start pinging the remote host
- host_monitor_ping(SimMonPid,HostName,PingCmd).
-
-%% Continuously pings a remote host and returns its state to the
-%% 'sim_hostmonitor' process (host_monitor(SimMonPid,HostName) helper function)
-host_monitor_ping(SimMonPid,HostName,PingCmd) ->
-
- % Attempt to ping the remote host, restricting
- % the result returned by the OS to 1 character
- case os:cmd(PingCmd,#{max_size => 1}) of
-  "0" ->
-  
-    % If the ping towards the remote host was successful, inform the
-	% 'sim_hostsmonitor' process that the host is online via a cast()
-    gen_statem:cast(SimMonPid,{host_state_update,HostName,online,self()});
-	
-  _ ->
-	
-	% Otherwise inform the 'sim_hostsmonitor'
-	% process that the host is offline via a cast()
-	gen_statem:cast(SimMonPid,{host_state_update,HostName,offline,self()})
+ % Build the ping command depending on the OS family
+ %
+ % NOTES:  1) The "-c 1" (or "-n 1" in Windows systems)
+ %            option limits the ping to a single attempt
+ %         2) The ">/dev/null" (or "> $null" in Windows systems)
+ %            reidirection suppresses the command output
+ %         3) "echo $?" (or "echo $LASTEXITCODE" in Windows systems) returns
+ %            the exit code of the last command (0 -> success, !0 -> failure)  
+ PingCmd = 
+ case OSFamily of
+  unix ->
+   io_lib:format("ping -c 1 ~s >/dev/null ; echo $?",[HostName]);
+  win32 ->
+   io_lib:format("powershell.exe \"ping -n 1 ~s > $null; echo $LASTEXITCODE\"",[HostName])
  end,
  
- % Sleep for the predefined period between ping attempts
+ % Periodically ping the remote host, reporting each
+ % result to the remote hosts monitor parent process 
+ host_watchdog_ping(SimMonPid,HostName,PingCmd).
+
+
+%% Periodically pings a remote host, reporting each result to the remote hosts
+%% monitor parent process (host_watchdog(SimMonPid,HostName) helper function)
+host_watchdog_ping(SimMonPid,HostName,PingCmd) ->
+
+ % Execute the ping command, restricting the
+ % result returned by the OS to a single character  
+ case os:cmd(PingCmd,#{max_size => 1}) of
+  
+  % If a "0" was returned the ping towards the remote host was successful,
+  % and so inform the remote hosts monitor that the host is online via a cast()
+  "0" ->
+   gen_statem:cast(SimMonPid,{host_state_update,HostName,online,self()});
+	
+  % If another value was returned the ping towards the remote host failed,
+  % and so inform the remote hosts monitor that the host is offline via a cast()
+  _ ->
+   gen_statem:cast(SimMonPid,{host_state_update,HostName,offline,self()})
+ end,
+ 
+ % Sleep for the predefined period between ping executions
  timer:sleep(?Wdg_ping_period),
  
  % Recursively call the function
- host_monitor_ping(SimMonPid,HostName,PingCmd).
+ host_watchdog_ping(SimMonPid,HostName,PingCmd).
  
  
 %%====================================================================================================================================
