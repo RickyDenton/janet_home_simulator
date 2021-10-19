@@ -914,9 +914,10 @@ janet_start() ->
   % Ensure the JANET Simulator not to be already running
   ok = utils:ensure_jsim_state(stopped),
 
-  % Ensure Mnesia to be running and in a consistent state 
-  ok = db:start_check_mnesia(),
-  
+  % Ensure the JANET Simulator Mnesia database to be running
+  % (automatically installing it if it is not) and in a consistent state
+  ok = db:mnesia_startup(true),
+
   % Retrieve the value of the 'sim_rest_port' configuration parameter 
   {ok,SimRESTPort} = application:get_env(janet_simulator,sim_rest_port),
   

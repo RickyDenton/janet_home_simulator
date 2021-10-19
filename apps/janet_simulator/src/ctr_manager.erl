@@ -31,15 +31,16 @@ init(Loc_id) ->
  % Register the manager in the 'ctrmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=Loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
- % Return the server initial state, where the initialization of the controller node will continue
- % in the "handle_continue(Continue,State)" callback function for parallelization purposes 
- {ok,#ctrmgrstate{ctr_state=booting,ctr_node=none,ctr_srv_pid=none,loc_id=Loc_id},{continue,init}}.
+ % Return the server initial state, where the initialization of the controller node will continue in
+ % the "handle_continue(start_controller_node,State)" callback function for parallelization purposes 
+ {ok,#ctrmgrstate{ctr_state=booting,ctr_node=none,ctr_srv_pid=none,loc_id=Loc_id},{continue,start_controller_node}}.
  
 
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
   
-%% Initializes the controller's node (called right after the 'init' callback function)
-handle_continue(init,SrvState) ->
+%% Initializes the controller's node (called right after the 'init' callback
+%% function and should the controller node go down (CONTROLLER NODE DOWN)
+handle_continue(start_controller_node,SrvState) ->
  
  %% -------------- Controller Node Configuration Parameters Definition -------------- %%
  
@@ -53,7 +54,6 @@ handle_continue(init,SrvState) ->
  % Retrieve the environment parameters that will be used
  % by the controller for interfacing with the remote host
  CtrRESTPort = LocationRecord#location.port,                              % The OS port to be used by the controller's REST server (int >= 30000)
- {ok,RemoteRESTClient} = application:get_env(remote_rest_client),          % The address of the remote client issuing REST requests to the controller (a list)
  {ok,RemoteRESTServerAddr} = application:get_env(remote_rest_server_addr), % The address of the remote server accepting REST requests from the controller (a list)  
  {ok,RemoteRESTServerPort} = application:get_env(remote_rest_server_port), % The port of the remote server accepting REST requests from the controller (int > 0)
  Loc_user = LocationRecord#location.user,                                 % The user the location belongs to [REMOTE SERVER COMPATIBILITY]
@@ -63,8 +63,7 @@ handle_continue(init,SrvState) ->
  % Prepare the Host, Name and Args parameters of the controller's node
  NodeHost = utils:get_effective_hostname(LocationRecord#location.hostname),
  NodeName = "ctr-" ++ Loc_id_str,
- NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_controller/ebin/ _build/default/lib/janet_simulator/ebin/ " ++
-            "_build/default/lib/cowboy/ebin/ _build/default/lib/cowlib/ebin/ _build/default/lib/ranch/ebin/ _build/default/lib/jsone/ebin/ _build/default/lib/gun/ebin/",
+ NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -kernel net_ticktime 20 -env ERL_LIBS _build/default/lib/",
  
  % Set the cookie for allowing the Janet Simulator to connect with the controller's node
  % NOTE: The use of atoms is required by the erlang:set_cookie BIF 
@@ -89,7 +88,7 @@ handle_continue(init,SrvState) ->
    {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
    % Launch the Janet Controller application on the controller node
-   ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTClient,RemoteRESTServerAddr,RemoteRESTServerPort,Loc_user]),
+   ok = rpc:call(Node,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTServerAddr,RemoteRESTServerPort,Loc_user]),
  
    % Set the ctr_node in the server state and wait for the
    % registration request of the controller's 'ctr_simserver' process
@@ -239,29 +238,48 @@ handle_cast(Request,SrvState=#ctrmgrstate{loc_id=Loc_id}) ->
 %% CONTROLLER NODE DOWN
 %% --------------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
-%% WHEN:      When the monitored 'ctr_simserver' process on the controller node terminates
-%% PURPOSE:   Inform of the 'ctr_simserver' process termination
+%% WHEN:      When the monitored 'ctr_simserver' process on the controller
+%%            node (and thus the controller node itself) terminates
+%% PURPOSE:   Inform the manager of the controller node termination
 %% CONTENTS:  1) The monitor reference the notification refers to
 %%            2) The PID of the process that was monitored (the 'ctr_simserver' process)
 %%            3) The reason for the monitored process's termination
 %% MATCHES:   (always) (when the monitor reference and the PID of the monitored process match the ones in the server's state)
-%% ACTIONS:   If Reason =:= 'noproc' log the event (it should not happen), and stop the controller manager
+%% ACTIONS:   1) Report the Reason for the controller node termination
+%%            2) Update the controller state in the 'ctrmanager' table to "BOOTING"
+%%            3) Attempt to restart the the controller node via the handle_continue(start_controller_node,SrvState) callback
 %% ANSWER:    -
-%% NEW STATE: Stop the server (reason = 'controller_node_stopped')
+%% NEW STATE: Update the server 'ctr_state to 'booting' and reset all other state variables apart from the location ID (loc_id)
 %%
 handle_info({'DOWN',MonRef,process,CtrSrvPid,Reason},SrvState) when MonRef =:= SrvState#ctrmgrstate.ctr_srv_mon, CtrSrvPid =:= SrvState#ctrmgrstate.ctr_srv_pid ->
 
- % If Reason = 'noproc', which is associated to the fact that the 'ctr_simserver' never existed
- % in the first place or crashed before the monitor could be established, log the error
- if
-  Reason =:= noproc ->
-   io:format("[ctr_mgr-~w]: <WARNING> The device node's 'ctr_simserver' process does not exist~n",[SrvState#ctrmgrstate.loc_id]);
-  true ->
-   ok
+ % Report the Reason for the controller node termination
+ case Reason of
+ 
+  % The 'ctr_simserver' crashed before the monitor could be
+  % established (or was never spawned in the first place)
+  noproc ->
+   io:format("[ctr_mgr-~w]: <ERROR> The controller's 'ctr_simserver' process was not found, attempting to restart the controller node~n",[SrvState#ctrmgrstate.loc_id]);
+ 
+  % Connection with the controller's host was lost
+  noconnection ->
+   io:format("[ctr_mgr-~w]: <WARNING> Lost connection with the controller node's host, attempting to restart the controller node~n",[SrvState#ctrmgrstate.loc_id]);
+ 
+  % Unknown termination reason
+  UnknownReason ->
+   io:format("[ctr_mgr-~w]: <WARNING> Controller node terminated with unknown reason \"~w\", attempting to restart it~n",[SrvState#ctrmgrstate.loc_id,UnknownReason])
  end,
  
- % Stop the controller manager (reason = 'controller_node_stopped')
- {stop,controller_node_stopped,SrvState}.
+ % Explicitly stop the controller node for preventing reconnection
+ % attempts from the 'slave' library should it come back online
+ slave:stop(SrvState#ctrmgrstate.ctr_node),
+ 
+ % Update the controller node state to "BOOTING" in the 'ctrmanager' table 
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="BOOTING"}) end),	
+ 
+ % Update the server 'ctr_state' to 'booting', reset all other state variables apart from the location ID
+ % and attempt to restart the controller node via the handle(start_controller_node,SrvState) callback
+ {noreply,#ctrmgrstate{ctr_state=booting,loc_id=SrvState#ctrmgrstate.loc_id, _ = none},{continue,start_controller_node}}.
 
  
 %% ========================================================== TERMINATE ========================================================== %% 

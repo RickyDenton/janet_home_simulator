@@ -22,9 +22,8 @@
 %% ======================================================== INIT_HANDLER ======================================================== %%
 init_handler(_) ->
  
- % Retrieve the 'sim_rest_port' and 'remote_rest_client' environment variables
+ % Retrieve the 'sim_rest_port' environment variable
  {ok,SimRESTPort} = application:get_env(sim_rest_port),
- {ok,RemoteRESTClient} = application:get_env(remote_rest_client),
  
  % Define the REST listener name
  ListenerName = sim_resthandler,
@@ -56,7 +55,7 @@ init_handler(_) ->
 	     ],
 			
  % Return the initialization tuple to the behaviour engine
- {ok,SimRESTPort,RemoteRESTClient,ListenerName,Paths}.
+ {ok,SimRESTPort,ListenerName,Paths}.
  
  
 %% ============================================================ INIT ============================================================ %%

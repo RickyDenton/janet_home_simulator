@@ -1,2 +1,2 @@
 #!/bin/bash
-REBAR3_ERL_ARGS="-sname janet-simulator@localhost -hidden -setcookie janet-simulator" rebar3 shell
+REBAR3_ERL_ARGS="-args_file config/vm.args -config config/sys.config" rebar3 shell

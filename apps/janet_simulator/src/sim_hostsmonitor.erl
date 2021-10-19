@@ -472,8 +472,8 @@ host_watchdog(SimMonPid,HostName) ->
  
  % Build the ping command depending on the OS family
  %
- % NOTES:  1) The "-c 1" (or "-n 1" in Windows systems)
- %            option limits the ping to a single attempt
+ % NOTES:  1) The "-c 2" (or "-n 2" in Windows systems)
+ %            option limits the ping to two attempts
  %         2) The ">/dev/null" (or "> $null" in Windows systems)
  %            reidirection suppresses the command output
  %         3) "echo $?" (or "echo $LASTEXITCODE" in Windows systems) returns
@@ -481,9 +481,9 @@ host_watchdog(SimMonPid,HostName) ->
  PingCmd = 
  case OSFamily of
   unix ->
-   io_lib:format("ping -c 1 ~s >/dev/null ; echo $?",[HostName]);
+   io_lib:format("ping -c 2 ~s >/dev/null ; echo $?",[HostName]);
   win32 ->
-   io_lib:format("powershell.exe \"ping -n 1 ~s > $null; echo $LASTEXITCODE\"",[HostName])
+   io_lib:format("powershell.exe \"ping -n 2 ~s > $null; echo $LASTEXITCODE\"",[HostName])
  end,
  
  % Periodically ping the remote host, reporting each

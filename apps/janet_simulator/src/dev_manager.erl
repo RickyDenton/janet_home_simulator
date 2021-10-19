@@ -32,15 +32,16 @@ init({Dev_id,Loc_id,CtrHostName}) ->
  % Register the manager in the 'devmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=Dev_id,loc_id=Loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
- % Return the server initial state, where the initialization of the device node will continue
- % in the "handle_continue(Continue,State)" callback function for parallelization purposes  
- {ok,#devmgrstate{dev_state = booting, dev_id = Dev_id, loc_id = Loc_id, ctr_hostname = CtrHostName, _ = none},{continue,init}}.
+ % Return the server initial state, where the initialization of the device node will continue in
+ % the "handle_continue(start_device_node,State)" callback function for parallelization purposes  
+ {ok,#devmgrstate{dev_state = booting, dev_id = Dev_id, loc_id = Loc_id, ctr_hostname = CtrHostName, _ = none},{continue,start_device_node}}.
  
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
 
-%% Initializes the device's node (called right after the 'init' callback function)
-handle_continue(init,SrvState) ->
+%% Initializes the device's node (called right after the 'init' callback
+%% function and should the controller node go down (DEVICE NODE DOWN)
+handle_continue(start_device_node,SrvState) ->
  
  %% ---------------- Device Node Configuration Parameters Definition ---------------- %%
  
@@ -62,7 +63,7 @@ handle_continue(init,SrvState) ->
  % Prepare the Host, Name and Args parameters of the controller's node
  NodeHost = utils:get_effective_hostname(DeviceRecord#device.hostname),
  NodeName = "dev-" ++ Dev_id_str,
- NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -pa _build/default/lib/janet_device/ebin/ _build/default/lib/janet_simulator/ebin/",
+ NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -kernel net_ticktime 20 -env ERL_LIBS _build/default/lib/",
  
  % Set the cookie for allowing the Janet Simulator to connect with the device's node
  % NOTE: The use of atoms is required by the erlang:set_cookie BIF  
@@ -299,30 +300,51 @@ handle_cast(Request,SrvState=#devmgrstate{dev_id=Dev_id}) ->
 %% DEVICE NODE DOWN
 %% ----------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
-%% WHEN:      When the monitored 'dev_server' process on the device node terminates
-%% PURPOSE:   Inform of the 'dev_server' process termination
+%% WHEN:      When the monitored 'dev_server' process on the device 
+%%            node (and thus the device node itself) terminates
+%% PURPOSE:   Inform the manager of the device node termination
 %% CONTENTS:  1) The monitor reference the notification refers to
 %%            2) The PID of the process that was monitored (the 'dev_server' process)
 %%            3) The reason for the monitored process's termination
 %% MATCHES:   (always) (when the monitor reference and the PID of the monitored process match the ones in the server's state)
-%% ACTIONS:   If Reason =:= 'noproc' log the event (it should not happen), and stop the device manager
+%% ACTIONS:   1) Report the Reason for the device node termination
+%%            2) Update the device state in the 'devmanager' table to "BOOTING"
+%%            3) Attempt to restart the the device node via the handle_continue(start_device_node,SrvState) callback
 %% ANSWER:    -
-%% NEW STATE: Stop the server (reason = 'device_node_stopped')
+%% NEW STATE: Update the server 'dev_state' to 'booting' and reset all other state variables apart from the
+%%            device ID (dev_id), its location ID (loc_id) and the hostname of its controller node (ctr_hostname)
 %%
 handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= SrvState#devmgrstate.dev_srv_mon, DevSrvPid =:= SrvState#devmgrstate.dev_srv_pid ->
 
- % If Reason =:= 'noproc', which is associated to the fact that the 'dev_server' never existed
- % in the first place or crashed before the monitor could be established, log the error
- if
-  Reason =:= noproc ->
-   io:format("[devrmgr-~w]: <WARNING> The device node's 'dev_server' process does not exist~n",[SrvState#devmgrstate.dev_id]);
-  true ->
-   ok
+ % Report the Reason for the device node termination
+ case Reason of
+ 
+  % The 'dev_server' crashed before the monitor could be
+  % established (or was never spawned in the first place)
+  noproc ->
+   io:format("[dev_mgr-~w]: <ERROR> The device's 'dev_server' process was not found, attempting to restart the device node~n",[SrvState#devmgrstate.dev_id]);
+ 
+  % Connection with the controller's host was lost
+  noconnection ->
+   io:format("[dev_mgr-~w]: <WARNING> Lost connection with the device node's host, attempting to restart the device node~n",[SrvState#devmgrstate.dev_id]);
+ 
+  % Unknown termination reason
+  UnknownReason ->
+   io:format("[dev_mgr-~w]: <WARNING> Device node terminated with unknown reason \"~w\", attempting to restart it~n",[SrvState#devmgrstate.dev_id,UnknownReason])
  end,
  
- % Stop the device manager (reason = 'device_node_stopped')
- {stop,device_node_stopped,SrvState}.
-
+ % Explicitly stop the device node for preventing reconnection
+ % attempts from the 'slave' library should it come back online
+ slave:stop(SrvState#devmgrstate.dev_node),
+ 
+ % Update the device node state to "BOOTING" in the 'devmanager' table
+ {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid=self(),status="BOOTING"}) end),
+ 
+ % Update the server 'dev_state' to 'booting', reset all other state variables apart from the device ID, location ID and the hostname
+ % of the controller node, and attempt to restart the controller node via the handle(start_controller_node,SrvState) callback
+ {noreply,#devmgrstate{dev_state = booting, dev_id = SrvState#devmgrstate.dev_id, loc_id = SrvState#devmgrstate.loc_id,
+                        ctr_hostname = SrvState#devmgrstate.ctr_hostname, _ = none},{continue,start_device_node}}.
+				   
 
 %% ========================================================== TERMINATE ========================================================== %% 
 

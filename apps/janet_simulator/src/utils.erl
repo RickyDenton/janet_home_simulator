@@ -14,7 +14,7 @@
 
 % Maximum number of attempts for starting a linking a controller
 % or device node with its manager before returning an error
--define(Nodes_start_max_attempts,2).      % Default: 2
+-define(Nodes_start_max_attempts,3).      % Default: 3
 
 % Delay in second between consecutive attempts of of starting
 % and linking a controller or device node with its manager

@@ -43,9 +43,8 @@
 %% ======================================================== INIT_HANDLER ======================================================== %%
 init_handler(_) ->
  
- % Retrieve the 'ctr_rest_port' and 'remote_rest_client' environment variables
+ % Retrieve the 'ctr_rest_port' environment variable
  {ok,CtrRESTPort} = application:get_env(ctr_rest_port),
- {ok,RemoteRESTClient} = application:get_env(remote_rest_client),
  
  % Define the REST listener name
  ListenerName = ctr_resthandler,
@@ -78,7 +77,7 @@ init_handler(_) ->
 	     ],
 			
  % Return the initialization tuple to the behaviour engine
- {ok,CtrRESTPort,RemoteRESTClient,ListenerName,Paths}.
+ {ok,CtrRESTPort,ListenerName,Paths}.
  
  
 %% ============================================================ INIT ============================================================ %%
