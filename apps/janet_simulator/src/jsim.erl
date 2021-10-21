@@ -13,6 +13,7 @@
 -export([update_dev_subloc/2,update_loc_name/2,                      % Update
          update_subloc_name/2,update_dev_name/2]).                                
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).   % Delete
+-export([backup/0,backup/1,restore/0,restore/1,clear/0]).            % Database backup and restore
 
 %% ---------------------------------- JANET NODES STOP AND RESTART ---------------------------------- %%
 -export([stop_node/2,restart_node/2]).                               % Per-node stop/restart
@@ -96,7 +97,7 @@ shutdown() ->
 %%                                                  DATABASE INTERFACE FUNCTIONS
 %%====================================================================================================================================
 
-%% ========================================================== CREATE ===============================================================%%
+%% ========================================================= CREATE ============================================================== %%
 
 %% DESCRIPTION:  Adds an empty location to the database with its (default) sublocation {Loc_id,0}, and starts up its controller
 %%
@@ -184,7 +185,7 @@ add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) ->
  ctr_db_sync(add_device,[Dev_id,Name,{Loc_id,Subloc_id},Type,HostName],[Dev_id,Subloc_id,Type],Loc_id).
 
 
-%% =========================================================== READ ================================================================%%  
+%% ========================================================== READ =============================================================== %%  
 
 %% DESCRIPTION:  Prints the contents of all or a specific table in the database
 %%
@@ -260,7 +261,7 @@ get_record(Tabletype,Key) ->
  end.   
 
  
-%% ========================================================== UPDATE ===============================================================%% 
+%% ========================================================= UPDATE ============================================================== %% 
 
 %% DESCRIPTION:  Attempts to update a device's sublocation and, if it is running,
 %%               attempts to mirror such change in the associated location controller
@@ -335,7 +336,7 @@ update_dev_name(Dev_id,Name) ->
  db:update_dev_name(Dev_id,Name).
 
 
-%% ========================================================== DELETE ===============================================================%% 
+%% ========================================================= DELETE ============================================================== %% 
 
 %% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the
 %%               database, also stopping their associated controller and devices nodes
@@ -430,6 +431,79 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id >0 ->
 delete_device(_) ->
  {error,badarg}.
 
+
+%% ================================================= DATABASE BACKUP AND RESTORE ================================================= %%
+
+%% DESCRIPTION:  Backups the entire Mnesia database to a file
+%%
+%% ARGUMENTS:    - (none):   The default backup file is used ("db/mnesia_backup.db")
+%%               - FileName: The backup is saved to the custom file "FileName" under
+%%                           the default Mnesia directory ("db/")
+%%
+%% RETURNS:      - ok                      -> Mnesia database successfully
+%%                                            backed up to the specified file
+%%               - {file_error,Reason}     -> Error in creating the backup file (its directory must
+%%                                            exist and its 'write' permission must be granted)
+%%               - {error,{mnesia,Reason}} -> The Mnesia database is not in a consistent state
+%%               - {error,badarg}          -> Invalid argument(s)
+%% 
+%% NOTE:         Mnesia backups can be restored using the restore()/restore(File) functions
+%%
+
+% Backup to the default file
+backup() ->
+ db:backup().
+ 
+% Backup to a custom file 
+backup(FileName) ->
+ db:backup(FileName).
+
+
+%% DESCRIPTION:  Restores the Mnesia database to the contents of a backup file
+%%
+%% ARGUMENTS:    - (none):   The default backup file is used for
+%%                           restoring the database ("db/mnesia_backup.db")
+%%               - FileName: The database is restored to the contents of the custom
+%%                           file "FileName" under the default mnesia directory ("db/")
+%%
+%% RETURNS:      - ok                       -> Database successfully restored to the
+%%                                             contents of the specified backup file
+%%               - {error,janet_running}    -> The operation cannot be performed
+%%                                             while the JANET Simulator is running
+%%               - {error,{restore,Reason}} -> Error in restoring the database from the
+%%                                             backup file (check the file to exist and
+%%                                             its 'read' permission to have been granted)
+%%               - {error,{mnesia,Reason}}  -> The Mnesia database is not in a consistent state
+%%               - {error,badarg}           -> Invalid argument(s)
+%%
+%% NOTES:        1) The current database contents will be DISCARDED by calling this function
+%%               2) Database backup files can be created via the backup()/backup(File) functions
+%%
+
+% Restore from the default backup file
+restore() ->
+ db:restore().
+ 
+% Restore from a custom backup file
+restore(FileName) ->
+ db:restore(FileName).
+ 
+ 
+%% DESCRIPTION:  Clears (empties) all database tables (but preserves the database's schema)
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok                       -> Database tables successfully cleared
+%%               - {error,janet_running}    -> The operation cannot be performed
+%%                                             while the JANET Simulator is running
+%%               - {error,{mnesia,Reason}}  -> The Mnesia database is not in a consistent state
+%%
+%% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
+%%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
+%%
+clear() ->
+ db:clear().
+ 
 
 %%====================================================================================================================================
 %%                                                  JANET NODES STOP AND RESTART
@@ -831,21 +905,32 @@ dev_command(_,_,_,_) ->
 
 %% DESCRIPTION:  Prints a summary of the connectivity states of the remote
 %%               hosts currently used by the JANET Simulator, including:
-%%                 - The nodes hosts
-%%                 - The remote REST server
+%%                  - The nodes hosts
+%%                  - The remote REST server
 %%
 %% ARGUMENTS:    none
 %%
-%% RETURNS:      - ok              -> A summary of the connectivity states
-%%                                    of the remote hosts was printed
-%%               - {error,timeout} -> Timeout in retrieving the remote
-%%                                    hosts connectivity states
+%% RETURNS:      - ok                        -> A summary of the connectivity states
+%%                                              of the remote hosts was printed
+%%               - {error,janet_not_running} -> The Janet Simulator is not running
+%%               - {error,timeout}           -> Timeout in retrieving the remote
+%%                                              hosts connectivity states
 %%
 %% NOTE:        The monitoring of the remote hosts connectivity states is
 %%              implemented by periodically pinging them through the underlying OS 
 %%
 print_rem_hosts_states() ->
- report_rem_hosts_states().
+ try report_rem_hosts_states()
+ catch
+ 
+  % The JANET Simulator is not running
+  {error,janet_not_running} ->
+   {error,janet_not_running};
+   
+  % Timeout in the sim_hostsmonitor call
+  exit:{timeout,_} ->
+   {error,timeout}
+ end.
 
 
 %% DESCRIPTION:  Spawns a process which periodically prints the JANET Simulator
@@ -979,7 +1064,7 @@ janet_stop() ->
     [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
                        
     % Report that the JANET Simulator has successfully stopped
-    io:format("~nJanet Simulator stopped~n");
+    io:format("~nJANET Simulator stopped~n");
 	 
    {error,StopReason} ->
 	
@@ -1834,31 +1919,16 @@ gen_dev_command(Dev_id,Module,Function,ArgsList) ->
 %% currently used by the JANET Simulator (print_rem_hosts_states() helper function)
 report_rem_hosts_states() ->
  
+ % Ensure the JANET Simulator to be running
+ ok = utils:ensure_jsim_state(running), 
+ 
  % Retrieve the list of offline remote hosts from
  % the remote hosts monitor process ('sim_hostsmonitor')
- OfflineRemHosts = 
- try gen_statem:call(sim_hostsmonitor,get_remhosts_states,5000)
- catch
-  exit:{timeout,_} ->
-	   
-  % Call timeout
-  {error,timeout}
- end,	 
-
- % Depending on whether the list of offline
- % remote hosts was successfully retrieved
- case OfflineRemHosts of
+ OfflineRemHosts = gen_statem:call(sim_hostsmonitor,get_remhosts_states,5000),
  
-  % If a timeout occured in its retrieval,
-  % return the error to the caller
-  {error,timeout} ->
-   {error,timeout};
-   
-  % Otherwise print a summary of the
-  % connectivity states of remote hosts
-  _ ->
-   print_rem_hosts_states_summary(OfflineRemHosts)
- end.
+ % Print a summary of the connectivity states of remote hosts
+ print_rem_hosts_states_summary(OfflineRemHosts).
+
   
 %% Prints a summary of the connectivity states of the remote hosts used in
 %% the JANET Simulator application (report_rem_hosts_states() helper function)
@@ -1991,118 +2061,119 @@ print_help() ->
  % SIMULATION START AND STOP
  io:format("SIMULATION START AND STOP~n"),
  io:format("=========================~n"),
- io:format(" - jsim:run()      -> Starts the JANET Simulator~n"),
- io:format(" - jsim:stop()     -> Stops the JANET Simulator~n"),
- io:format(" - jsim:shutdown() -> Stops the JANET Simulator and the Erlang Run-Time System (ERTS)~n"),
+ io:format(" - jsim:run()      -> Starts the JANET Simulator application~n"),
+ io:format(" - jsim:stop()     -> Stops the JANET Simulator application~n"),
+ io:format(" - jsim:shutdown() -> Stops the JANET Simulator application and its ERTS~n"),
  io:format("~n~n"),
  
- % SIMULATION MONITORING FUNCTIONS
- io:format("SIMULATION MONITORING FUNCTIONS~n"),
- io:format("===============================~n~n"),
+ % SIMULATION MONITORING
+ io:format("SIMULATION MONITORING~n"),
+ io:format("=====================~n~n"),
  io:format("Print Database Tree~n"),
  io:format("-------------------~n"),
- io:format(" - jsim:print_tree()                -> Prints the database contents indented as a tree~n"),
- io:format(" - jsim:print_tree(user,\"Username\") -> Prints the database contents associated with a specific user~n"),
- io:format(" - jsim:print_tree(loc,Loc_id)      -> Prints the database contents associated with a specific location~n"),
- io:format(" - jsim:print_tree(sub,Sub_id)      -> Prints the database contents associated with a specific sublocation~n"),
+ io:format(" - jsim:print_tree()            -> Prints the database contents indented as a tree~n"),
+ io:format(" - jsim:print_tree(user,\"User\") -> Prints the database contents associated with a specific user indented as a tree~n"),
+ io:format(" - jsim:print_tree(loc,Loc_id)  -> Prints the database contents associated with a specific location indented as a tree~n"),
+ io:format(" - jsim:print_tree(sub,Sub_id)  -> Prints the database contents associated with a specific sublocation indented as a tree~n"),
  io:format("~n"),
  io:format("Monitor Database Tree~n"),
  io:format("---------------------~n"),
- io:format(" - jsim:monitor_tree()                -> Prints the database contents indented as a tree every 10 seconds~n"),
- io:format(" - jsim:monitor_tree(PeriodSeconds)   -> Prints the database contents indented as a tree with the given period~n"),
- io:format(" - jsim:demonitor_tree(PeriodSeconds) -> Stops the periodic printing of the database contents~n"),
+ io:format(" - jsim:monitor_tree()             -> Prints the database contents indented as a tree every 10 seconds~n"),
+ io:format(" - jsim:monitor_tree(PeriodSecs)   -> Prints the database contents indented as a tree every PeriodSecs seconds~n"),
+ io:format(" - jsim:demonitor_tree(PeriodSecs) -> Stops the periodic printing of the database contents indented as a tree~n"),
  io:format("~n"),
- io:format("Print running and stopped nodes~n"),
+ io:format("Print Running and Stopped Nodes~n"),
  io:format("-------------------------------~n"),
- io:format(" - jsim:print_nodes()                -> Prints the lists of running and stopped nodes~n"),
- io:format(" - jsim:print_nodes(running|stopped) -> Prints the lists of running or stopped nodes~n"),
+ io:format(" - jsim:print_nodes()                -> Prints a summary of running and stopped nodes~n"),
+ io:format(" - jsim:print_nodes(running|stopped) -> Prints a summary of running or stopped nodes~n"),
  io:format("~n"),
- io:format("Print simulator tables~n"),
- io:format("----------------------~n"),
- io:format(" - jsim:print_table()                 -> Prints the contents of the database tables~n"),
+ io:format("Print JANET Simulator Mnesia Tables~n"),
+ io:format("-----------------------------------~n"),
+ io:format(" - jsim:print_table()                 -> Prints the contents of all database tables~n"),
  io:format(" - jsim:print_table(SimTable)         -> Prints the contents of a specific database table~n"),
- io:format(" - jsim:get_record(SimTable,RecordID) -> Prints a specific record in a given table~n"),
+ io:format(" - jsim:get_record(SimTable,RecordID) -> Prints a specific table record~n"),
  io:format("~n"),
- io:format("Print controllers databases~n"),
- io:format("---------------------------~n"),
- io:format(" - jsim:print_ctr_tree(Loc_id)           -> Print the contents of a controller database indented as a tree~n"),
- io:format(" - jsim:print_ctr_table(Loc_id)          -> Prints all database tables in a controller database~n"),
- io:format(" - jsim:print_ctr_table(Loc_id,CtrTable) -> Prints a specific database table in a controller database~n"),
+ io:format("Print JANET Controllers Mnesia Tables~n"),
+ io:format("-------------------------------------~n"),
+ io:format(" - jsim:print_ctr_tree(Loc_id)           -> Print the contents of a controller's database indented as a tree~n"),
+ io:format(" - jsim:print_ctr_table(Loc_id)          -> Prints all tables of a controller's database~n"),
+ io:format(" - jsim:print_ctr_table(Loc_id,CtrTable) -> Prints a specific table of a controller's database~n"),
  io:format("~n"),
  io:format("Remote Hosts Connectivity States~n"),
  io:format("--------------------------------~n"),
- io:format(" - jsim:print_rem_hosts_states -> Prints a summary of the connectivity states of the~n"),
- io:format("                                  remote hosts currently used by the JANET Simulator~n"),
+ io:format(" - jsim:print_rem_hosts_states() -> Prints a summary of the connectivity states of the remote hosts used in the application~n"),
  io:format("~n~n"),
  
- % NODES START AND STOP
- io:format("NODES START AND STOP~n"),
- io:format("====================~n~n"),
- io:format("Per-node start/stop~n"),
- io:format("-------------------~n"),
- io:format(" - jsim:stop_node(ctr|dev,Loc_id|Dev_id)    -> Stops the controller/device node of the given ID~n"),
- io:format(" - jsim:restart_node(ctr|dev,Loc_id|Dev_id) -> Restarts the controller/device node of the given ID~n"),
- io:format("~n"),
- io:format("Per-sublocation start/stop~n"),
- io:format("--------------------------~n"),
- io:format(" - jsim:stop_subloc(Sub_id)    -> Stops all devices in the given sublocation~n"),
- io:format(" - jsim:restart_subloc(Sub_id) -> Stops all devices in the given sublocation~n"),
- io:format("~n"),
- io:format("Per-location start/stop~n"),
+ % JANET NODES START AND STOP
+ io:format("JANET NODES START AND STOP~n"),
+ io:format("==========================~n~n"),
+ io:format("Per-Node Start and Stop~n"),
  io:format("-----------------------~n"),
- io:format(" - jsim:stop_loc(Loc_id)    -> Stops the controller and all devices in the location~n"),
- io:format(" - jsim:restart_loc(Loc_id) -> Restarts the controller and all devices in the location~n"),
+ io:format(" - jsim:stop_node(ctr|dev,Loc_id|Dev_id)    -> Stops the controller or device node of the given NodeID~n"),
+ io:format(" - jsim:restart_node(ctr|dev,Loc_id|Dev_id) -> Restarts the controller or device node of the given NodeID~n"),
  io:format("~n"),
- io:format("All-nodes start/stop~n"),
- io:format("--------------------~n"),
+ io:format("Per-Sublocation Start and Stop~n"),
+ io:format("------------------------------~n"),
+ io:format(" - jsim:stop_subloc(Sub_id)    -> Stops all device nodes in the given sublocation~n"),
+ io:format(" - jsim:restart_subloc(Sub_id) -> Restarts all device nodes in the given sublocation~n"),
+ io:format("~n"),
+ io:format("Per-Location Start and Stop~n"),
+ io:format("---------------------------~n"),
+ io:format(" - jsim:stop_loc(Loc_id)    -> Stops the controller and all device nodes in the given location~n"),
+ io:format(" - jsim:restart_loc(Loc_id) -> Restarts the controller and all device nodes in the given location~n"),
+ io:format("~n"),
+ io:format("All-Nodes Start and Stop~n"),
+ io:format("------------------------~n"),
  io:format(" - jsim:stop_all_nodes()    -> Stops all controller and device nodes in the application~n"),
  io:format(" - jsim:restart_all_nodes() -> Restarts all controller and device nodes in the application~n"),
  io:format("~n~n"),
  
- % DATABASE STATE MANIPULATION
- io:format("DATABASE STATE MANIPULATION~n"),
- io:format("===========================~n"),
- io:format("NOTE: Using this functions WILL lead to inconsistencies with the remote database~n"),
+ % DATABASE MANIPULATION
+ io:format("DATABASE MANIPULATION~n"),
+ io:format("=====================~n"),
+ io:format("WARNING: Using these commands WILL lead to inconsistencies with the remote database~n"),
  io:format("~n"),
  io:format("Create~n"),
  io:format("------~n"),
- io:format(" - jsim:add_location(Loc_id,\"Name\",User,Port,\"HostName\") -> Adds a new location in the system, also starting its controller node~n"),
+ io:format(" - jsim:add_location(Loc_id,\"Name\",User,Port,\"HostName\") -> Adds a new location, also starting its~n"),
+ io:format("                                                            controller node if the application is running~n"),
  io:format(" - jsim:add_sublocation(Sub_id,Name)                     -> Adds a new sublocation in a location~n"),
- io:format(" - jsim:add_device(Dev_id,\"Name\",Sub_id,Type,\"HostName\") -> Adds a new device in a sublocation, also starting its node~n"),
+ io:format(" - jsim:add_device(Dev_id,\"Name\",Sub_id,Type,\"HostName\") -> Adds a new device in a sublocation, also~n"),
+ io:format("                                                            starting its node if the application is running~n"),
  io:format("~n"),
  io:format("Update~n"),
  io:format("------~n"),
- io:format(" - jsim:dev_config_change(Dev_id,DevConfig) -> Changes a device configuration~n"),
- io:format(" - jsim:update_dev_subloc(Dev_id,Sub_id)    -> Moves a device into a sublocation within the same location~n"),
- io:format(" - jsim:update_loc_name(Loc_id,\"Name\")      -> Updates a location's name~n"),
- io:format(" - jsim:update_subloc_name(Sub_id,\"Name\")   -> Updates a sublocation's name~n"),
- io:format(" - jsim:update_dev_name(Dev_id,\"Name\")      -> Updates a device's name~n"),
+ io:format(" - jsim:dev_config_change(Dev_id,Config)  -> Changes a device node's configuration~n"),
+ io:format(" - jsim:update_dev_subloc(Dev_id,Sub_id)  -> Changes a device's sublocation within its location~n"),
+ io:format(" - jsim:update_loc_name(Loc_id,\"Name\")    -> Updates a location's name~n"),
+ io:format(" - jsim:update_subloc_name(Sub_id,\"Name\") -> Updates a sublocation's name~n"),
+ io:format(" - jsim:update_dev_name(Dev_id,\"Name\")    -> Updates a device's name~n"),
  io:format("~n"),
  io:format("Delete~n"),
  io:format("------~n"),
- io:format(" - jsim:delete_location(Loc_id)    -> Deletes a location, along with all its sublocation and devices~n"),
+ io:format(" - jsim:delete_location(Loc_id)    -> Deletes a location, along with all its sublocations and devices~n"),
  io:format(" - jsim:delete_sublocation(Sub_id) -> Deletes a sublocation, moving its devices in the default sublocation~n"),
- io:format(" - jsim:delete_device(Dev_id)      -> Deletes a device, also stopping its node~n"),
+ io:format(" - jsim:delete_device(Dev_id)      -> Deletes a device~n"),
  io:format("~n~n"),
   
  % DATABASE BACKUP AND RESTORE
  io:format("DATABASE BACKUP AND RESTORE~n"),
  io:format("===========================~n"),
- io:format("NOTE: Using this functions WILL lead to inconsistencies with the remote database~n"),
+ io:format("WARNING: Using these commands WILL lead to inconsistencies with the remote database~n"),
  io:format("~n"),
  io:format("Backup~n"),
  io:format("------~n"),
- io:format(" - db:backup()           -> Backs up the database contents to the \"db/mnesia_backup.db\" file~n"),
- io:format(" - db:backup(\"FileName\") -> Backs up the database contents to \"FileName\" under the \"db/\" directory~n"),
+ io:format(" - jsim:backup()           -> Backs up the database contents to the \"db/mnesia_backup.db\" file~n"),
+ io:format(" - jsim:backup(\"FileName\") -> Backs up the database contents to \"FileName\" under the \"db/\" directory~n"),
  io:format("~n"),
  io:format("Restore~n"),
  io:format("------~n"),
- io:format(" - db:restore()           -> Restores the database to the contents of the \"db/mnesia_backup.db\" file~n"),
- io:format(" - db:restore(\"FileName\") -> Restores the database to the contents of \"FileName\" under the \"db/\" directory~n"),
+ io:format(" - jsim:restore()           -> Restores the database to the contents of the \"db/mnesia_backup.db\" file~n"),
+ io:format(" - jsim:restore(\"FileName\") -> Restores the database to the contents of \"FileName\" under the \"db/\" directory~n"),
  io:format("~n"),
  io:format("Clear~n"),
  io:format("------~n"),
- io:format(" - db:clear() -> Clears all database contents~n"),
+ io:format(" - jsim:clear() -> Clears all database contents~n"),
  
  % Trailing newline
  io:format("~n").

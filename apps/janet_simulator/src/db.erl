@@ -1759,10 +1759,10 @@ wait_mnesia_tables() ->
 %%               - {error,{mnesia,Reason}} -> The Mnesia database is not in a consistent state
 %%               - {error,badarg}          -> Invalid argument(s)
 %% 
-%% NOTE:         Mnesia backups can be restored using the restore()/restore(File) function
+%% NOTE:         Mnesia backups can be restored using the restore()/restore(File) functions
 %%
 
-% Use the default backup file
+% Backup to the default file
 backup() ->
  backup("mnesia_backup.db").
  
@@ -1770,7 +1770,7 @@ backup() ->
 backup(FileName) when is_atom(FileName) ->
  backup(atom_to_list(FileName)); 
 
-% If a list FileName was passed (as expected) 
+% Backup to a custom file 
 backup(FileName) when is_list(FileName) ->
 
  try 
@@ -1828,10 +1828,10 @@ backup(_) ->
 %%               - {error,badarg}           -> Invalid argument(s)
 %%
 %% NOTES:        1) The current database contents will be DISCARDED by calling this function
-%%               2) Database backup files can be created via the db:backup()/db:backup(File) function
+%%               2) Database backup files can be created via the backup()/backup(File) functions
 %%
 
-% Use the default backup file
+% Restore from the default backup file
 restore() ->
  restore("mnesia_backup.db").
  
@@ -1839,7 +1839,7 @@ restore() ->
 restore(FileName) when is_atom(FileName) ->
  restore(atom_to_list(FileName)); 
  
-% If a list FileName was passed (as expected)
+% Restore from a custom backup file
 restore(FileName) when is_list(FileName) ->
 
  try 
