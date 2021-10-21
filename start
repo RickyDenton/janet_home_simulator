@@ -1,2 +1,4 @@
 #!/bin/bash
+# Starts the JANET Simulator using the local Erlang installation with the specified "vm.args" and "sys.config" file
+
 REBAR3_ERL_ARGS="-args_file config/vm.args -config config/sys.config" rebar3 shell

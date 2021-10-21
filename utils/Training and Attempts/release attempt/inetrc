@@ -1,0 +1,7 @@
+%% Default hosts file
+{file,hosts,"/etc/hosts"}.
+
+{hosts_file,"/etc/hosts"}.
+
+% {file,resolv,"/etc/resolv.conf"}.
+{lookup,[file]}.

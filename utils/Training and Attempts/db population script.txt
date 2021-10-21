@@ -1,0 +1,15 @@
+db:add_location(1,"Casa","Riccardo",30000),db:add_location(2,"Ufficio","Gianni",30100),db:add_location(3,"Officina","Gianni",30101),db:add_sublocation({1,1},"Camera"),db:add_sublocation({1,2},""),db:add_sublocation({2,1},"Sala Riunioni"),db:add_sublocation({2,2},"Bagno"),db:add_sublocation({3,1},"Reception"),db:add_device(1,"Ventola",{1,0},fan),db:add_device(2,"",{1,0},light),db:add_device(3,"Condizionatore",{1,2},conditioner),db:add_device(4,"Porta",{1,2},door),db:add_device(5,"Termostato",{1,1},thermostat),db:add_device(12,"Ventilatore",{2,0},fan),db:add_device(13,"Luce Principale",{2,0},light),db:add_device(14,"Luce Secondaria",{2,0},light),db:add_device(15,"Condizionatore",{2,1},conditioner),db:add_device(16,"Termostato",{2,1},thermostat),db:add_device(17,"Porta Automatica",{2,2},door),db:add_device(18,"Pinguino",{2,2},conditioner),db:add_device(19,"Porta Reception",{3,1},door),db:add_device(20,"Luce Reception",{3,1},light),db:add_device(21,"Ventolone",{3,1},fan).
+db:add_location(1,"Casa","Riccardo",30000),db:add_device(1,"Ventola",{1,0},fan).
+
+
+
+(janet-simulator@localhost)20> io:format("{~w,~s,~w,~p,~p} - ONLINE~n",[Dev_id,DevName,DevSubloc,DevType,utils:dev_cfg_to_str(Cfg)]).
+{30,Fuffu,{1,2},door,{on,20,"white"}} - ONLINE
+
+
+
+
+gen_server:call(<0.161.0>,{dev_config_change,{fancfg,on,101}}).
+
+
+list_to_tuple(lists:zipwith(fun(X,Y) -> if Y =:= '$keep' -> X; true -> Y end end, tuple_to_list(C1), tuple_to_list(C2))).
