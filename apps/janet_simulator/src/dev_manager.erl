@@ -10,13 +10,14 @@
 %% This record represents the state of a dev_manager gen_server
 -record(devmgrstate,    
         {
-		 dev_state,     % The state of the managed device node
-		 dev_node,      % The reference to the managed node
-		 dev_srv_pid,   % The PID of the device's 'dev_server' process
-		 dev_srv_mon,   % A reference used for monitoring the device's 'dev_server' process (and consequently the node)
-		 dev_id,        % The device's ID
-		 loc_id,        % The device's location ID
-		 ctr_hostname   % The name of the host where the location controller node is deployed
+		 dev_state,       % The state of the managed device node
+		 dev_node,        % The reference to the managed node
+		 dev_srv_pid,     % The PID of the device's 'dev_server' process
+		 dev_srv_mon,     % A reference used for monitoring the device's 'dev_server' process (and consequently the node)
+		 dev_id,          % The device's ID
+		 loc_id,          % The device's location ID
+		 ctr_hostname,    % The name of the host where the location controller node is deployed
+		 nodestarter_pid  % The PID of the 'node_starter' client process used by the manager for starting the device node
 		}).
 
 %%====================================================================================================================================
@@ -39,60 +40,79 @@ init({Dev_id,Loc_id,CtrHostName}) ->
  
 %% ======================================================= HANDLE_CONTINUE ======================================================= %%
 
-%% Initializes the device's node (called right after the 'init' callback
-%% function and should the controller node go down (DEVICE NODE DOWN)
-handle_continue(start_device_node,SrvState) ->
- 
- %% ---------------- Device Node Configuration Parameters Definition ---------------- %%
- 
- % Retrieve the Dev_id and the Loc_id and convert them to strings
- Dev_id = SrvState#devmgrstate.dev_id,
- Loc_id = SrvState#devmgrstate.loc_id,
- Dev_id_str = integer_to_list(Dev_id),
- Loc_id_str = integer_to_list(Loc_id),
+%% START_DEVICE_NODE
+%% -----------------
+%% WHEN:      Right after the 'init' and the 'handle_info' DEVICE NODE DOWN callbacks
+%% PURPOSE:   Attempt to start the device node and link it to the manager
+%% ACTIONS:   1) Retrieve the device node's configuration
+%%            2) Spawn a 'node_starter' client process for attempting
+%%               to start the device node and link it with the manager
+%% NEW STATE: Set the 'nodestarter_pid' state variable to the PID of the 'node_starter' process
+%%  
+handle_continue(start_device_node,SrvState=#devmgrstate{loc_id = Loc_id, dev_id = Dev_id}) ->
  
  % Retrieve the device record
  {ok,DeviceRecord} = db:get_record(device,Dev_id),
  
- % Retrieve the device's type and configuration
- Type = DeviceRecord#device.type,
- Config = DeviceRecord#device.config,
- 
- %% ------------------------------ Device Node Creation ------------------------------ %% 
- 
- % Prepare the Host, Name and Args parameters of the controller's node
+ % Retrieve the name of the nodes host where the device must be deployed in
  NodeHost = utils:get_effective_hostname(DeviceRecord#device.hostname),
+ 
+ % Define the device node name by concatenating
+ % its device ID to the constant "dev-" string
+ Dev_id_str = integer_to_list(Dev_id),
  NodeName = "dev-" ++ Dev_id_str,
- NodeArgs = "-setcookie " ++ Loc_id_str ++ " -connect_all false -kernel net_ticktime 20 -env ERL_LIBS _build/default/lib/",
  
- % Set the cookie for allowing the Janet Simulator to connect with the device's node
- % NOTE: The use of atoms is required by the erlang:set_cookie BIF  
- erlang:set_cookie(list_to_atom("dev-" ++ Dev_id_str ++ "@" ++ NodeHost),list_to_atom(Loc_id_str)),
- 
- % Attempt to start the device node and link it to the
- % manager for a predefined maximum number of attempts
- case utils:start_link_node(NodeHost,NodeName,NodeArgs,"dev_mgr",Dev_id,"device") of
-  {error,Reason} ->
+ % Convert the device location ID to string
+ Loc_id_str = integer_to_list(Loc_id),
   
-   % If an error persists in starting the device node, report it and stop the manager
-   io:format("[dev_mgr-~w]: <ERROR> Device node could not be started (reason = ~p), stopping the manager~n",[Dev_id,Reason]),
+ % Prepare the device node VM arguments as follows:
+ %
+ % - Set its cookie to its location ID                               ("-setcookie Loc_id")
+ % - Disable transitive connections between nodes                    ("-connect_all false")
+ % - Align its net_kernel ticktime to the one of the JANET Simulator ("-kernel net_ticktime 20")
+ % - If the node is to be deployed on the localhost, set its         ("-env ERL_LIBS _build/default/lib")
+ %   $ERL_LIBS environment variable to the "_build/default/lib"
+ %   directory to allow it to find the 'janet_device' resource
+ %   file and the bytecode required for its operation
+ %
+ %   NOTE: Remote nodes are instead supposed to have the
+ %         contents of such directory placed in the Erlang
+ %         installation directory (default: "/usr/lib/erlang/lib")
+ %
+ NodeArgs =
+ case utils:is_remote_host(NodeHost) of
+ 
+  % Localhost node
+  false ->
+   "-setcookie " ++ Loc_id_str ++ " -connect_all false -kernel net_ticktime 20 -env ERL_LIBS _build/default/lib/";
    
-   % Stop with reason 'normal' to prevent the 'sup_loc' supervisor from reattempting to respawn the manager
-   % (which would be useless in the current situation given the persistent error in starting its device node) 
-   {stop,normal,SrvState};
-   
-  {ok,Node} ->
-  
-   % Otherwise if the device node was successfully started and linked
-   % with the manager, launch on it the Janet Device application
-   ok = rpc:call(Node,jdev,run,[Dev_id,Loc_id,self(),Type,Config,SrvState#devmgrstate.ctr_hostname]),
+  % Remote node
+  true ->
+   "-setcookie " ++ Loc_id_str ++ " -connect_all false -kernel net_ticktime 20"
+ end, 
  
-   % Set the 'dev_node' state variable and wait for the
-   % registration request of the device's dev_server process
-   {noreply,SrvState#devmgrstate{dev_node = Node}}
- end.
-  
+ % Set the cookie provided and expected by the JANET Simulator to the
+ % device node to the one previously defined (its location ID as an atom)
+ erlang:set_cookie(list_to_atom(NodeName ++ "@" ++ NodeHost),list_to_atom(Loc_id_str)),
+
+ % Initialize the map containing information required to start the JANET Device application with:
+ %
+ % - The device type          (type)
+ % - The device configuration (config)
+ %
+ AppInfo = #{type => DeviceRecord#device.type, config => DeviceRecord#device.config}, 
  
+ % Retrieve the manager PID
+ MgrPid = self(),
+
+ % Spawn the 'node_starter' client process for attempting to start and link with the device node
+ {ok,NodeStarterPID} = node_starter:spawn_link(NodeHost,NodeName,NodeArgs,AppInfo,Dev_id,"device",MgrPid,"dev_mgr"),
+ 
+ % Set the 'nodestarter_pid' state variable to the PID of the 'node_starter' process and
+ % await from it the result of the operation (NODE_START_SUCCESS or NODE_START_FAILURE)
+ {noreply,SrvState#devmgrstate{nodestarter_pid = NodeStarterPID}}.
+
+
 %% ========================================================= HANDLE_CALL ========================================================= %% 
 
 %% DEV_REG
@@ -236,6 +256,54 @@ handle_call(Request,From,SrvState=#devmgrstate{dev_id=Dev_id}) ->
 
 %% ========================================================= HANDLE_CAST ========================================================= %% 
 
+%% NODE_START_SUCCESS
+%% ------------------
+%% SENDER:    The manager 'node_starter' client process
+%% WHEN:      When it has successfully started and linked the device node with the manager
+%% PURPOSE:   Inform the manager that the device node has been started
+%% CONTENTS:  1) The complete name of the device node()
+%%            2) The "AppInfo" map passed by the START_DEVICE_NODE handle_continue() function
+%%            3) The PID of the 'node_starter' process ("security purposes")
+%% MATCHES:   (always) (when the device is booting and the PID of the 'node_starter' process matches the one in the server state)
+%% ACTIONS:   Retrieve the required information and start the JANET Device
+%%            application on the node via a remote procedure call (RPC)
+%% NEW STATE: Update the 'dev_node' state variable to the complete name of the device node
+%%
+handle_cast({node_start_success,DevNode,AppInfo,NodeStarterPID},SrvState=#devmgrstate{dev_state = booting, loc_id = Loc_id, dev_id = Dev_id,
+                                                                                       ctr_hostname = CtrHostName, nodestarter_pid = NodeStarterPID}) ->
+ % Retrieve the device type and configuration from the "AppInfo" map
+ #{type := Type, config := Config} = AppInfo,
+
+ % Attempt to start the JANET Device application on the device node
+ ok = rpc:call(DevNode,jdev,run,[Dev_id,Loc_id,self(),Type,Config,CtrHostName]),
+ 
+ % Update the 'dev_node' state variable to the complete name of the device node
+ % and await for the registration request of the device's 'dev_server' process
+ {noreply,SrvState#devmgrstate{dev_node = DevNode}};
+
+
+%% NODE_START_FAILURE
+%% ------------------
+%% SENDER:    The manager 'node_starter' client process
+%% WHEN:      When it expires the attempts for starting and linking the device node with the manager
+%% PURPOSE:   Inform the manager that the device node could not been started
+%% CONTENTS:  1) The Reason of the last error occured in starting the node
+%%            2) The PID of the 'node_starter' process ("security purposes")
+%% MATCHES:   (always) (when the device is booting and the PID of the 'node_starter' process matches the one in the server state)
+%% ACTIONS:   Report the reason of the last error occured in starting the node and inform that the manager will now stop
+%% NEW STATE: -
+%%
+handle_cast({node_start_failure,FailReason,NodeStarterPID},SrvState=#devmgrstate{dev_state = booting, dev_id = Dev_id,
+                                                                                  nodestarter_pid = NodeStarterPID}) ->
+ 				
+ % Report the reason of the last error occured in starting the node and inform that the manager will now stop
+ io:format("[dev_mgr-~w]: <ERROR> Failed to start the device node (reason = ~p), the manager will now stop~n",[Dev_id,FailReason]),
+   
+ % Stop the manager with reason 'normal' for preventing its 'sup_loc' supervisor from attempting to respawn
+ % it (which would be useless given that in the current situation its managed node cannot be started) 
+ {stop,normal,SrvState};
+ 
+
 %% DEV_SRV_STATE_UPDATE
 %% --------------------
 %% SENDER:    The device's 'dev_server' process
@@ -340,12 +408,38 @@ handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= S
  % Update the device node state to "BOOTING" in the 'devmanager' table
  {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid=self(),status="BOOTING"}) end),
  
- % Update the server 'dev_state' to 'booting', reset all other state variables apart from the device ID, location ID and the hostname
- % of the controller node, and attempt to restart the controller node via the handle(start_controller_node,SrvState) callback
+ % Update the server 'dev_state' to 'booting', reset all other state variables apart from the device ID, location ID and the
+ % hostname of the controller node, and attempt to restart the device node via the handle(start_device_node,SrvState) callback
  {noreply,#devmgrstate{dev_state = booting, dev_id = SrvState#devmgrstate.dev_id, loc_id = SrvState#devmgrstate.loc_id,
-                        ctr_hostname = SrvState#devmgrstate.ctr_hostname, _ = none},{continue,start_device_node}}.
+                        ctr_hostname = SrvState#devmgrstate.ctr_hostname, _ = none},{continue,start_device_node}};
 				   
 
+%% NODE_STARTER PROCESS TERMINATED
+%% -------------------------------
+%% SENDER:    The Erlang Run-Time System (ERTS)
+%% WHEN:      When the linked 'node_starter' process exits
+%% PURPOSE:   Propagate the 'node_starter' exit signal to its linked manager process
+%% CONTENTS:  1) The PID of the process that exited (the 'node_starter' process)
+%%            2) The process exit Reason
+%% MATCHES:   (always) (when the PID of the process that exited matches
+%%                      the 'nodestarter_pid' in the server state)
+%% ACTIONS:   A) If the 'node_starter' process exited with Reason =:= "normal",
+%%               do nothing (it has completed its operations)
+%%            B) If the 'node_starter' process exited with Reason =/= "normal",
+%%               report the error stop the manager with such Reason
+%% ANSWER:    -
+%% NEW STATE: A) Clear the 'nodestarter_pid' variable
+%%            B) -
+%%
+% Exit Reason =:= normal => clear the 'nodestarter_pid' variable
+handle_info({'EXIT',NodeStarterPID,normal},SrvState=#devmgrstate{nodestarter_pid = NodeStarterPID}) ->
+ {noreply,SrvState#devmgrstate{nodestarter_pid = none}};
+ 
+% Exit Reason =/= normal => Report the error and stop the manager with such Reason
+handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#devmgrstate{nodestarter_pid = NodeStarterPID}) ->
+ {stop,{node_starter_terminated,NodeStarterError},SrvState}.
+ 
+ 
 %% ========================================================== TERMINATE ========================================================== %% 
 
 %% Called when:
@@ -353,6 +447,8 @@ handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= S
 %% 1) The manager is asked to shutdown by its 'sup_loc' supervisor (Reason = 'shutdown')
 %% 2) The managed device node crashes (Reason = CrashReason)
 %% 3) The 'dev_server' process on the managed device node stops (Reason = 'device_node_stopped')
+%% 4) The 'node_starter' process failed to start the device node
+%% 5) The 'node_starter' process exited with Reason =/= 'normal
 %%
 terminate(_,SrvState) ->
  

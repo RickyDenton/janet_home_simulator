@@ -42,7 +42,7 @@ init(Loc_id) ->
      "ctr-" ++ integer_to_list(Loc_id),             % ChildID
      {ctr_manager,start_link,[Loc_id]},             % Child Start Function
  	 transient,                                     % Child Restart Policy (transient to account for node host connection failures)
-	 6000,                                          % Child Sub-tree Max Shutdown Time
+	 14000,                                         % Child Sub-tree Max Shutdown Time
 	 worker,                                        % Child Type
 	 [loc_devs_init]                                % Child Modules (For Release Handling Purposes)
     },

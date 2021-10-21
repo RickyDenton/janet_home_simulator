@@ -15,7 +15,7 @@
 -define(Protracted_report_period,90 * 1000).  % Default: 90 * 1000 (90 seconds)
 
 % Host watchdogs ping period
--define(Wdg_ping_period,15 * 1000).           % Default: 15 * 1000 (15 seconds)
+-define(Wdg_ping_period,10 * 1000).           % Default: 10 * 1000 (15 seconds)
 		
 %% ------------------- State Machine State and Data Definitions ------------------- %%
 
@@ -286,13 +286,25 @@ handle_event(cast,{host_state_update,HostName,HostState,WdgPID},State,HostMons) 
  % If the remote host connectivity state differs from its previous sampling
  % and the gen_statem is in the 'protracted' state, report such connectivity
  % state change according to the host type ('nodeshost' or 'restsrv')
- report_host_state_change(State,HostName,HostMon#hostmon.state,HostState,HostMon#hostmon.type),
+ Reported = report_host_state_change(State,HostName,HostMon#hostmon.state,HostState,HostMon#hostmon.type),
  
  % Update the 'state' variable in the host monitor
  NewHostMon = HostMon#hostmon{state = HostState},
+
+ % Depending on whether the connectivity state change was reported
+ case Reported of
  
- % Keep the state and update the list of host monitors
- {keep_state,NewHostMons ++ [NewHostMon]};
+  % If it was (and so the gen_statem is for sure in the 'protracted' state), keep
+  % keep the state, update the list of host monitors and reinitialize the protracted
+  % report timer for limiting the frequency of remote hosts state updates
+  ok ->
+   {keep_state,NewHostMons ++ [NewHostMon],[{{timeout,protracted_report},?Protracted_report_period,none}]};
+    
+  % Otherwise if the connectivity state change was not reported,
+  % just keep the state and update the list of host monitors
+  no_report ->
+   {keep_state,NewHostMons ++ [NewHostMon]}
+ end;
  
  
 %% -------------------------------------------------- EXTERNAL INFO CALLBACKS -------------------------------------------------- %% 
@@ -344,11 +356,11 @@ handle_event(info,{'DOWN',MonRef,process,_DeadWdgPID,_Reason},_State,HostMons) -
  
 % Remote hosts monitor in the 'startup' state -> do not report
 report_host_state_change(startup,_Hostname,_OldState,_NewState,_Type) ->
- ok;
+ no_report;
 
 % No host connectivity change -> do not report
 report_host_state_change(_State,_Hostname,SameState,SameState,_Type) ->
- ok;
+ no_report;
  
 % Remote REST server 'online' -> 'offline'
 report_host_state_change(_State,RemRESTSrvAddr,online,offline,restsrv) ->

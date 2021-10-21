@@ -26,7 +26,7 @@ init(_) ->
      sup_locs,                          % ChildID
      {sup_locs,start_link,[]},          % Child Start Function
  	 permanent,                         % Child Restart Policy 
-	 10000,                             % Child Sub-tree Max Shutdown Time
+	 15000,                             % Child Sub-tree Max Shutdown Time
 	 supervisor,                        % Child Type
 	 [sup_locs]                         % Child Modules (For Release Handling Purposes)
     },

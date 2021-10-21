@@ -1,6 +1,6 @@
 *.beam
 *.dump
-db/mnesia.db
+db/mnesia.db/
 
 # From REBAR3
 _checkouts

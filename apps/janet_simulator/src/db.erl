@@ -334,7 +334,7 @@ spawn_devmanager(Dev_id,Loc_id) ->
                  "dev-" ++ integer_to_list(Dev_id),                  % ChildID
                  {dev_manager,start_link,[Dev_id,Loc_id,HostName]},  % Child Start Function
 	             transient,                                          % Child Restart Policy (transient to account for node host connection failures)
-                 5000,                                               % Child Sub-tree Max Shutdown Time
+                 14000,                                              % Child Sub-tree Max Shutdown Time
 	             worker,                  	                         % Child Type
 	             [dev_manager]                                       % Child Modules (For Release Handling Purposes)
                 },
