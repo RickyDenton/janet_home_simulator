@@ -1,0 +1,1018 @@
+openapi: 3.0.0
+info:
+  title: JANET Controller REST API
+  version: 0.5.0
+  contact:
+    name: Riccardo Bertini
+  description: "REST API for interfacing with a JANET Controller node in the JANET Home Simulation System"
+  
+servers:
+  - url: 'TBD'
+    description: "TBD"
+    variables: {}
+    
+paths: 
+ 
+  # =================================================================================== #
+  #                                  SUBLOCATIONS API                                   #
+  # =================================================================================== # 
+  '/sublocation/{subloc_id}':
+    summary: JANET Controller Sublocations API
+
+    # ============================ ADD SUBLOCATION ============================ # 
+    put:
+      summary: "Add a new sublocation"
+      description: "Adds a new empty sublocation in the controller's location"
+      tags:
+        - "Sublocations API"
+      parameters:
+      - name: subloc_id
+        in: path
+        required: true
+        description: The sublocation ID within the location (int > 0, because the default sublocation {loc_id,0} cannot be added)
+        schema:
+          minimum: 0
+          type: 'integer'
+          example: 4
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **name** → The sublocation name (string, optional)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                 description: The sublocation Name
+                 type: 'string'
+                 example: 'kitchen'
+      
+      # --------------------- Responses --------------------- #
+      responses:
+        '201':
+          description: "CREATED (sublocation successfully added)"
+        '400':
+          description: |
+           BAD REQUEST
+            * Parameter **subloc_id** is not an integer
+            * Parameter **subloc_id** is < 1
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> Parameter \"subloc_id\" is not an integer (\"ciao\")"
+        '405':
+           $ref: '#/components/responses/GenMethodNotAllowed'
+        '409':
+          description: |
+            CONFLICT (sublocation {loc_id,**subloc_id**} already exists)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> A sublocation with such \"sub_id\" ({1,2}) already exists"
+        '415':
+          $ref: '#/components/responses/GenUnsupportedMediaType'
+  
+        '500':
+          $ref: '#/components/responses/GenServerErrorWithBody'
+
+
+    # =========================== DELETE SUBLOCATION =========================== #
+    delete:
+      summary: "Delete a sublocation"
+      description: "Deletes an existing sublocation from the controller's location, also moving all its devices into the default sublocation {loc_id,0}"
+      tags:
+        - "Sublocations API"
+      parameters:
+      - name: subloc_id
+        in: path
+        required: true
+        description: The sublocation ID within the location (int > 0, because the default sublocation {loc_id,0} cannot be deleted)
+        schema:
+          minimum: 0
+          type: 'integer'
+          example: 4
+          
+      # --------------------- Responses --------------------- #  
+      responses:
+        '204':
+          description: "NO CONTENT (sublocation successfully deleted)"
+        '400':
+          description: |
+           BAD REQUEST
+            * Parameter **subloc_id** is not an integer
+            * Parameter **subloc_id** is < 1
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> Parameter \"subloc_id\" is not an integer (\"ciao\")"
+        '404':
+          description: |
+           NOT FOUND (sublocation {loc_id,**subloc_id**} was not found in the JANET Simulator)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> A sublocation with such \"sub_id\" ({95,32}) does not exist"
+        '405':
+           $ref: '#/components/responses/GenMethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/GenServerErrorWithoutBody'         
+    
+  
+  # =================================================================================== #
+  #                                     DEVICES API                                     #
+  # =================================================================================== #
+  '/device/{dev_id}':
+    summary: JANET Simulator Devices API
+    parameters:
+      - name: dev_id
+        in: path
+        required: true
+        description: The device ID (unique int > 0)
+        schema:
+          minimum: 1
+          type: 'integer'
+          example: 5
+    
+    # =============================== ADD DEVICE =============================== #       
+    put:
+      summary: "Add a new device"
+      description: "Adds a new device with a default initial configuration in a given sublocation of the controller's location, and starts its JANET Device node"
+      tags:
+        - "Devices API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **subloc_id** → The ID of the sublocation in the location where to put the device (int ≥ 0)
+          * **name** → The device name (string, optional)
+          * **type** → The device type ("Fan" | "Light" | "Door" | "Thermostat " | "Conditioner")
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subloc_id,type]
+              properties:
+                subloc_id:
+                 type: 'integer'
+                 minimum: 0
+                 example: 4
+                name:
+                 type: 'string'
+                 example: 'Pinguino Cool&Quiet'
+                type:
+                 type: 'string'
+                 enum: [Fan,Light,Door,Thermostat,Conditioner]
+                 example: 'Conditioner'
+                 
+          # NOTE: The device types are defined with capital letters for server back-end compatibility
+      
+      # --------------------- Responses --------------------- #
+      responses:  
+        '200':
+          description: |
+            OK (device was successfully added)
+            
+            The complete **initial state** of the device is returned in the response body, where the full list of device states can be found in the _devstate.*_ schemas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/devstate'
+                
+        '400':
+          description: |
+           BAD REQUEST
+            * Parameter **dev_id** is not an integer
+            * Parameter **dev_id** is < 1
+            * Parameter **subloc_id** is missing
+            * Parameter **subloc_id** is not an integer
+            * Parameter **subloc_id** is < 0
+            * Parameter **type** is missing
+            * Parameter **type** is not a valid device type
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> The specified device \"type\" (fAn) is invalid"
+                
+        '404':
+          description: |
+           NOT FOUND (sublocation {loc_id,**subloc_id**} was not found in the JANET Simulator)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> A sublocation with such \"sub_id\" ({95,32}) does not exist"                
+        '405':
+           $ref: '#/components/responses/GenMethodNotAllowed'
+           
+        '409':
+          description: |
+            CONFLICT (device **dev_id** already exists)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> A device with such \"dev_id\" (3) already exists"
+                
+        '415':
+          $ref: '#/components/responses/GenUnsupportedMediaType'
+          
+        '500':
+          description: |
+           INTERNAL SERVER ERROR
+            * The device was added, but an internal error occured in starting its node {error:NodeStartError}
+            * The device was added in the Simulator database, but internal errors occured in starting its node {error:NodeStartError} and in adding it into the Controller database {error:CtrDBError}
+            * Unknown JSONE parameter mapping
+            * Unhandled server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<SERVER ERROR> The device of \"dev_id\" 5 was added, but an internal error occured in starting its node: {error,NodeStartError}"             
+    
+
+    # ======================= UPDATE DEVICE SUBLOCATION ======================= # 
+    post:
+      summary: "Update a device's sublocation"
+      description: "Moves an existing device in another existing sublocation in the controller's location"
+      tags:
+        - "Devices API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **subloc_id** → The ID of the sublocation where to move the device in (int ≥ 0)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subloc_id:
+                 type: 'integer'
+                 minimum: 0
+                 example: 4
+              
+      # --------------------- Responses --------------------- #  
+      responses:
+        '204':
+          description: "NO CONTENT (device sublocation successfully updated)"
+          
+        '400':
+          description: |
+           BAD REQUEST
+            * Parameter **dev_id** is not an integer
+            * Parameter **dev_id** is < 1
+            * Parameter **subloc_id** is missing
+            * Parameter **subloc_id** is not an integer
+            * Parameter **subloc_id** is < 0
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> Parameter \"subloc_id\" is not an integer (\"ciao\")"
+                
+        '404':
+          description: |
+           NOT FOUND
+            * Sublocation {loc_id,**subloc_id**} was not found in the JANET Simulator
+            * Device **dev_id** was not found in the controller's location
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> A sublocation with such \"sub_id\" ({95,32}) does not exist"
+                
+        '405':
+           $ref: '#/components/responses/GenMethodNotAllowed'
+           
+        '415':
+          $ref: '#/components/responses/GenUnsupportedMediaType'
+           
+        '500':
+          description: |
+           INTERNAL SERVER ERROR
+            * The device's sublocation was updated in the Simulator database, but an internal error occured in updating it into the Controller database
+            * Unknown JSONE parameter mapping
+            * Unhandled server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<SERVER ERROR> The device's sublocation was updated in the Simulator database, but an internal error occured in updating it into the Controller database: {error,Reason}"  
+                
+                
+    # ============================= DELETE DEVICE ============================= #
+    delete:
+      summary: "Delete a device"
+      description: "Deletes an existing device from the controller's location, also stopping its device node"
+      tags:
+        - "Devices API"
+            
+      # --------------------- Responses --------------------- #  
+      responses:
+        '204':
+          description: "NO CONTENT (device successfully deleted)"
+          
+        '400':
+          description: |
+           BAD REQUEST
+            * Parameter **dev_id** is not an integer
+            * Parameter **dev_id** is < 1
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> Parameter \"dev_id\" is not an integer (\"ciao\")"
+                
+        '404':
+          description: |
+           NOT FOUND (device **dev_id** was not found in the controller's location)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> A device with such \"dev_id\" (165) does not exist"
+                
+        '405':
+           $ref: '#/components/responses/GenMethodNotAllowed'        
+          
+        '500':
+          description: |
+           INTERNAL SERVER ERROR
+            * The device was deleted, but an internal error occured in stopping its node
+            * The device was deleted from the Simulator database, but internal errors occured in stopping its node and in deleting it from the Controller database
+            * Unhandled server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<SERVER ERROR> The device \"dev_id\" was deleted, but an internal error occured in stopping its node: {error,Reason}"
+                
+
+  # =================================================================================== #
+  #                                DEVICES COMMANDS API                                 #
+  # =================================================================================== #
+  '/devcommands':
+    summary: JANET Simulator Device Commands API
+    patch:
+      summary: "Issue device commands"
+      description: |
+        Issue one or more commands to the devices in the controller's location
+        
+        ## Request Body
+        The request body must consist in a list of "N" **Device Commands (DevCommands)** structured as follows:
+          
+          ```
+          [
+            // Device Command 1
+            {
+             "dev_id": 5,  // Device the command refers to
+             "actions":    // Set of device-specific actions
+              {            // (in this example, for a fan)
+               "onOff":"on",
+               "fanSpeed":50
+              }
+            },
+            
+            // Device Command 2 
+            {
+             "dev_id": 6,
+             "actions":    // Note that not every device-specific action
+              {            // is required in the "actions" object
+               "tempTarget":25
+              }
+            },
+            
+           ⋮  
+           // Device Command N
+           { ... }
+          ]
+          ```
+          Where only one command towards the same \"dev_id\" can be issued, and the list of device-specific actions with their allowed values can be found in the _actions_ schemas.
+          
+        ## HTTP Response Format
+        
+        ### Response Body
+        The response body consists in a list of "N" **Device Responses (DevResponses)**, each associated with a device command (but not necessarily in the same order) and that can be **Successful** or **Unsuccessful**:
+        #### Successful Device Response
+          ```
+            {
+             "dev_id": 5,    // Device (and so command) the response refers to
+             "status": 200,  // 200 -> Successful response
+             "state":        // Complete device state after the command
+              {              // (in this example, for a thermostat)
+               "onOff":"on",
+               "tempTarget":25,
+               "tempCurrent":32
+              },
+             "timestamp": "2021-10-06T02:49:35+02:00" // Device timestamp
+            }
+          ```
+        #### Unsuccessful Device Response
+          ```
+            {
+             "dev_id": 6,    // Device (and so command) the response refers to
+             "status": 406,  // not 200 -> Unsuccessful response (307-504)
+             "errorReason": "The command was rejected by the device for it is invalid in its current state"
+             // A textual description of why the command was unsuccessful
+            }
+          ```
+          Where the schema of the "state" object is analogous to the one of the "actions" objects for the device commands, and the full list of errors that may be returned can be found in the _errorReason_ schemas.
+          
+        ### Response Status Code
+        Apart from corner cases where the request could not be interpreted correctly, the HTTP status code of the response is set to:
+        * 200 (OK) -> ALL device commands were successful (all device responses are successful)
+        * 202 (ACCEPTED) -> There are both successful and unsuccessful commands
+        * _maxErr_ -> The maximum status code among all unsuccessful device responses (if no command was successful)  
+        
+      tags:
+        - "Devices Commands API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/devcommand'
+              minItems: 1
+              
+      # --------------------- Responses --------------------- #  
+      
+      responses:
+        '200':
+          description: "OK (ALL device commands were successful)"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/devresponse_successful'
+                minItems: 1
+                
+        '202':
+          description: "ACCEPTED (There are both successful and unsuccessful responses)"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  anyOf:
+                   - $ref: '#/components/schemas/devresponse_successful'
+                   - $ref: '#/components/schemas/devresponse_unsuccessful'
+                   
+        '400':
+          description: |
+           BAD REQUEST
+            * The request body could not be interpreted as a JSON list
+            * The request body is empty
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<ERROR> The request body could not be interpreted as a JSON list"
+                
+        '405':
+           $ref: '#/components/responses/GenMethodNotAllowed'
+           
+        '415':
+          $ref: '#/components/responses/GenUnsupportedMediaType'
+          
+        '500':
+          description: |
+           INTERNAL SERVER ERROR
+            * The body of the HTTP response could not be encoded in JSON
+            * Unknown JSONE parameter mapping
+            * Unhandled server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "<SERVER ERROR> The device responses could not be encoded in JSON"
+                   
+        '3XX':
+          description: "(all commands were unsuccessful, the one with the highest code is \"3XX\")"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/devresponse_unsuccessful'
+                  
+        '4XX':
+          description: "(all commands were unsuccessful, the one with the highest code is \"4XX\")"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/devresponse_unsuccessful'   
+                  
+        '5XX':
+          description: "(all commands were unsuccessful, the one with the highest code is \"5XX\")"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/devresponse_unsuccessful'                   
+              
+          
+#=============================================================================================#      
+        
+components:
+
+  # =================================================================================== #
+  #                           GEN_RESTHANDLER GENERIC RESPONSES                         #
+  # =================================================================================== #
+  responses:    
+  
+    # 405 (HTTP Method not allowed in specified path)
+    GenMethodNotAllowed:
+      description: "METHOD NOT ALLOWED (unsupported HTTP method)"
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "<ERROR> Method \"GET\" is not allowed in the specified path"
+            
+    # 415 (Request body could not be interpreted as JSON)
+    GenUnsupportedMediaType:
+      description: "UNSUPPORTED MEDIA TYPE (request body could not be interpreted as JSON)"
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "<ERROR> Request body could not be interpreted in JSON format"            
+    
+    # 500 (Generic server error with body parameters)
+    GenServerErrorWithBody:
+      description: |
+        INTERNAL SERVER ERROR
+        * Unknown JSONE parameter mapping
+        * Unhandled server error
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "<UNKNOWN SERVER ERROR> Unknown error: {errorReason}"
+            
+     # 500 (Generic server error without body parameters)
+    GenServerErrorWithoutBody:
+      description: |
+        INTERNAL SERVER ERROR
+        * Unhandled server error
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "<UNKNOWN SERVER ERROR> Unknown error: {errorReason}" 
+            
+            
+  schemas:
+  
+    # Device ID
+    dev_id:
+      type: 'integer'
+      minimum: 1
+      example: 5
+
+    # =================================================================================== #
+    #                                    DEVICE COMMAND                                   #
+    # =================================================================================== #
+
+    # A single device command
+    devcommand:
+      type: object
+      properties:
+        dev_id:
+          $ref: '#/components/schemas/dev_id'
+        actions:
+          $ref: '#/components/schemas/actions'
+
+    # =================================================================================== #
+    #                               DEVICE COMMANDS ACTIONS                               #
+    # =================================================================================== #
+    
+    # Generic action
+    actions:
+      oneOf:
+        - $ref: '#/components/schemas/actions.fan'
+        - $ref: '#/components/schemas/actions.light'       
+        - $ref: '#/components/schemas/actions.door'
+        - $ref: '#/components/schemas/actions.thermostat'
+        - $ref: '#/components/schemas/actions.conditioner'
+      example: {"onOff":"on","fanSpeed":30}
+    
+    # =============================== Device Actions =============================== #
+    
+    # Fan actions
+    actions.fan:
+      anyOf:
+        - $ref: '#/components/schemas/action.onOff'
+        - $ref: '#/components/schemas/action.fanSpeed'
+      minProperties: 1
+      maxProperties: 2
+      
+    # Light actions
+    actions.light:
+      anyOf:
+        - $ref: '#/components/schemas/action.onOff'
+        - $ref: '#/components/schemas/action.brightness'
+        - $ref: '#/components/schemas/action.color'
+      minProperties: 1
+      maxProperties: 3
+      
+    # Door actions
+    actions.door:
+      anyOf:
+        - $ref: '#/components/schemas/action.openClose'
+        - $ref: '#/components/schemas/action.lockUnlock'
+      minProperties: 1
+      maxProperties: 2
+      
+    # Thermostat actions
+    actions.thermostat:
+      anyOf:
+        - $ref: '#/components/schemas/action.onOff'
+        - $ref: '#/components/schemas/action.tempTarget'
+      minProperties: 1
+      maxProperties: 2
+      
+    # Conditioner actions
+    actions.conditioner:
+      anyOf:
+        - $ref: '#/components/schemas/action.onOff'
+        - $ref: '#/components/schemas/action.tempTarget'
+        - $ref: '#/components/schemas/action.fanSpeed'
+      minProperties: 1
+      maxProperties: 3
+      
+    # ============================ Actions Definitions ============================ #
+    
+    # "onOff" action
+    action.onOff:
+      $ref: '#/components/schemas/trait.onOff'
+      
+    # "fanSpeed" action
+    action.fanSpeed:
+      $ref: '#/components/schemas/trait.fanSpeed'
+      
+    # "brightness" action
+    action.brightness:
+      $ref: '#/components/schemas/trait.brightness'
+    
+    # "color" action
+    action.color:
+      $ref: '#/components/schemas/trait.color'
+      
+    # "openClose" action
+    action.openClose:
+      $ref: '#/components/schemas/trait.openClose'
+      
+    # "lockUnlock" action
+    action.lockUnlock:
+      $ref: '#/components/schemas/trait.lockUnlock'
+      
+    # "tempTarget" action
+    action.tempTarget:
+      $ref: '#/components/schemas/trait.tempTarget'
+
+    # =================================================================================== #
+    #                                  DEVICE RESPONSES                                   #
+    # =================================================================================== #
+    
+    # Successful response (200)
+    devresponse_successful:
+      type: object
+      properties:
+       dev_id:
+         $ref: '#/components/schemas/dev_id'
+       status:
+         type: 'integer'
+         minimum: 200
+         maximum: 200
+         example: 200
+       devstate:
+         $ref: '#/components/schemas/devstate'
+       timestamp:
+         type: 'string'
+         example: "2021-10-06T02:49:35+02:00"
+         
+    # Unsuccessful response (307-504)
+    devresponse_unsuccessful:
+      type: object
+      properties:
+       dev_id:
+         $ref: '#/components/schemas/dev_id'
+       status:
+         type: 'integer'
+         minimum: 307
+         maximum: 504
+         example: 400
+       errorReason:
+         $ref: '#/components/schemas/errorReason'
+         
+    # =================================================================================== #
+    #                                   DEVICE STATES                                     #
+    # =================================================================================== #
+    
+    # Generic Device State
+    devstate:
+      oneOf:
+        - $ref: '#/components/schemas/devstate.fan'
+        - $ref: '#/components/schemas/devstate.light'
+        - $ref: '#/components/schemas/devstate.door'
+        - $ref: '#/components/schemas/devstate.thermostat'
+        - $ref: '#/components/schemas/devstate.conditioner'
+    
+    # Fan State
+    devstate.fan:
+      type: object
+      properties:
+        onOff:
+          $ref: '#/components/schemas/trait.onOff'
+        fanSpeed:
+          $ref: '#/components/schemas/trait.fanSpeed'
+      required:
+        - onOff
+        - fanSpeed
+      
+    # Light State
+    devstate.light:
+      type: object
+      properties:
+        onOff:
+          $ref: '#/components/schemas/trait.onOff'
+        brightness:
+          $ref: '#/components/schemas/trait.brightness'
+        color:
+          $ref: '#/components/schemas/trait.color'
+      required:
+        - onOff
+        - brightness
+        
+    # Door State
+    devstate.door:
+      type: object
+      properties:
+        openClose:
+          $ref: '#/components/schemas/trait.openClose'
+        lockUnlock:
+          $ref: '#/components/schemas/trait.lockUnlock'
+      required:
+        - openClose
+        - lockUnlock
+        
+    # Thermostat State
+    devstate.thermostat:
+      type: object
+      properties:
+        onOff:
+          $ref: '#/components/schemas/trait.onOff'
+        tempTarget:
+          $ref: '#/components/schemas/trait.tempTarget'
+        tempCurrent:
+          $ref: '#/components/schemas/trait.tempCurrent'
+      required:
+        - onOff
+        - tempTarget
+        - tempCurrent
+    
+    # Conditioner State
+    devstate.conditioner:
+      type: object
+      properties:
+        onOff:
+          $ref: '#/components/schemas/trait.onOff'
+        tempTarget:
+          $ref: '#/components/schemas/trait.tempTarget'
+        tempCurrent:
+          $ref: '#/components/schemas/trait.tempCurrent'
+        fanSpeed:
+          $ref: '#/components/schemas/trait.fanSpeed'
+      required:
+        - onOff
+        - tempTarget
+        - tempCurrent
+        - fanSpeed
+
+    # =================================================================================== #
+    #                           DEVICE COMMANDS ERROR REASONS                             #
+    # =================================================================================== #
+    
+    # Generic Device Command Error (307-504)
+    errorReason:
+      oneOf:
+        - $ref: '#/components/schemas/errorReason.missingparam_devid'
+        - $ref: '#/components/schemas/errorReason.notaninteger_devid'
+        - $ref: '#/components/schemas/errorReason.outofrange_devid'
+        - $ref: '#/components/schemas/errorReason.duplicate_dev_id'
+        - $ref: '#/components/schemas/errorReason.missingparam_actions'
+        - $ref: '#/components/schemas/errorReason.notamap_actions'
+        - $ref: '#/components/schemas/errorReason.empty_actions'
+        - $ref: '#/components/schemas/errorReason.device_not_exists'
+        - $ref: '#/components/schemas/errorReason.device_offline'
+        - $ref: '#/components/schemas/errorReason.invalid_action'
+        - $ref: '#/components/schemas/errorReason.invalid_state_door'
+        - $ref: '#/components/schemas/errorReason.unknown_jsone_cast'
+        - $ref: '#/components/schemas/errorReason.invalid_db_devtype'
+        - $ref: '#/components/schemas/errorReason.unhandled_parsing'
+        - $ref: '#/components/schemas/errorReason.cmdclient_crash'
+        - $ref: '#/components/schemas/errorReason.unhandled_issuing_general'
+        - $ref: '#/components/schemas/errorReason.invalid_devconfig'
+        - $ref: '#/components/schemas/errorReason.dev_timeout'
+        - $ref: '#/components/schemas/errorReason.statem_timeout'
+        - $ref: '#/components/schemas/errorReason.mnesia_error' 
+        - $ref: '#/components/schemas/errorReason.unexpected_response'
+        - $ref: '#/components/schemas/errorReason.missing_response'
+        - $ref: '#/components/schemas/errorReason.invalid_devtype'
+        - $ref: '#/components/schemas/errorReason.unhandled_issuing'
+      example: "A valid command towards such device was already issued"
+      
+    # ========================== Commands Parsing Errors ========================== #
+    
+    # Missing "dev_id" (400)
+    errorReason.missingparam_devid:
+      type: 'string'
+      enum: ["Required parameter 'dev_id' is missing"]
+      
+    # "dev_id" is not an integer (400)
+    errorReason.notaninteger_devid:
+      type: 'string'
+      enum: ["Parameter 'dev_id' is not an integer"]
+      
+    # "dev_id" is < 1 (400)
+    errorReason.outofrange_devid:
+      type: 'string'
+      enum: ["Invalid value of parameter 'dev_id' (0)"] 
+      
+    # Duplicate command towards the same "dev_id" (400)
+    errorReason.duplicate_dev_id:
+      type: 'string'
+      enum: ["A valid command towards such device was already issued"]
+      
+    # The "actions" object is missing (400)
+    errorReason.missingparam_actions:
+      type: 'string'
+      enum: ["The 'actions' object is missing"]    
+
+    # The "actions" parameter could not be interpreted as a JSON object (400)
+    errorReason.notamap_actions:
+      type: 'string'
+      enum: ["The 'actions' parameter could not be interpreted as a JSON object"]    
+
+    # The "actions" object is empty (400)
+    errorReason.empty_actions:
+      type: 'string'
+      enum: ["The 'actions' object is empty"]
+      
+    # The device does not belong to the controller's location (404)
+    errorReason.device_not_exists:
+      type: 'string'
+      enum: ["A device with such 'dev_id' does not exist"]      
+      
+    # The device is currently offline (307)
+    errorReason.device_offline:
+      type: 'string'
+      enum: ["The device is currently offline"]
+
+    # The "actions" object contains invalid actions for the associated device type (400)
+    errorReason.invalid_action:
+      type: 'string'
+      enum: ["The 'actions' object contains invalid actions for the associated device type (fan)"]    
+
+    # Invalid {open,lock} state for a door (400)
+    errorReason.invalid_state_door:
+      type: 'string'
+      enum: ["The state {'open','lock'} is invalid for device type 'door'"]    
+
+    # Parameter was cast to an unknown Erlang term() (500)
+    errorReason.unknown_jsone_cast:
+      type: 'string'
+      enum: ["Invalid value of trait 'fanSpeed' was cast to an unknown term() by the JSONE library"]
+      
+    # The device type in the controller database is invalid (500)
+    errorReason.invalid_db_devtype:
+      type: 'string'
+      enum: ["The device type in the controller database (fAn) is invalid"]      
+      
+    # Unhandled error while parsing the command (500)
+    errorReason.unhandled_parsing:
+      type: 'string'
+      enum: ["Unhandler server error while parsing the command: {error,Reason}"]
+    
+    
+    # ========================== Commands Issuing Errors ========================== #
+    
+    # Intermediate command client has crashed while issuing the commands (500)
+    errorReason.cmdclient_crash:
+      type: 'string'
+      enum: ["Server error in issuing the device commands: {cmdclient_crash}"]
+      
+    # Unhandled general error in issuing the commands (500)
+    errorReason.unhandled_issuing_general:
+      type: 'string'
+      enum: ["Server error in issuing the device commands: {error,Reason}"]  
+      
+    # The device rejected the command for it is invalid in its current state (406)
+    errorReason.invalid_devconfig:
+      type: 'string'
+      enum: ["The command was rejected by the device for it is invalid in its current state"]
+      
+    # Device node timeout (504)
+    errorReason.dev_timeout:
+      type: 'string'
+      enum: ["The device node is not responding"]
+    
+    # Device state machine timeout (504)
+    errorReason.statem_timeout:
+      type: 'string'
+      enum: ["The device state machine is not responding"]    
+      
+    # Error in updating the device configuration in the controller's database (500)
+    errorReason.mnesia_error:
+      type: 'string'
+      enum: ["Error in mirroring the updated device configuration in the controller's database: {error,Reason}"]       
+      
+    # Unexpected command response received from the device (500)
+    errorReason.unexpected_response:
+      type: 'string'
+      enum: ["An unexpected device command response was received: {UnexpectedResponse}"]
+      
+    # Missing command response from the device (504)
+    errorReason.missing_response:
+      type: 'string'
+      enum: ["No command response was returned from the device"]      
+      
+    # The updated state returned by the device is malformed (500)
+    errorReason.invalid_devtype:
+      type: 'string'
+      enum: ["The updated state returned by the device is malformed"]       
+      
+    # Unhandled error in parsing a command response (500)
+    errorReason.unhandled_issuing:
+      type: 'string'
+      enum: ["Unhandled server error in parsing the command response: {error,Reason}"]
+      
+    # =================================================================================== #
+    #                                   DEVICE TRAITS                                     #
+    # =================================================================================== #
+  
+    # "onOff" trait (fan, light, thermostat, conditioner)
+    trait.onOff:
+      type: 'string'
+      enum: ['on','off']
+      example: 'off'
+      
+    # "fanSpeed" trait (fan, conditioner)
+    trait.fanSpeed:
+      type: 'integer'
+      minimum: 1
+      maximum: 100
+      example: 50
+      
+    # "brightness" trait (light)
+    trait.brightness:
+      type: 'integer'
+      minimum: 1
+      maximum: 100
+      example: 50
+      
+    # "color" trait (light)
+    trait.color:
+      type: 'string'
+      example: 'white'
+      
+    # "openClose" trait (door)
+    trait.openClose:
+      type: 'string'
+      enum: ['open','close']
+      example: 'close'      
+      
+    # "lockUnlock trait" (door)
+    trait.lockUnlock:
+      type: 'string'
+      enum: ['lock','unlock']
+      example: 'unlock'       
+      
+    # "tempTarget" trait (thermostat, conditioner)
+    trait.tempTarget:
+      type: 'integer'
+      minimum: 0
+      maximum: 50
+      example: 21
+    
+    # "tempCurrent" trait (thermostat, conditioner)
+    trait.tempCurrent:
+      type: 'integer'
+      example: 21    

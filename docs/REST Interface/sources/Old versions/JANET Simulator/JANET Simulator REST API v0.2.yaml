@@ -1,0 +1,271 @@
+openapi: 3.0.0
+info:
+  title: JANET Simulator REST API
+  version: 0.2.0
+  contact:
+    name: Riccardo Bertini
+  description: "REST API for interfacing with the JANET Simulator in the JANET Home Simulation System"
+  
+servers:
+  - url: 'TBD'
+    description: "TBD"
+    variables: {}
+    
+paths: 
+
+  # =================================================================================== #
+  #                                    LOCATIONS API                                    #
+  # =================================================================================== # 
+  '/location/{loc_id}':
+    summary: JANET Simulator Locations API
+    parameters:
+      - name: loc_id
+        in: path
+        required: true
+        description: The location ID (unique int > 0)
+        schema:
+          minimum: 1
+          type: 'integer'
+          example: 10
+    
+    
+    # ============================== ADD LOCATION ============================== # 
+    put:
+      summary: "Add a new location"
+      description: "Adds a new location and starts its JANET Controller node"
+      tags:
+        - "Locations API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **name** → The location name (string, optional)
+          * **user** → The location user (string, optional)
+          * **port** → The location controller's REST port (unique int ≥ 30000)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+               - port
+              properties:
+                name:
+                 description: The location Name
+                 type: 'string'
+                 example: 'office'
+                user:
+                  description: The location User
+                  type: 'string'
+                  example: 'janethome@gmail.com'
+                port:
+                  description: The location controller's REST Port
+                  type: 'integer'
+                  minimum: 30000
+                  example: 30000
+      
+      # --------------------- Responses --------------------- #
+      responses:
+        '201':
+          description: "CREATED (location successfully added)"
+        '400':
+          description: "BAD REQUEST"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "BAD REQUEST: ({loc_id} is not an integer)"   
+        '409':
+          description: "CONFLICT"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "CONFLICT: {error,port_already_taken}" 
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}"     
+
+    
+    # ========================== UPDATE LOCATION NAME ========================== # 
+    post:
+      summary: "Update a location's name"
+      description: "Updates the name of an existing location in the JANET Simulator node"
+      tags:
+        - "Locations API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **name** → The updated location name (string)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                 description: The updated location Name
+                 type: 'string'
+                 example: 'office'
+              
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (location name successfully updated)"
+        '400':
+          description: "BAD REQUEST ({loc_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (location {loc_id} was not found in the JANET Simulator)"
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+                
+
+    # ============================ DELETE LOCATION ============================ #  
+    delete:
+      summary: "Delete a location"
+      description: "Deletes an existing location from the JANET Home simulation environment, along with all its sublocation and devices"
+      tags:
+        - "Locations API"
+            
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (location successfully deleted)"
+        '400':
+          description: "BAD REQUEST ({loc_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (location {loc_id} was not found in the JANET Simulator)"
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+
+
+  # =================================================================================== #
+  #                                  SUBLOCATIONS API                                   #
+  # =================================================================================== # 
+  '/location/{loc_id}/sublocation/{subloc_id}':
+    summary: JANET Simulator Sublocations API
+    parameters:
+      - name: loc_id
+        in: path
+        required: true
+        description: The location ID (unique int > 0)
+        schema:
+          minimum: 1
+          type: 'integer'
+          example: 10
+      - name: subloc_id
+        in: path
+        required: true
+        description: The sublocation ID within the location (int ≥ 0)
+        schema:
+          minimum: 0
+          type: 'integer'
+          example: 4
+          
+   # ======================== UPDATE SUBLOCATION NAME ======================== #
+    post:
+      summary: "Update a sublocation's name"
+      description: "Updates the name of an existing sublocation in the JANET Simulator node"
+      tags:
+        - "Sublocations API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **name** → The updated sublocation name (string)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                 description: The updated sublocation Name
+                 type: 'string'
+                 example: 'kitchen'
+              
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (sublocation name successfully updated)"
+        '400':
+          description: "BAD REQUEST ({subloc_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (sublocation {subloc_id} of location {loc_id} was not found in the JANET Simulator)"
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+  
+  
+  # =================================================================================== #
+  #                                     DEVICES API                                     #
+  # =================================================================================== #
+  '/device/{dev_id}':
+    summary: JANET Simulator Devices API
+    parameters:
+      - name: dev_id
+        in: path
+        required: true
+        description: The device ID (unique int > 0)
+        schema:
+          minimum: 1
+          type: 'integer'
+          example: 5
+   
+   # =========================== UPDATE DEVICE NAME =========================== #
+    post:
+      summary: "Update a device's name"
+      description: "Updates the name of an existing device in the JANET Simulator node"
+      tags:
+        - "Devices API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **name** → The updated device name (string)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                 description: The update device Name
+                 type: 'string'
+                 example: 'Pinguino Cool&Quiet'
+              
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (device name successfully updated)"
+        '400':
+          description: "BAD REQUEST ({dev_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (device {dev_id} was not found in the JANET Simulator)"
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+        

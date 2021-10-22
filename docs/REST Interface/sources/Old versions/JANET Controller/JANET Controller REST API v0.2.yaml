@@ -1,0 +1,564 @@
+openapi: 3.0.0
+info:
+  title: JANET Controller REST API
+  version: 0.2.0
+  contact:
+    name: Riccardo Bertini
+  description: "REST API for interfacing with a JANET Controller node in the JANET Home Simulation System"
+  
+servers:
+  - url: 'TBD'
+    description: "TBD"
+    variables: {}
+    
+paths: 
+ 
+  # =================================================================================== #
+  #                                  SUBLOCATIONS API                                   #
+  # =================================================================================== # 
+  '/sublocation/{subloc_id}':
+    summary: JANET Controller Sublocations API
+    parameters:
+      - name: subloc_id
+        in: path
+        required: true
+        description: The sublocation ID within the location (int ≥ 0)
+        schema:
+          minimum: 0
+          type: 'integer'
+          example: 4
+    
+    # ============================ ADD SUBLOCATION ============================ # 
+    put:
+      summary: "Add a new sublocation"
+      description: "Adds a new empty sublocation in the controller's location"
+      tags:
+        - "Sublocations API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **name** → The sublocation name (string, optional)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                 description: The sublocation Name
+                 type: 'string'
+                 example: 'kitchen'
+      
+      # --------------------- Responses --------------------- #
+      responses:
+        '201':
+          description: "CREATED (sublocation successfully added)"
+        '400':
+          description: "BAD REQUEST ({subloc_id} is not an integer)" 
+        '409':
+          description: "CONFLICT ({error,sublocation_already_exists}" 
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}"   
+    
+
+    # =========================== DELETE SUBLOCATION =========================== #
+    delete:
+      summary: "Delete a sublocation"
+      description: "Deletes an existing sublocation from the controller's location, also moving all its devices into the default sublocation {loc_id,0}"
+      tags:
+        - "Sublocations API"
+            
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (sublocation successfully deleted)"
+        '400':
+          description: "BAD REQUEST ({subloc_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (sublocation {subloc_id} was not found in the controller's location)"
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}"           
+    
+  
+  # =================================================================================== #
+  #                                     DEVICES API                                     #
+  # =================================================================================== #
+  '/device/{dev_id}':
+    summary: JANET Simulator Devices API
+    parameters:
+      - name: dev_id
+        in: path
+        required: true
+        description: The device ID (unique int > 0)
+        schema:
+          minimum: 1
+          type: 'integer'
+          example: 5
+    
+    # =============================== ADD DEVICE =============================== #       
+    put:
+      summary: "Add a new device"
+      description: "Adds a new device with a default initial configuration in a given sublocation of the controller's location, and starts its JANET Device node"
+      tags:
+        - "Devices API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **subloc_id** → The ID of the sublocation in the location where to put the device (int ≥ 0)
+          * **name** → The device name (string, optional)
+          * **type** → The device type ("fan" | "light" | "door" | "thermostat " | "conditioner")
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subloc_id,type]
+              properties:
+                subloc_id:
+                 type: 'integer'
+                 minimum: 0
+                 example: 4
+                name:
+                 type: 'string'
+                 example: 'Pinguino Cool&Quiet'
+                type:
+                 type: 'string'
+                 enum: [fan,light,door,thermostat,conditioner]
+                 example: 'conditioner'
+      
+      # --------------------- Responses --------------------- #
+      responses:
+        '201':
+          description: "CREATED (device successfully added)"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                 - $ref: '#/components/schemas/fan.state'
+                 - $ref: '#/components/schemas/light.state'
+                 - $ref: '#/components/schemas/door.state'
+                 - $ref: '#/components/schemas/thermostat.state'
+                 - $ref: '#/components/schemas/conditioner.state'  
+        '400':
+          description: "BAD REQUEST"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "BAD REQUEST ({dev_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (sublocation {subloc_id} was not found in the controller's location)"
+        '409':
+          description: "CONFLICT"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "CONFLICT: {error,device_already_exists}" 
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}"                 
+    
+
+    # ======================= UPDATE DEVICE SUBLOCATION ======================= # 
+    post:
+      summary: "Update a device's sublocation"
+      description: "Moves an existing device in another existing sublocation in the controller's location"
+      tags:
+        - "Devices API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **subloc_id** → The ID of the sublocation where to move the device in (int ≥ 0)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subloc_id:
+                 type: 'integer'
+                 minimum: 0
+                 example: 4
+              
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (device sublocation successfully updated)"
+        '400':
+          description: "BAD REQUEST ({dev_id} is not an integer)"
+        '404':
+          description: "NOT FOUND"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "NOT FOUND: {error,sublocation_not_exists}" 
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+                
+                
+    # ============================= DELETE DEVICE ============================= #
+    delete:
+      summary: "Delete a device"
+      description: "Deletes an existing device from the controller's location, also stopping its device node"
+      tags:
+        - "Devices API"
+            
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (device successfully deleted)"
+        '400':
+          description: "BAD REQUEST ({dev_id} is not an integer)"
+        '404':
+          description: "NOT FOUND (device {dev_id} was not found in the controller's location)"
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+                
+                
+    # ====================== UPDATE DEVICE CONFIGURATION ====================== #  
+    patch:
+      summary: "Update a device's state"
+      description: "Sends a command aimed at updating the state of a device in the controller's location"
+      tags:
+        - "Devices API"
+
+      # ------------------- Request Body ------------------- #
+      requestBody:
+        description: |
+          * **command** → A valid device command (*actions.devices.commands.Command*)
+          * **params** → A valid set of parameters associated with the command 
+          
+          The set of supported *commands* and *parameters* are the ones defined in the [Google Smart Home Interface](https://developers.google.com/assistant/smarthome/traits) relative to *fan*, *light*, *door*, *thermostat* and *conditioner* devices
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+               - $ref: '#/components/schemas/actions.devices.commands.OnOff'
+               - $ref: '#/components/schemas/actions.devices.commands.SetFanSpeed'
+               - $ref: '#/components/schemas/actions.devices.commands.BrightnessAbsolute'
+               - $ref: '#/components/schemas/actions.devices.commands.ColorAbsolute'
+               - $ref: '#/components/schemas/actions.devices.commands.OpenClose'
+               - $ref: '#/components/schemas/actions.devices.commands.LockUnlock'
+               - $ref: '#/components/schemas/actions.devices.commands.ThermostatTemperatureSetpoint'
+              
+      # --------------------- Responses --------------------- #  
+      responses:
+        '200':
+          description: "OK (device state successfully updated)"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                 - $ref: '#/components/schemas/fan.state'
+                 - $ref: '#/components/schemas/light.state'
+                 - $ref: '#/components/schemas/door.state'
+                 - $ref: '#/components/schemas/thermostat.state'
+                 - $ref: '#/components/schemas/conditioner.state'  
+        '400':
+          description: "BAD REQUEST"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "BAD REQUEST ({error,unknown_command})"
+        '404':
+          description: "NOT FOUND"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "NOT FOUND: {error,device_not_exists}"
+                
+        '405':
+          description: "METHOD NOT ALLOWED"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "METHOD NOT ALLOWED: {actions.devices.commands.OnOff,door}"
+
+        '500':
+          description: "INTERNAL SERVER ERROR"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "INTERNAL SERVER ERROR: {error,Reason}" 
+                
+        '503':
+          description: "SERVICE UNAVAILABLE"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "SERVICE UNAVAILABLE {error,device_offline}"
+        
+        '504':
+          description: "GATEWAY TIMEOUT"
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "GATEWAY TIMEOUT {error,device_timeout}"  
+              
+components:
+  schemas:
+  
+    # =================================================================================== #
+    #                                  DEVICE COMMANDS                                    #
+    # =================================================================================== #
+
+    # =============== OnOff (fan,light,thermostat,conditioner) =============== #  
+    actions.devices.commands.OnOff:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.OnOff']
+          example: 'actions.devices.commands.OnOff'
+        params: 
+          type: object
+          properties:
+            on:
+              type: boolean
+              example: true
+        
+    # ===================== SetFanSpeed (fan,conditioner) ===================== #       
+    actions.devices.commands.SetFanSpeed:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.SetFanSpeed']
+          example: 'actions.devices.commands.SetFanSpeed'
+        params: 
+          type: object
+          properties:
+            fanSpeedPercent:
+              type: 'integer'
+              minimum: 1
+              maximum: 100
+              example: 20  
+      
+    # ====================== BrightnessAbsolute (light) ====================== #
+    actions.devices.commands.BrightnessAbsolute:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.BrightnessAbsolute']
+          example: 'actions.devices.commands.BrightnessAbsolute'
+        params: 
+          type: object
+          properties:
+            brightness:
+              type: 'integer'
+              minimum: 1
+              maximum: 100
+              example: 40  
+    
+    # ========================= ColorAbsolute (light) ========================= #
+    actions.devices.commands.ColorAbsolute:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.ColorAbsolute']
+          example: 'actions.devices.commands.ColorAbsolute'
+        params: 
+          type: object
+          properties:
+            color:
+              type: 'string'
+              example: 'magenta'
+    
+    # =========================== OpenClose (door) =========================== # 
+    actions.devices.commands.OpenClose:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.OpenClose']
+          example: 'actions.devices.commands.OpenClose'
+        params: 
+          type: object
+          properties:
+            open:
+              type: boolean
+              example: true
+
+    # =========================== LockUnlock (door) =========================== #
+    actions.devices.commands.LockUnlock:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.LockUnlock']
+          example: 'actions.devices.commands.LockUnlock'
+        params: 
+          type: object
+          properties:
+            lock:
+              type: boolean
+              example: true
+              
+    # ========= TermostatTemperatureSetpoint (thermostat,conditioner) ========= # 
+    actions.devices.commands.ThermostatTemperatureSetpoint:
+      type: object
+      properties:
+        command:
+          type: 'string'
+          enum: ['actions.devices.commands.ThermostatTemperatureSetpoint']
+          example: 'actions.devices.commands.ThermostatTemperatureSetpoint'
+        params: 
+          type: object
+          properties:
+            thermostatTemperatureSetpoint:
+              type: 'integer'
+              minimum: 0
+              maximum: 50
+              example: 21    
+
+    # =================================================================================== #
+    #                               DEVICES RESPONSE STATES                               #
+    # =================================================================================== #
+    
+    # ============ FAN ============ # 
+    fan.state:
+      type: object
+      properties:
+        dev_id:
+          type: 'integer'
+          minimum: 0
+          example: 5
+        state: 
+          type: object
+          properties:
+            on:
+              type: 'boolean'
+              example: false
+            fanSpeed:
+              type: 'integer'
+              minimum: 0
+              maximum: 100
+              example: 50
+    
+    # =========== LIGHT =========== #           
+    light.state:
+      type: object
+      properties:
+        dev_id:
+          type: 'integer'
+          minimum: 0
+          example: 5
+        state: 
+          type: object
+          properties:
+            on:
+              type: 'boolean'
+              example: off
+            brightness:
+              type: 'integer'
+              minimum: 1
+              maximum: 100
+              example: 50
+            color:
+              type: 'string'
+              example: 'magenta'
+              
+    # =========== DOOR =========== # 
+    door.state:
+      type: object
+      properties:
+        dev_id:
+          type: 'integer'
+          minimum: 0
+          example: 5
+        state: 
+          type: object
+          properties:
+            open:
+              type: 'boolean'
+              example: false
+            lock:
+              type: 'boolean'
+              example: false
+    
+    # ========= THERMOSTAT ========= #          
+    thermostat.state:
+      type: object
+      properties:
+        dev_id:
+          type: 'integer'
+          minimum: 0
+          example: 5
+        state: 
+          type: object
+          properties:
+            on:
+              type: 'boolean'
+              example: true
+            thermostatTemperatureSetpoint:
+              type: 'integer'
+              minimum: 0
+              maximum: 50
+              example: 21   
+            thermostatTemperatureAmbient:
+              type: 'integer'
+              example: 15                 
+              
+    # ======== CONDITIONER ======== # 
+    conditioner.state:
+      type: object
+      properties:
+        dev_id:
+          type: 'integer'
+          minimum: 0
+          example: 5
+        state: 
+          type: object
+          properties:
+            on:
+              type: 'boolean'
+              example: true
+            thermostatTemperatureSetpoint:
+              type: 'integer'
+              minimum: 0
+              maximum: 50
+              example: 21   
+            thermostatTemperatureAmbient:
+              type: 'integer'
+              example: 15
+            FanSpeed:
+              type: 'integer'
+              minimum: 0
+              maximum: 100
+              example: 50
