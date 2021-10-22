@@ -34,8 +34,8 @@
 %% ------------------- State Machine State and Data Definitions ------------------- %%
 
 %% State: Config#devtypecfg
+%% Data:  #statemdata
 
-%% Data
 -record(statemdata,    
         {
 		 lastupdate,  % The last time the state of the 'dev_statem' was sent to the 'dev_server'
@@ -83,12 +83,12 @@ init({Config,Type}) ->
  
  % Return the initialization tuple to the 'gen_statem' engine:
  {
-  ok,                                                                 % Indicates to the engine that the 'dev_statem' can start
-  Config,                                                             % The initial State of the 'dev_statem'
+  ok,                                                                  % Indicates to the engine that the 'dev_statem' can start
+  Config,                                                              % The initial State of the 'dev_statem'
   #statemdata{lastupdate = erlang:system_time(second), type = Type},  % The initial Data of the 'dev_statem'
-                                                                      % NOTE: The 'lastupdate' variable will be more properly set in the
-																	  %       'get_config' call performed by the 'dev_server' at its initialization
-  StatemTimers                                                        % The list of timers to be initialized
+                                                                       % NOTE: The 'lastupdate' variable will be more properly set in the
+																	   %       'get_config' call performed by the 'dev_server' at its initialization
+  StatemTimers                                                         % The list of timers to be initialized
  }.
 
  
@@ -161,7 +161,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
     % Otherwise, simulate an appropriate new state for the 'dev_statem'
 	CandidateState = simulate_activity(State,Data#statemdata.type),
 
-    % Logging purposes [TODO]: Remove when ready
+    % Logging purposes
     % io:format("[statem_~w]: State = ~p, CandidateState = ~p~n",[Data#statemdata.type,State,CandidateState]),
 
     % Merge the simulated with the current state and check the validity of the resulting new state
@@ -182,7 +182,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
 	   
 	    % If instead the current and simulated states are the same, just restart the Simulated Activity Timer
 		
-		% Logging purposes [TODO]: Remove when ready
+		% Logging purposes
 	    % io:format("[statem_~w]: SAME simulated new Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
 	    
 		{keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]}
@@ -195,7 +195,7 @@ handle_event({timeout,simulated_activity_timer},_,State,Data) ->
 	   % NOTE: This is more of a failsafe, and should NOT happen during the execution
        %
        
-	   % Logging purposes [TODO]: Remove when ready
+	   % Logging purposes
        % io:format("[statem_~w]: INVALID simulated new Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
 	   
 	   {keep_state_and_data,[{{timeout,simulated_activity_timer},next_sim_time(),none}]}
@@ -234,7 +234,7 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
  % Compute the difference between the equilibrium and the current temperature
  TempDiff = temp_diff_from_eq(State),
 
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("dev_amb_traits = {~w,~w} (TempCurrent,TempDiff)~n",[TempCurrent,TempDiff]),
 
  % Randomly determine a new "temp_current" for the device, which may drift from its current value of at most
@@ -259,7 +259,7 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
    % Send the new state along with the current time to the 'dev_server'
    gen_server:cast(dev_server,{dev_config_update,{NewState,Now}}),
 
-   % Logging purposes [TODO]: Remove when ready
+   % Logging purposes
    % io:format("[statem_~w]: NEW simulated TempCurrent: ~w~n",[Data#statemdata.type,NewTempCurrent]),
   
    % Update the 'dev_statem' State and "LastUpdate" variables and reinitialize
@@ -271,7 +271,7 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
    % If instead the new and current 'temp_current' values are the same, just
    % restart the Ambient Temperature Timer as explained in the notes above
    
-   % Logging purposes [TODO]: Remove when ready
+   % Logging purposes
    % io:format("[statem_~w]: SAME simulated new TempCurrent: ~w~n",[Data#statemdata.type,NewTempCurrent]),
    
    {keep_state_and_data,[{{timeout,ambient_temperature_update_timer},next_amb_time(State),none}]}
@@ -286,14 +286,14 @@ handle_event({timeout,ambient_temperature_update_timer},_,State,Data) ->
 %% WHEN:      A configuration/state change request is forwarded to the device
 %% PURPOSE:   Attempt to change the 'dev_statem' configuration/state
 %% CONTENTS:  The Candidate State requested to the device
-%% MATCHES:   (always)
+%% MATCHES:   (always) (when the request comes from the JANET Device node)
 %% ACTIONS:   1) Merge the candidate with the current state and check the validity of the resulting new state
 %%            2.1) If the new state is valid, return it to the 'dev_server' along with the
 %%                 current time, and update the 'dev_statem' State and "LastUpdate" variables
 %%            2.2) If the new state is NOT valid, return the error to the
 %%                 'dev_server' and preserve the 'dev_statem' State and Data 
 %%   
-handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
+handle_event({call,{DevSrvPid,_Tag}},{dev_config_change,CandidateState},State,Data) when node() =:= node(DevSrvPid) ->
 
  % Merge the simulated with the current state and check the validity of the resulting new state
  case catch(utils:check_merge_devconfigs(State,CandidateState,Data#statemdata.type)) of
@@ -305,16 +305,16 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
    Now = erlang:system_time(second),
 
    % Update the 'dev_statem' state and "LastUpdate" variables and return them to the 'dev_server'
-   {next_state,NewState,Data#statemdata{lastupdate = Now},[{reply,DevSrvPid,{ok,{NewState,Now}}}]};
+   {next_state,NewState,Data#statemdata{lastupdate = Now},[{reply,{DevSrvPid,_Tag},{ok,{NewState,Now}}}]};
 
   % Otherwise, if the new state is invalid
   {error,invalid_devconfig} ->
   
-   % Logging purposes [TODO]: Remove when ready
+   % Logging purposes
    % io:format("[statem_~w]: WRONG New Configuration: ~p~n",[Data#statemdata.type,CandidateState]),
    
    % Preserve the 'dev_statem' State and Data and return the error to the 'dev_server'
-   {keep_state_and_data,[{reply,DevSrvPid,{error,invalid_devconfig}}]}
+   {keep_state_and_data,[{reply,{DevSrvPid,_Tag},{error,invalid_devconfig}}]}
  end;
 
 
@@ -324,17 +324,17 @@ handle_event({call,DevSrvPid},{dev_config_change,CandidateState},State,Data) ->
 %% WHEN:      During the 'dev_server' initialization
 %% PURPOSE:   Retrieve the initial state and time of the 'dev_statem'
 %% CONTENTS:  -
-%% MATCHES:   (always)
+%% MATCHES:   (always) (when the request comes from the JANET Device node)
 %% ACTIONS:   Update the "LastUpdate" data variable and return
 %%            it along with the State to the 'dev_server'
 %%   
-handle_event({call,DevSrvPid},get_config,State,Data) ->
+handle_event({call,{DevSrvPid,_Tag}},get_config,State,Data) when node() =:= node(DevSrvPid) ->
 
  % Get the current OS time in seconds (UNIX time)
  Now = erlang:system_time(second),
  
  % Update the "LastUpdate" data variable and return it along with the State to the 'dev_server'
- {keep_state,Data#statemdata{lastupdate = Now},[{reply,DevSrvPid,{ok,{State,Now}}}]}.
+ {keep_state,Data#statemdata{lastupdate = Now},[{reply,{DevSrvPid,_Tag},{ok,{State,Now}}}]}.
 
 
 %%====================================================================================================================================
@@ -465,7 +465,7 @@ next_sim_time() ->
 
  Res = max(200,trunc(rand:normal(?Sim_mean,?Sim_var))),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("Next sim_time: ~wms~n",[Res]),
  
  Res.
@@ -482,7 +482,7 @@ simulate_fan_onoff_trait() ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("fan 'onoff' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'onoff' trait, which is affected by:
@@ -531,7 +531,7 @@ simulate_fan_fanspeed_trait(on,CurrFanSpeed) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("fan 'fanspeed' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'fanspeed' trait, which is affected by:
@@ -579,7 +579,7 @@ simulate_light_onoff_trait() ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("light 'onoff' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'onoff' trait, which is affected by:
@@ -628,7 +628,7 @@ simulate_light_brightness_trait(on,CurrBrightness) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("light 'brightness' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'brightness' trait, which is affected by:
@@ -676,7 +676,7 @@ simulate_light_colorsetting_trait(on) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("light 'colorsetting' trait Rand = ~w~n",[Rand]),
  
  % Generate a random candidate value for the 'colorsetting' trait
@@ -689,16 +689,16 @@ simulate_light_colorsetting_trait(on) ->
   % 20% -> Randomly select one from a list of 10 colors
   Rand < 1 ->
    case rand:uniform(10) of
-    1 -> "white";
-	2 -> "red";
-	3 -> "yellow";
-	4 -> "blue";
-	5 -> "purple";
-	6 -> "green";
-	7 -> "orange";
-	8 -> "brown";
-	9 -> "pink";
-	10 -> "teal"
+    1 ->  "#FFFFFF";           % White
+	2 ->  "#FF0000";		   % Red
+	3 ->  "#FFFF00";           % Yellow
+	4 ->  "#0000FF";           % Blue
+	5 ->  "#800080";           % Purple
+	6 ->  "#008000";           % Green
+	7 ->  "#FFA500";		   % Orange
+	8 ->  "#A52A2A";		   % Brown
+	9 ->  "#FFC0CB";           % Pink
+	10 -> "#008080"			   % Teal
    end
  end. 
  
@@ -714,7 +714,7 @@ simulate_door_traits(State) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("door traits Rand = ~w~n",[Rand]),
  
  % Generate a random candidate for the 'openclose' and 'lockunlock' traits, which are affected by:
@@ -904,7 +904,7 @@ update_tempcurrent_trait(TempCurrent,TempDiff) ->
  % Generate a uniformly distributed random number in the interval 0.0 <= Rand < 1.0
  Rand = rand:uniform(),
  
- % Logging purposes [TODO]: Remove when ready
+ % Logging purposes
  % io:format("'temp_current' update Rand = ~w (TempCurrent = ~w, TempDiff = ~w)~n",[Rand,TempCurrent,TempDiff]),
 
  % Generate a new random value for the 'temp_current' trait drifting at most 1 degree
@@ -1022,7 +1022,7 @@ next_amb_time(State) ->
   % fact that the higher the distance from equilibrium, the faster the evolution of the ambient temperature)
   Res = max(3000,trunc(rand:normal(?Amb_base_mean-(1500 * TempDistEq),?Amb_base_var/max(1,TempDistEq)))),
   
-  % Logging purposes [TODO]: Remove when ready
+  % Logging purposes
   % io:format("Next_amb_time: ~wms~n",[Res]),  
   Res. 
  
@@ -1092,4 +1092,4 @@ sign(X) when is_number(X), X < 0 ->
 
 %% Called by its 'sup_jdev' supervisor during the JANET Device boot
 start_link(Config,Type) ->
-    gen_statem:start_link({local,?MODULE}, ?MODULE, {Config,Type}, []).  % The spawned process is also registered locally under the 'dev_statem' name
+ gen_statem:start_link({local,?MODULE}, ?MODULE, {Config,Type}, []).  % The spawned process is also registered locally under the 'dev_statem' name

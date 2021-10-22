@@ -35,15 +35,13 @@
 %%
 %% ALLOWED RETURNS: - {ok,RESTPort,RemoteHost,ListenerName,Paths}
 %%                      - RESTPort     -> The port to be used by the Cowboy listener
-%%                      - RemoteHost   -> The name/ip of the remote host from which
-%%                                        accept REST requests (in addition to localhost)
 %%                      - ListenerName -> The name (atom) by which register
 %%                                        the module as a cowboy listener
 %%                      - Paths        -> The list of resource handlers paths
 %%                                        implemented by the callback module
 %%
 -callback init_handler(Args :: term()) ->
- {ok,RESTPort::integer(),RemoteHost::list(),ListenerName::atom(),Paths::list()}.
+ {ok,RESTPort::integer(),ListenerName::atom(),Paths::list()}.
 
  
 %% DESCRIPTION:     Cowboy root handler
@@ -633,17 +631,15 @@ init(Parent,Module,Args) ->
   % start_link() function, which returns the following information as a tuple:
   %
   % - RESTPort:     The port to be used by the Cowboy listener
-  % - RemoteHost:   The name/ip of the remote host from which
-  %                 accept REST requests (in addition to localhost)
   % - ListenerName: The name (atom) by which register the
   %                 callback module as a cowboy listener
   % - Paths:        The list of resource handlers paths
   %                 implemented by the callback module
   % 
-  {ok,RESTPort,RemoteHost,ListenerName,Paths} = Module:init_handler(Args),
+  {ok,RESTPort,ListenerName,Paths} = Module:init_handler(Args),
  
   % Ensure the port to be used by the Cowboy listener to be available
-  case utils:is_os_port_available(RESTPort) of
+  case utils:is_localhost_port_available(RESTPort) of
    
    false ->
 	  
@@ -679,11 +675,11 @@ init(Parent,Module,Args) ->
 	% If the port is available, start the Cowboy application and all its dependencies
     {ok, _StartedApps} = application:ensure_all_started(cowboy),
    
-    % Initialize the list of Cowboy routes by merging the list of resource
-    % paths with the list of accepted hosts (the RemoteHost and localhost)
-    Routes = [{"localhost",Paths},{RemoteHost,Paths}],
+	% Define the Cowboy routes by associating connections coming from
+	% any host with the list of paths returned by the callback module
+	Routes = [{'_',Paths}],
     
-	% Compile the Cowboy Routes
+	% Compile the Cowboy routes
     CompiledRoutes = cowboy_router:compile(Routes),
  
     % Attempt to start the Cowboy Listener

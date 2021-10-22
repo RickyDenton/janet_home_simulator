@@ -1,0 +1,1 @@
+The release boots but does not work due to a bug in the 'slave:start/5' function (it always returns {error,timeout}, host resolution is file, also tested with a custom "inetrc" resolver (-kernel inetrc /path/to/inetrc) and with inet:get_rc(),inet:gethostbyname("LinuxMintVB")).

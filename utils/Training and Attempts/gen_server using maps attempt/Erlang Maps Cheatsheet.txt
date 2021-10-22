@@ -1,0 +1,12 @@
+%% Accessing Nested Elements
+
+A = #{"key1" => "val1", "key2" => #{"key3" => "val3", "key4" => #{"key5" => "val5"}}},
+#{"key2" := #{"key4" := #{"key5" := Value}}} = A,
+Value.
+
+
+%% Updating Nested Elements
+
+M = #{ a => 1, c => #{x => 1, y => 7}}.
+#{c := C} = M.
+M1 = M#{c := C#{y := 4771}}.
