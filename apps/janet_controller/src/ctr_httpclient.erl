@@ -573,7 +573,7 @@ send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCon
    % device connection updates, obtaining the stream reference associated with the HTTP request
    DevConnStreamRef = gun:post(
                                ConnPid,                                     % PID of the Gun connection process
-                               "/device",                                   % Resource path in the remote REST server
+                               "/deviceUpdate",                             % Resource path in the remote REST server
 		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
                                ReqBody                                      % Request body
 			  	  	          ), 
@@ -596,11 +596,14 @@ devconns_to_json(DevConnUpdates,Loc_user) ->
  
  % Convert the list of device connection updates into a list of map
  % connection updates as required by the remote REST server interface
- DevConnsReqs = [ #{did => Dev_id, connState => DevConnState, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))} || {Dev_id,DevConnState,Timestamp} <- DevConnUpdates],
+ %
+ % [REMOTE SERVER COMPATIBILITY]: The "user" is inserted in each device connection
+ %                                update instead of being a message-wide attribute  
+ %
+ DevConnsReqs = [ #{user => list_to_binary(Loc_user), dev_id => Dev_id, actions => #{connectivity => DevConnState}, timestamp => utils:timestamp_to_binary(Timestamp)} || {Dev_id,DevConnState,Timestamp} <- DevConnUpdates],
 
- % Attempt to encode the list of device connection
- % updates with the additional "user" field in JSON
- try jsone:encode(#{user => list_to_binary(Loc_user), request => DevConnsReqs})
+ % Attempt to encode the list of device connection updates in JSON
+ try jsone:encode(DevConnsReqs)
  catch
 	
   % If the encoding was unsuccessful, return an error
@@ -646,7 +649,7 @@ send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCfgUp
    % device configuration updates, obtaining the stream reference associated with the HTTP request
    DevCfgStreamRef = gun:patch(
                                ConnPid,                                     % PID of the Gun connection process
-                               "/device",                                   % Resource path in the remote REST server
+                               "/deviceUpdate",                             % Resource path in the remote REST server
 		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
                                ReqBody                                      % Request body
 			  	  	          ), 
@@ -669,11 +672,14 @@ devcfgs_to_json(DevCfgUpdates,Loc_user) ->
  
  % Convert the list of device configuration updates into a list of map
  % configuration updates as required by the remote REST server interface
- DevCfgsReqs = [ #{did => Dev_id, updatedState => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))} || {Dev_id,UpdatedCfgMap,Timestamp} <- DevCfgUpdates],
+ %
+ % [REMOTE SERVER COMPATIBILITY]: The "user" is inserted in each device connection
+ %                                update instead of being a message-wide attribute  
+ %
+ DevCfgsReqs = [ #{user => list_to_binary(Loc_user), dev_id => Dev_id, actions => UpdatedCfgMap, timestamp => utils:timestamp_to_binary(Timestamp)} || {Dev_id,UpdatedCfgMap,Timestamp} <- DevCfgUpdates],
 
- % Attempt to encode the list of device configuration
- % updates with the additional "user" field in JSON
- try jsone:encode(#{user => list_to_binary(Loc_user), request => DevCfgsReqs})
+ % Attempt to encode the list of device configuration updates in JSON
+ try jsone:encode(DevCfgsReqs)
  catch
 	
   % If the encoding was unsuccessful, return an error

@@ -1397,7 +1397,7 @@ parse_devcommands_responses([IssuedCommand|NextIssuedCommand],SuccessfulCommands
      {ok,{UpdatedCfgMap,Timestamp}} ->
 	 
 	  % Return the successful device command
-	  {ok,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 200, updatedState => UpdatedCfgMap, timestamp => list_to_binary(calendar:system_time_to_rfc3339(Timestamp))}};
+	  {ok,#{dev_id => IssuedCommand#valdevcmd.dev_id, status => 200, updatedState => UpdatedCfgMap, timestamp => utils:timestamp_to_binary(Timestamp)}};
 	 
 	 %% ------------------------------------ Device Command Failed ------------------------------------ %
 

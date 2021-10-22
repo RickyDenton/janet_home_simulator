@@ -5,7 +5,7 @@
 %% ----------------------------------- DEVICES UTILITY FUNCTIONS ----------------------------------- %%
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,check_merge_devconfigs/3,
          get_devtype_default_config/1,get_devtype_default_config_json/1,deprefix_dev_config/1,
-		 devconfig_to_map_all/1,devconfig_to_map_diff/2]). 
+		 devconfig_to_map_all/1,devconfig_to_map_diff/2,timestamp_to_binary/1]). 
 		 
 %% ------------------------------------ NODES UTILITY FUNCTIONS ------------------------------------ %%		 
 -export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_remote_host/1,is_allowed_node_host/1,
@@ -538,6 +538,23 @@ map_diff(Map,_TraitName,SameValue,SameValue) when is_map(Map)->
 % Different values -> add the NewValue in the map with key "Traitname"
 map_diff(Map,TraitName,_OldValue,NewValue) when is_map(Map), is_atom(TraitName) ->
  Map#{TraitName => NewValue}. 
+ 
+
+%% DESCRIPTION:  Converts a timestamp in erlang:system_time(seconds) (Unix Time)
+%%               to a RFC3339 binary for it to be sent to the remote server 
+%%
+%% ARGUMENTS:    - Timestamp: The Unix time timestamp to be converted
+%%                            to a RFC3339 binary (an integer >0)
+%%
+%% RETURNS:      - <<"Timestamp_RFC3339">> -> The Timestamp RFC3339 binary representation
+%%               - {error,bardarg}         -> Invalid arguments
+%%
+timestamp_to_binary(Timestamp) when is_integer(Timestamp), Timestamp > 0 ->
+ list_to_binary(string:slice(calendar:system_time_to_rfc3339(Timestamp),0,19));
+ 
+% Non-integer timestamp
+timestamp_to_binary(_NonPositiveIntegerTimestamp) ->
+ {error,badarg}.
  
  
 %%====================================================================================================================================

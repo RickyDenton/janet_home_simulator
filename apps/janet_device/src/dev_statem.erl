@@ -689,16 +689,16 @@ simulate_light_colorsetting_trait(on) ->
   % 20% -> Randomly select one from a list of 10 colors
   Rand < 1 ->
    case rand:uniform(10) of
-    1 -> "white";
-	2 -> "red";
-	3 -> "yellow";
-	4 -> "blue";
-	5 -> "purple";
-	6 -> "green";
-	7 -> "orange";
-	8 -> "brown";
-	9 -> "pink";
-	10 -> "teal"
+    1 ->  "#FFFFFF";           % White
+	2 ->  "#FF0000";		   % Red
+	3 ->  "#FFFF00";           % Yellow
+	4 ->  "#0000FF";           % Blue
+	5 ->  "#800080";           % Purple
+	6 ->  "#008000";           % Green
+	7 ->  "#FFA500";		   % Orange
+	8 ->  "#A52A2A";		   % Brown
+	9 ->  "#FFC0CB";           % Pink
+	10 -> "#008080"			   % Teal
    end
  end. 
  
