@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# Installs the JANET Simulator local configuration by creating the "sys.config" and "vm.args" files from their templates in the "config/templates" directory
+# Note that this is required to allow users to have their personal configurations without them being tracked and committed by git
+
+# Check if any of the two configuration files is already present in the "config" folder
+if [ -e config/sys.config  ] || [ -e config/vm.args ]
+then
+
+ # If any of them was found, warn the user that the configuration is already installed and will not be overwritten
+ echo "<WARNING> JANET Simulator configuration already installed, the configuration files were NOT overwritten"
+
+else
+
+ # Otherwise install the JANET Simulator local configuration
+ cp config/templates/sys.config_template config/sys.config
+ cp config/templates/vm.args_template config/vm.args
+ echo "JANET Simulator configuration successfully installed"
+ 
+fi
+

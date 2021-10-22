@@ -1,6 +1,8 @@
 *.beam
 *.dump
 db/mnesia.db/
+config/sys.config
+config/vm.args
 
 # From REBAR3
 _checkouts
