@@ -1,7 +1,0 @@
--sname janet-simulator
--hidden
--setcookie janet-simulator
--env ERL_LIBS _build/default/lib/
-
-+K true
-+A30
