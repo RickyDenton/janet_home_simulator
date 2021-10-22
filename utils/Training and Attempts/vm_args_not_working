@@ -1,0 +1,1 @@
+-s db mnesia_startup / -run db mnesia_startup  % (ineffective, even in start)

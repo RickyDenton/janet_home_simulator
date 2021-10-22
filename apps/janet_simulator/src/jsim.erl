@@ -7,12 +7,13 @@
 -export([run/0,stop/0,shutdown/0]).
 
 %% ---------------------------------- DATABASE INTERFACE FUNCTIONS ---------------------------------- %%
--export([add_location/4,add_sublocation/2,add_device/4]).            % Create
+-export([add_location/5,add_sublocation/2,add_device/5]).            % Create
 -export([print_table/0,print_table/1,print_tree/0,                   % Read
          print_tree/1,print_tree/2,get_record/2]).
 -export([update_dev_subloc/2,update_loc_name/2,                      % Update
          update_subloc_name/2,update_dev_name/2]).                                
 -export([delete_location/1,delete_sublocation/1,delete_device/1]).   % Delete
+-export([backup/0,backup/1,restore/0,restore/1,clear/0]).            % Database backup and restore
 
 %% ---------------------------------- JANET NODES STOP AND RESTART ---------------------------------- %%
 -export([stop_node/2,restart_node/2]).                               % Per-node stop/restart
@@ -25,6 +26,10 @@
 -export([print_ctr_table/1,print_ctr_table/2,                        % Controller Nodes interaction
          print_ctr_tree/1,ctr_command/4]).   
 -export([dev_config_change/2,dev_command/4]).                        % Device Nodes interaction
+	  
+%% ------------------------------------- OTHER UTILITY FUNCTIONS ------------------------------------ %%
+-export([print_rem_hosts_states/0,monitor_tree/0,monitor_tree/1,demonitor_tree/0,help/0]).
+
 	  
 %% ---------------------------- APPLICATION BEHAVIOUR CALLBACK FUNCTIONS ---------------------------- %%
 -export([start/2,stop/1]). 		    
@@ -92,7 +97,7 @@ shutdown() ->
 %%                                                  DATABASE INTERFACE FUNCTIONS
 %%====================================================================================================================================
 
-%% ========================================================== CREATE ===============================================================%%
+%% ========================================================= CREATE ============================================================== %%
 
 %% DESCRIPTION:  Adds an empty location to the database with its (default) sublocation {Loc_id,0}, and starts up its controller
 %%
@@ -100,6 +105,7 @@ shutdown() ->
 %%               - Name:   The name of the location (optional)
 %%               - User:   The username of the location's owner (optional)
 %%               - Port:   The port by which the location's controller listens for REST requests, which must not be already taken and be >=30000
+%%               - HostName: The name of the host where to spawn the location controller node (a list)
 %%
 %% RETURNS:      - {ok,ok}                         -> The location was successfully added and its controller node was started
 %%               - {ok,Error}                      -> The location was successfully added, but starting its controller returned an Error
@@ -108,12 +114,13 @@ shutdown() ->
 %%               - {error,location_already_exists} -> The loc_id already exists in the "location" table 
 %%               - {error,port_already_taken}      -> The port is already used by another controller
 %%               - {error,host_port_taken}         -> The port is already taken by another process in the host OS
+%%               - {error,invalid_hostname}        -> The hostname does not belong to the list of allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg}                  -> Invalid arguments
 %%
 
 % Simulator database interface function (no synchronization is required with the location's controller)
-add_location(Loc_id,Name,User,Port) ->
- db:add_location(Loc_id,Name,User,Port).
+add_location(Loc_id,Name,User,Port,HostName) ->
+ db:add_location(Loc_id,Name,User,Port,HostName).
 
 
 %% DESCRIPTION:  Adds a new empty sublocation to the database and, if it is running,
@@ -149,6 +156,7 @@ add_sublocation({Loc_id,Subloc_id},Name) ->
 %%               - Name:               The device's name (optional)
 %%               - {Loc_id,Subloc_id}: The device's sub_id, which must exist and with Subloc_id >=0
 %%               - Type:               The device's type, which must belong to the set of valid device types
+%%               - HostName:           The name of the host where to spawn the device node (a list)
 %%
 %% RETURNS:      - {ok,ok,ok}                     -> The device was successfully added, its device node
 %%                                                   was started and its controller was informed of it
@@ -166,16 +174,18 @@ add_sublocation({Loc_id,Subloc_id},Name) ->
 %%               - {error,invalid_devtype}        -> The device type is invalid
 %%               - {error,device_already_exists}  -> A device with such 'dev_id' already exists 
 %%               - {error,sublocation_not_exists} -> The 'sub_id' sublocation doesn't exist
+%%               - {error,invalid_hostname}        -> The hostname does not belong to the list of
+%%                                                    allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg}                 -> Invalid arguments
 %%
-add_device(Dev_id,Name,{Loc_id,Subloc_id},Type) ->
+add_device(Dev_id,Name,{Loc_id,Subloc_id},Type,HostName) ->
 
  % Attempt to add the device in the JANET Simulator database and, if successful, attempt to add it in the database of
  % associated location controller, taking into account the situations where it or the JANET Simulator are not running
- ctr_db_sync(add_device,[Dev_id,Name,{Loc_id,Subloc_id},Type],[Dev_id,Subloc_id,Type],Loc_id).
+ ctr_db_sync(add_device,[Dev_id,Name,{Loc_id,Subloc_id},Type,HostName],[Dev_id,Subloc_id,Type],Loc_id).
 
 
-%% =========================================================== READ ================================================================%%  
+%% ========================================================== READ =============================================================== %%  
 
 %% DESCRIPTION:  Prints the contents of all or a specific table in the database
 %%
@@ -251,7 +261,7 @@ get_record(Tabletype,Key) ->
  end.   
 
  
-%% ========================================================== UPDATE ===============================================================%% 
+%% ========================================================= UPDATE ============================================================== %% 
 
 %% DESCRIPTION:  Attempts to update a device's sublocation and, if it is running,
 %%               attempts to mirror such change in the associated location controller
@@ -326,7 +336,7 @@ update_dev_name(Dev_id,Name) ->
  db:update_dev_name(Dev_id,Name).
 
 
-%% ========================================================== DELETE ===============================================================%% 
+%% ========================================================= DELETE ============================================================== %% 
 
 %% DESCRIPTION:  Deletes a location, along with all its sublocations and devices, from the
 %%               database, also stopping their associated controller and devices nodes
@@ -421,6 +431,79 @@ delete_device(Dev_id) when is_number(Dev_id), Dev_id >0 ->
 delete_device(_) ->
  {error,badarg}.
 
+
+%% ================================================= DATABASE BACKUP AND RESTORE ================================================= %%
+
+%% DESCRIPTION:  Backups the entire Mnesia database to a file
+%%
+%% ARGUMENTS:    - (none):   The default backup file is used ("db/mnesia_backup.db")
+%%               - FileName: The backup is saved to the custom file "FileName" under
+%%                           the default Mnesia directory ("db/")
+%%
+%% RETURNS:      - ok                      -> Mnesia database successfully
+%%                                            backed up to the specified file
+%%               - {file_error,Reason}     -> Error in creating the backup file (its directory must
+%%                                            exist and its 'write' permission must be granted)
+%%               - {error,{mnesia,Reason}} -> The Mnesia database is not in a consistent state
+%%               - {error,badarg}          -> Invalid argument(s)
+%% 
+%% NOTE:         Mnesia backups can be restored using the restore()/restore(File) functions
+%%
+
+% Backup to the default file
+backup() ->
+ db:backup().
+ 
+% Backup to a custom file 
+backup(FileName) ->
+ db:backup(FileName).
+
+
+%% DESCRIPTION:  Restores the Mnesia database to the contents of a backup file
+%%
+%% ARGUMENTS:    - (none):   The default backup file is used for
+%%                           restoring the database ("db/mnesia_backup.db")
+%%               - FileName: The database is restored to the contents of the custom
+%%                           file "FileName" under the default mnesia directory ("db/")
+%%
+%% RETURNS:      - ok                       -> Database successfully restored to the
+%%                                             contents of the specified backup file
+%%               - {error,janet_running}    -> The operation cannot be performed
+%%                                             while the JANET Simulator is running
+%%               - {error,{restore,Reason}} -> Error in restoring the database from the
+%%                                             backup file (check the file to exist and
+%%                                             its 'read' permission to have been granted)
+%%               - {error,{mnesia,Reason}}  -> The Mnesia database is not in a consistent state
+%%               - {error,badarg}           -> Invalid argument(s)
+%%
+%% NOTES:        1) The current database contents will be DISCARDED by calling this function
+%%               2) Database backup files can be created via the backup()/backup(File) functions
+%%
+
+% Restore from the default backup file
+restore() ->
+ db:restore().
+ 
+% Restore from a custom backup file
+restore(FileName) ->
+ db:restore(FileName).
+ 
+ 
+%% DESCRIPTION:  Clears (empties) all database tables (but preserves the database's schema)
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok                       -> Database tables successfully cleared
+%%               - {error,janet_running}    -> The operation cannot be performed
+%%                                             while the JANET Simulator is running
+%%               - {error,{mnesia,Reason}}  -> The Mnesia database is not in a consistent state
+%%
+%% NOTE:         This function is for debugging purposes olny, and should not be called explicitly during the
+%%               JANET Simulator operations (use restore()/restore(File) to restore the database's contents)
+%%
+clear() ->
+ db:clear().
+ 
 
 %%====================================================================================================================================
 %%                                                  JANET NODES STOP AND RESTART
@@ -818,6 +901,85 @@ dev_command(_,_,_,_) ->
  {error,badarg}.
 
 
+%% =================================================== OTHER UTILITY FUNCTIONS =================================================== %%
+
+%% DESCRIPTION:  Prints a summary of the connectivity states of the remote
+%%               hosts currently used by the JANET Simulator, including:
+%%                  - The nodes hosts
+%%                  - The remote REST server
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok                        -> A summary of the connectivity states
+%%                                              of the remote hosts was printed
+%%               - {error,janet_not_running} -> The Janet Simulator is not running
+%%               - {error,timeout}           -> Timeout in retrieving the remote
+%%                                              hosts connectivity states
+%%
+%% NOTE:        The monitoring of the remote hosts connectivity states is
+%%              implemented by periodically pinging them through the underlying OS 
+%%
+print_rem_hosts_states() ->
+ try report_rem_hosts_states()
+ catch
+ 
+  % The JANET Simulator is not running
+  {error,janet_not_running} ->
+   {error,janet_not_running};
+   
+  % Timeout in the sim_hostsmonitor call
+  exit:{timeout,_} ->
+   {error,timeout}
+ end.
+
+
+%% DESCRIPTION:  Spawns a process which periodically prints the JANET Simulator
+%%               database contents indented as a tree (as of jsim:print_tree())
+%%
+%% ARGUMENTS:    - (none):        The database tree is printed with
+%%                                a default period of 10 seconds
+%%               - PeriodSeconds: The database tree is prented with a
+%%                                custom period of PeriodSeconds seconds
+%%
+%% RETURNS:      - ok -> Database monitoring process spawned
+%%
+%% NOTE:         Use demonitor_tree() for stopping the monitoring process
+%%
+
+% Default monitoring period (10 seconds)
+monitor_tree() ->
+ start_tree_monitor(10).
+
+% Custom monitoring period 
+monitor_tree(PeriodSeconds) ->
+ start_tree_monitor(PeriodSeconds).
+
+
+%% DESCRIPTION:  Stops the active monitoring of the JANET Simulator database contents by stopping the its
+%%               associated process spawned via the monitor_tree()/monitor_tree(PeriodSeconds) function
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok                 -> Database contents monitoring stopped
+%%               - {error,no_monitor} -> No database monitoring is currently active
+%%
+%% NOTE:         Use monitor_tree()/monitor_tree(PeriodSeconds) for starting the monitoring process
+%%
+demonitor_tree() ->
+ stop_tree_monitor().
+
+
+%% DESCRIPTION:  Prints an help message outlining the main functionalities
+%%               exported by the JANET Simulator application
+%%
+%% ARGUMENTS:    none
+%%
+%% RETURNS:      - ok -> Help message printed
+%%
+help() ->
+ print_help().
+ 
+ 
 %%====================================================================================================================================%
 %%                                                                                                                                    %
 %%                                                     PRIVATE HELPER FUNCTIONS                                                       %
@@ -837,15 +999,16 @@ janet_start() ->
   % Ensure the JANET Simulator not to be already running
   ok = utils:ensure_jsim_state(stopped),
 
-  % Ensure Mnesia to be running and in a consistent state 
-  ok = db:start_check_mnesia(),
-  
+  % Ensure the JANET Simulator Mnesia database to be running
+  % (automatically installing it if it is not) and in a consistent state
+  ok = db:mnesia_startup(true),
+
   % Retrieve the value of the 'sim_rest_port' configuration parameter 
   {ok,SimRESTPort} = application:get_env(janet_simulator,sim_rest_port),
   
   % Ensure te port to be used by the JANET Simulator
-  % REST server to be available in the host OS
-  case utils:is_os_port_available(SimRESTPort) of
+  % REST server to be available in the local host OS
+  case utils:is_localhost_port_available(SimRESTPort) of
   
    % If it is not, throw an error
    false ->
@@ -856,8 +1019,6 @@ janet_start() ->
     ok
   end,
 	 
-  %% [TODO]: logger:set_primary_config(#{level => warning}),  (hides the == APPLICATION INFO === messages when supervisors stop components, uncomment before release)	
-
   % Attempt to start the JANET Simulator application
   ok = application:start(janet_simulator)
   
@@ -888,18 +1049,22 @@ janet_stop() ->
   % Ensure the JANET Simulator to be running
   ok = utils:ensure_jsim_state(running),
   
+  % Stop the database monitor process, if it is active
+  stop_tree_monitor(),
+  
+  % Set the 'janet_stopping' environment variable to 'true' so to prevent the controller
+  % and device managers from reporting the termination of their nodes during shutdown
+  application:set_env(janet_simulator,janet_stopping,true),
+  
   % Attempt to stop the JANET Simulator application
   case application:stop(janet_simulator) of
    ok ->
 	 
 	% If the JANET Simulator was successfully stopped, clear its Mnesia ram_copies tables
     [{atomic,ok},{atomic,ok},{atomic,ok}] = [mnesia:clear_table(suploc),mnesia:clear_table(ctrmanager),mnesia:clear_table(devmanager)],
-   
-	%% [TODO]: This sleep is for output ordering purposes (it will not be necessary once the primary logger level will be set to "warning")
-    timer:sleep(5),                            
-	
+                       
     % Report that the JANET Simulator has successfully stopped
-    io:format("Janet Simulator stopped~n");
+    io:format("~nJANET Simulator stopped~n");
 	 
    {error,StopReason} ->
 	
@@ -917,6 +1082,12 @@ janet_stop() ->
   {error,{janet_stop,Reason}} ->
    {error,{janet_stop,Reason}}
    
+ after
+
+  % Regardless of whether the JANET Simulator was successfully stopped,
+  % reset the 'janet_stopping' environment variable to 'false'
+  application:set_env(janet_simulator,janet_stopping,false)
+  
  end.
 
 
@@ -1133,15 +1304,22 @@ print_ctr_status_change_summary(Pre_Ctr_id,{error,not_running},stop) ->
 % The controller is already running
 print_ctr_status_change_summary(Pre_Ctr_id,{error,already_running},restart) ->
  io:format("The controller ~p is already running~n",[Pre_Ctr_id]);
-
+ 
 % The controller successfully stopped
-print_ctr_status_change_summary(Pre_Ctr_id,{ok,stop},stop) ->
- io:format("The controller ~p was successfully stopped~n",[Pre_Ctr_id]);
-
+print_ctr_status_change_summary(_Pre_Ctr_id,{ok,stop},stop) ->
+ 
+ %% NOTE: Superseeded by the 'ctr_manager's directly printing their termination
+ % io:format("The controller ~p was successfully stopped~n",[Pre_Ctr_id]);
+ ok;
+ 
 % The controller successfully restarted
-print_ctr_status_change_summary(Pre_Ctr_id,{ok,restart},restart) ->
- io:format("The controller ~p was successfully restarted~n",[Pre_Ctr_id]);
+print_ctr_status_change_summary(_Pre_Ctr_id,{ok,restart},restart) ->
 
+ %% NOTE: Superseeded by the 'ctr_manager's directly printing when
+ %%       their controllers register with them (BOOTING -> CONNECTING)
+ % io:format("The controller ~p was successfully restarted~n",[Pre_Ctr_id]);
+ ok;
+ 
 % Error in stopping the controller
 print_ctr_status_change_summary(Pre_Ctr_id,{error,Reason},stop) ->
  io:format("The controller ~p raised an error in its stopping: {error,~p}~n",[Pre_Ctr_id,Reason]);
@@ -1385,19 +1563,22 @@ change_devices_statuses(DevIdList,Sup_pid,Mode) ->
   
 %% Prints a summary of the statuses change operation of multiple devices 
 %% (change_subloc_status({Loc_id,Subloc_id},Mode),print_loc_devs_statuses_change_summary(DevicesStatusesChange,Mode) helper function)
-print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,SuccessStoppedMgrs,FailedStoppedMgrs},stop) ->
- if
+print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,_SuccessStoppedMgrs,FailedStoppedMgrs},stop) ->
  
-  % If one or more devices were successfully stopped
-  length(SuccessStoppedMgrs) > 0 ->
-   
-   % Prefix all devices that were successfully stopped and print them
-   SuccessStoppedMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessStoppedMgrs ],
-   io:format("The following devices were successfully stopped: ~p~n",[SuccessStoppedMgrsStr]);
- 
-  true ->
-   ok
- end,
+ %% NOTE: The reporting of successfully stopped devices has been superseeded by the 'dev_managers'
+ %%       directly printing their termination (if the JANET Simulator is not stopping)
+ %if
+ %
+ % % If one or more devices were successfully stopped
+ % length(SuccessStoppedMgrs) > 0 ->
+ %  
+ %  % Prefix all devices that were successfully stopped and print them
+ %  SuccessStoppedMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessStoppedMgrs ],
+ %  io:format("The following devices were successfully stopped: ~p~n",[SuccessStoppedMgrsStr]);
+ %
+ % true ->
+ %  ok
+ %end,
  
  if
   
@@ -1426,19 +1607,21 @@ print_devs_statuses_change_summary({AlreadyStoppedMgrs,_,SuccessStoppedMgrs,Fail
    ok
  end;
  
-print_devs_statuses_change_summary({_,AlreadyRunningMgrs,SuccessRestartMgrs,FailedRestartMgrs},restart) ->
- if
+print_devs_statuses_change_summary({_,AlreadyRunningMgrs,_SuccessRestartMgrs,FailedRestartMgrs},restart) ->
  
-  % If one or more devices were successfully restarted
-  length(SuccessRestartMgrs) > 0 ->
-  
-   % Prefix all devices that were successfully restarted and print them
-   SuccessRestartMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessRestartMgrs ],
-   io:format("The following devices were successfully restarted: ~p~n",[SuccessRestartMgrsStr]);
-   
-  true ->
-   ok
- end,
+ %% NOTE: The reporting of successfully restarted devices is superseeded by the 'dev_managers'
+ %%       directly printing when their devices register with them (BOOTING -> CONNECTING)
+ %if
+ % % If one or more devices were successfully restarted
+ % length(SuccessRestartMgrs) > 0 ->
+ % 
+ %  % Prefix all devices that were successfully restarted and print them
+ %  SuccessRestartMgrsStr = [ utils:prefix_node_id(device,Dev_id) || Dev_id <- SuccessRestartMgrs ],
+ %  io:format("The following devices were successfully restarted: ~p~n",[SuccessRestartMgrsStr]);
+ %  
+ % true ->
+ %  ok
+ %end,
  
  if
  
@@ -1601,7 +1784,7 @@ print_mgrs_list(StrHeader,MgrsList) ->
  io:format("~n~s ",[StrHeader]),
  if
   length(MgrsList) > 0 ->
-   io:format("~p",[MgrsList]);
+   io:format("~0p",[MgrsList]);
   true ->
    io:format("(none)")
  end.
@@ -1728,20 +1911,330 @@ gen_dev_command(Dev_id,Module,Function,ArgsList) ->
    end	   
  end.
 
+%%====================================================================================================================================
+%%                                                  OTHER UTILITY HELPER FUNCTIONS                                                       
+%%====================================================================================================================================
+
+%% Retrieves and reports a summary of the connectivity states of the remote hosts
+%% currently used by the JANET Simulator (print_rem_hosts_states() helper function)
+report_rem_hosts_states() ->
+ 
+ % Ensure the JANET Simulator to be running
+ ok = utils:ensure_jsim_state(running), 
+ 
+ % Retrieve the list of offline remote hosts from
+ % the remote hosts monitor process ('sim_hostsmonitor')
+ OfflineRemHosts = gen_statem:call(sim_hostsmonitor,get_remhosts_states,5000),
+ 
+ % Print a summary of the connectivity states of remote hosts
+ print_rem_hosts_states_summary(OfflineRemHosts).
+
+  
+%% Prints a summary of the connectivity states of the remote hosts used in
+%% the JANET Simulator application (report_rem_hosts_states() helper function)
+
+% No remote host is present (the remote REST server and all nodes hosts map to the localhost)
+print_rem_hosts_states_summary(nohosts) ->
+ io:format("No remote host is currently used by the JANET Simulator (the remote REST server and all nodes hosts reside in the localhost)~n");
+
+% All remote hosts online
+print_rem_hosts_states_summary({[],[]}) ->
+ io:format("All remote hosts used by the JANET Simulator appear to be online~n");
+
+% Only the remote REST server is offline
+print_rem_hosts_states_summary({[],RemRESTSrvAddr}) ->
+ io:format("The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]);
+
+% Only a single remote nodes host is offline
+print_rem_hosts_states_summary({RemNodesHost,[]}) when length(RemNodesHost) == 1 ->
+ io:format("The remote nodes host \"~s\" appears to be offline~n",[RemNodesHost]);
+
+% Only (multiple) remote nodes hosts are offline
+print_rem_hosts_states_summary({RemNodesHosts,[]}) ->
+ io:format("The following remote nodes hosts appear to be offline: ~0p~n",[RemNodesHosts]);
+
+% The remote REST server and a single remote nodes host are offline
+print_rem_hosts_states_summary({RemNodesHost,RemRESTSrvAddr}) when length(RemNodesHost) == 1 ->
+ io:format(" - The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]),
+ io:format(" - The remote nodes host \"~s\" appears to be offline~n",[RemNodesHost]);
+ 
+% The remote REST server and multiple remote nodes hosts are offline
+print_rem_hosts_states_summary({RemNodesHosts,RemRESTSrvAddr}) ->
+ io:format(" - The remote REST server \"~s\" appears to be offline~n",[RemRESTSrvAddr]),
+ io:format(" - The following remote nodes hosts appear to be offline: ~0p~n",[RemNodesHosts]).
+ 
+
+%% Spawns a process which periodically prints the JANET Simulator database contents
+%% indented as a tree (monitor_tree(),monitor_tree(PeriodSeconds) helper function)
+start_tree_monitor(PeriodSeconds) ->
+
+ % Check whether the database monitoring process is already
+ % active via the 'db_monitor' environment variable
+ case application:get_env(janet_simulator,db_monitor) of
+ 
+  % If it is, send it a poison
+  % pill for stopping its execution 
+  {ok,OldDBMonitor} when is_pid(OldDBMonitor) ->
+   OldDBMonitor ! stop;
+  
+  % Otherwise, proceed
+  undefined ->
+   ok
+ end,
+ 
+ % Spawn the database monitoring process
+ DBMonitor = spawn(fun() -> db_monitor(PeriodSeconds) end),
+
+ % Register the PID of the database monitoring process in an
+ % environment variable of the JANET Simulator application
+ application:set_env(janet_simulator,db_monitor,DBMonitor).
+ 
+
+%% Stops the active monitoring of the JANET Simulator database contents by stopping the its associated process
+%% spawned via the monitor_tree()/monitor_tree(PeriodSeconds) function (demonitor_tree() helper function)
+stop_tree_monitor() ->
+ 
+ % Check whether the database monitoring process is
+ % active via the 'db_monitor' environment variable
+ case application:get_env(janet_simulator,db_monitor) of
+  {ok,DBMonitor} when is_pid(DBMonitor) ->
+  
+   % If it is, send it a poison
+   % pill for stopping its execution 
+   DBMonitor ! stop,
+   
+   % Delete the 'db_monitor' environment variable
+   application:unset_env(janet_simulator,db_monitor),
+   
+   % Return 'ok'
+   ok;
+   
+  % Otherwise, return that no database
+  % monitoring is currently active
+  undefined ->
+   {error,no_monitor}
+ end.
+ 
+ 
+%% DESCRIPTION:  Body function of the database monitor process, which periodically prints the
+%%               JANET Simulator database contents indented as a tree (as of jsim:print_tree())
+%%
+%% ARGUMENTS:    - PeriodSeconds: The period by which printing the database tree
+%%
+%% RETURNS:      - (can only exit by receiving the 'stop' poison pill)
+%%
+%% NOTE:         - Use monitor_tree()/monitor_tree(PeriodSeconds) for spawning this process
+%%               - Use demonitor_tree() for stopping this process
+%%
+db_monitor(PeriodSeconds) ->
+ 
+ % Await the 'stop' poison pill for up to "PeriodSeconds" seconds
+ receive
+ 
+  % If the poison pill was received,
+  % exit with reason 'normal'
+  stop ->
+   exit(normal)
+    
+ % After the "PeriodSeconds" timeeout (or period)
+ after PeriodSeconds * 1000 ->
+ 
+  % Print the tree monitoring header
+  io:format("~nJANET Simulator Database @ ~s~n",[string:slice(calendar:system_time_to_rfc3339(erlang:system_time(second),[{time_designator,$\s}]),0,19)]),
+  io:format("===================================================================================================="),
+  
+  % Print the JANET Simulator database contents indented as a tree
+  print_tree(),
+  
+  % Recursively call the process body
+  db_monitor(PeriodSeconds)
+ end. 
+
+
+%% Prints an help message outlining the main functionalities exported
+%% by the JANET Simulator application (help() helper function)
+print_help() ->
+
+ % Initial newline
+ io:format("~n"),
+
+ % SIMULATION START AND STOP
+ io:format("SIMULATION START AND STOP~n"),
+ io:format("=========================~n"),
+ io:format(" - jsim:run()      -> Starts the JANET Simulator application~n"),
+ io:format(" - jsim:stop()     -> Stops the JANET Simulator application~n"),
+ io:format(" - jsim:shutdown() -> Stops the JANET Simulator application and its ERTS~n"),
+ io:format("~n~n"),
+ 
+ % SIMULATION MONITORING
+ io:format("SIMULATION MONITORING~n"),
+ io:format("=====================~n~n"),
+ io:format("Print Database Tree~n"),
+ io:format("-------------------~n"),
+ io:format(" - jsim:print_tree()            -> Prints the database contents indented as a tree~n"),
+ io:format(" - jsim:print_tree(user,\"User\") -> Prints the database contents associated with a specific user indented as a tree~n"),
+ io:format(" - jsim:print_tree(loc,Loc_id)  -> Prints the database contents associated with a specific location indented as a tree~n"),
+ io:format(" - jsim:print_tree(sub,Sub_id)  -> Prints the database contents associated with a specific sublocation indented as a tree~n"),
+ io:format("~n"),
+ io:format("Monitor Database Tree~n"),
+ io:format("---------------------~n"),
+ io:format(" - jsim:monitor_tree()             -> Prints the database contents indented as a tree every 10 seconds~n"),
+ io:format(" - jsim:monitor_tree(PeriodSecs)   -> Prints the database contents indented as a tree every PeriodSecs seconds~n"),
+ io:format(" - jsim:demonitor_tree(PeriodSecs) -> Stops the periodic printing of the database contents indented as a tree~n"),
+ io:format("~n"),
+ io:format("Print Running and Stopped Nodes~n"),
+ io:format("-------------------------------~n"),
+ io:format(" - jsim:print_nodes()                -> Prints a summary of running and stopped nodes~n"),
+ io:format(" - jsim:print_nodes(running|stopped) -> Prints a summary of running or stopped nodes~n"),
+ io:format("~n"),
+ io:format("Print JANET Simulator Mnesia Tables~n"),
+ io:format("-----------------------------------~n"),
+ io:format(" - jsim:print_table()                 -> Prints the contents of all database tables~n"),
+ io:format(" - jsim:print_table(SimTable)         -> Prints the contents of a specific database table~n"),
+ io:format(" - jsim:get_record(SimTable,RecordID) -> Prints a specific table record~n"),
+ io:format("~n"),
+ io:format("Print JANET Controllers Mnesia Tables~n"),
+ io:format("-------------------------------------~n"),
+ io:format(" - jsim:print_ctr_tree(Loc_id)           -> Print the contents of a controller's database indented as a tree~n"),
+ io:format(" - jsim:print_ctr_table(Loc_id)          -> Prints all tables of a controller's database~n"),
+ io:format(" - jsim:print_ctr_table(Loc_id,CtrTable) -> Prints a specific table of a controller's database~n"),
+ io:format("~n"),
+ io:format("Remote Hosts Connectivity States~n"),
+ io:format("--------------------------------~n"),
+ io:format(" - jsim:print_rem_hosts_states() -> Prints a summary of the connectivity states of the remote hosts used in the application~n"),
+ io:format("~n~n"),
+ 
+ % JANET NODES START AND STOP
+ io:format("JANET NODES START AND STOP~n"),
+ io:format("==========================~n~n"),
+ io:format("Per-Node Start and Stop~n"),
+ io:format("-----------------------~n"),
+ io:format(" - jsim:stop_node(ctr|dev,Loc_id|Dev_id)    -> Stops the controller or device node of the given NodeID~n"),
+ io:format(" - jsim:restart_node(ctr|dev,Loc_id|Dev_id) -> Restarts the controller or device node of the given NodeID~n"),
+ io:format("~n"),
+ io:format("Per-Sublocation Start and Stop~n"),
+ io:format("------------------------------~n"),
+ io:format(" - jsim:stop_subloc(Sub_id)    -> Stops all device nodes in the given sublocation~n"),
+ io:format(" - jsim:restart_subloc(Sub_id) -> Restarts all device nodes in the given sublocation~n"),
+ io:format("~n"),
+ io:format("Per-Location Start and Stop~n"),
+ io:format("---------------------------~n"),
+ io:format(" - jsim:stop_loc(Loc_id)    -> Stops the controller and all device nodes in the given location~n"),
+ io:format(" - jsim:restart_loc(Loc_id) -> Restarts the controller and all device nodes in the given location~n"),
+ io:format("~n"),
+ io:format("All-Nodes Start and Stop~n"),
+ io:format("------------------------~n"),
+ io:format(" - jsim:stop_all_nodes()    -> Stops all controller and device nodes in the application~n"),
+ io:format(" - jsim:restart_all_nodes() -> Restarts all controller and device nodes in the application~n"),
+ io:format("~n~n"),
+ 
+ % DATABASE MANIPULATION
+ io:format("DATABASE MANIPULATION~n"),
+ io:format("=====================~n"),
+ io:format("WARNING: Using these commands WILL lead to inconsistencies with the remote database~n"),
+ io:format("~n"),
+ io:format("Create~n"),
+ io:format("------~n"),
+ io:format(" - jsim:add_location(Loc_id,\"Name\",User,Port,\"HostName\") -> Adds a new location, also starting its~n"),
+ io:format("                                                            controller node if the application is running~n"),
+ io:format(" - jsim:add_sublocation(Sub_id,Name)                     -> Adds a new sublocation in a location~n"),
+ io:format(" - jsim:add_device(Dev_id,\"Name\",Sub_id,Type,\"HostName\") -> Adds a new device in a sublocation, also~n"),
+ io:format("                                                            starting its node if the application is running~n"),
+ io:format("~n"),
+ io:format("Update~n"),
+ io:format("------~n"),
+ io:format(" - jsim:dev_config_change(Dev_id,Config)  -> Changes a device node's configuration~n"),
+ io:format(" - jsim:update_dev_subloc(Dev_id,Sub_id)  -> Changes a device's sublocation within its location~n"),
+ io:format(" - jsim:update_loc_name(Loc_id,\"Name\")    -> Updates a location's name~n"),
+ io:format(" - jsim:update_subloc_name(Sub_id,\"Name\") -> Updates a sublocation's name~n"),
+ io:format(" - jsim:update_dev_name(Dev_id,\"Name\")    -> Updates a device's name~n"),
+ io:format("~n"),
+ io:format("Delete~n"),
+ io:format("------~n"),
+ io:format(" - jsim:delete_location(Loc_id)    -> Deletes a location, along with all its sublocations and devices~n"),
+ io:format(" - jsim:delete_sublocation(Sub_id) -> Deletes a sublocation, moving its devices in the default sublocation~n"),
+ io:format(" - jsim:delete_device(Dev_id)      -> Deletes a device~n"),
+ io:format("~n~n"),
+  
+ % DATABASE BACKUP AND RESTORE
+ io:format("DATABASE BACKUP AND RESTORE~n"),
+ io:format("===========================~n"),
+ io:format("WARNING: Using these commands WILL lead to inconsistencies with the remote database~n"),
+ io:format("~n"),
+ io:format("Backup~n"),
+ io:format("------~n"),
+ io:format(" - jsim:backup()           -> Backs up the database contents to the \"db/mnesia_backup.db\" file~n"),
+ io:format(" - jsim:backup(\"FileName\") -> Backs up the database contents to \"FileName\" under the \"db/\" directory~n"),
+ io:format("~n"),
+ io:format("Restore~n"),
+ io:format("------~n"),
+ io:format(" - jsim:restore()           -> Restores the database to the contents of the \"db/mnesia_backup.db\" file~n"),
+ io:format(" - jsim:restore(\"FileName\") -> Restores the database to the contents of \"FileName\" under the \"db/\" directory~n"),
+ io:format("~n"),
+ io:format("Clear~n"),
+ io:format("------~n"),
+ io:format(" - jsim:clear() -> Clears all database contents~n"),
+ 
+ % Trailing newline
+ io:format("~n").
+ 
  
 %%====================================================================================================================================
 %%                                             APPLICATION BEHAVIOUR CALLBACK FUNCTIONS                                                        
 %%====================================================================================================================================
 
-%% Called during the "application:start(janet_simulator)"
-%% call for starting the JANET Simulator application
+%% ============================================================ START ============================================================ %% 
+
+%% Called during the "application:start(janet_simulator)" call for starting the JANET Simulator application
 start(normal,_Args) ->
+
+ % Ensure the JANET Simulator to be started in the appropriate
+ % distributed mode depending on the OS host family
+ check_os_distributed_mode(),
 
  % Start the root supervision tree of the JANET Simulator application
  sup_jsim:start_link().
  
  
-%% Called during the "application:stop(janet_simulator)"
-%% call AFTER the application has been stopped
+%% Ensures the JANET Simulator to be started in the appropriate distributed
+%% mode depending on the OS host family (start(normal,_Args) helper function)
+check_os_distributed_mode() ->
+
+ % Retrieve the host OS family ('unix'|'win32')
+ {OSFamily,_OSName} = os:type(),
+ 
+ % Retrieve the 'distributed_mode' environment variable
+ {ok,DistributedMode} = application:get_env(distributed_mode), 
+ 
+ % Depending on the combination of the two
+ case {OSFamily,DistributedMode} of
+  {unix,true} ->
+  
+   % If distributed mode is enabled on a Unix-based system, do nothing
+   ok;
+   
+  {win32,false} ->
+  
+   % If distributed mode is disabled on a Windows system, do nothing 
+   ok;
+   
+  {unix,false} ->
+  
+    % If distributed mode is disabled on a Unix-based system, notify the user that
+    % all nodes will be spawned in the JANET Simulator host (i.e. the localhost)
+   io:format("<NOTICE> JANET Simulator started in non-distributed mode: all nodes will be spawned in the localhost~n");
+   
+  {win32,true} ->
+  
+   % If distributed mode is enabled on a Windows system, warn the user that such mode
+   % is not supported on Windows hosts and fallback to the non-distributed mode
+   io:format("<WARNING> The JANET Simulator distributed mode is NOT supported on Windows hosts, falling back to the non-distributed mode (all nodes will be spawned in the localhost)~n"),
+   application:set_env(janet_simulator,distributed_mode,false)
+ end.   
+ 
+
+%% ============================================================ STOP ============================================================ %% 
+
+%% Called during the "application:stop(janet_simulator)" call AFTER the application has been stopped
 stop(_State) ->
  ok.

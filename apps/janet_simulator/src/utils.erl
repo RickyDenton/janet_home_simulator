@@ -5,15 +5,17 @@
 %% ----------------------------------- DEVICES UTILITY FUNCTIONS ----------------------------------- %%
 -export([is_valid_devtype/1,is_valid_devconfig/2,build_dev_config_wildcard/2,check_merge_devconfigs/3,
          get_devtype_default_config/1,get_devtype_default_config_json/1,deprefix_dev_config/1,
-		 devconfig_to_map_all/1,devconfig_to_map_diff/2]). 
+		 devconfig_to_map_all/1,devconfig_to_map_diff/2,timestamp_to_binary/1]). 
 		 
 %% ------------------------------------ NODES UTILITY FUNCTIONS ------------------------------------ %%		 
--export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_os_port_available/1]).  
+-export([resolve_nodetype_shorthand/1,prefix_node_id/2,is_remote_host/1,is_allowed_node_host/1,
+         is_localhost_port_available/1,is_remotehost_port_available/2,get_effective_hostname/1]).
 
 %% --------------------------------- APPLICATIONS UTILITY FUNCTIONS --------------------------------- %%
 -export([ensure_jsim_state/1,is_running/1]).
 
 -include("devtypes_configurations_definitions.hrl").  % Janet Device Configuration Records Definitions
+
 
 %%====================================================================================================================================
 %%                                                    DEVICES UTILITY FUNCTIONS
@@ -537,6 +539,23 @@ map_diff(Map,_TraitName,SameValue,SameValue) when is_map(Map)->
 map_diff(Map,TraitName,_OldValue,NewValue) when is_map(Map), is_atom(TraitName) ->
  Map#{TraitName => NewValue}. 
  
+
+%% DESCRIPTION:  Converts a timestamp in erlang:system_time(seconds) (Unix Time)
+%%               to a RFC3339 binary for it to be sent to the remote server 
+%%
+%% ARGUMENTS:    - Timestamp: The Unix time timestamp to be converted
+%%                            to a RFC3339 binary (an integer >0)
+%%
+%% RETURNS:      - <<"Timestamp_RFC3339">> -> The Timestamp RFC3339 binary representation
+%%               - {error,bardarg}         -> Invalid arguments
+%%
+timestamp_to_binary(Timestamp) when is_integer(Timestamp), Timestamp > 0 ->
+ list_to_binary(string:slice(calendar:system_time_to_rfc3339(Timestamp),0,19));
+ 
+% Non-integer timestamp
+timestamp_to_binary(_NonPositiveIntegerTimestamp) ->
+ {error,badarg}.
+ 
  
 %%====================================================================================================================================
 %%                                                     NODES UTILITY FUNCTIONS
@@ -594,15 +613,72 @@ prefix_node_id(NodeTypeShorthand,Node_id) ->
  prefix_node_id(NodeType,Node_id).
  
 
-%% DESCRIPTION:  Checks if a port is currently available in the host OS
+%% DESCRIPTION:  Determines whether a HostName is a remote
+%%               host or it maps in fact to the localhost
 %%
-%% ARGUMENTS:    - Port: The port to check the availability (integer > 0)
+%% ARGUMENTS:    - HostName:  The host to check if it is remote or not (a list)
 %%
-%% RETURNS:      - true           -> Port currently available in the host OS
-%%               - false          -> Port not currently available in the host OS
+%% RETURNS:      - true           -> HostName is a remote host
+%%               - false          -> HostName maps to the localhost
+%%               - {error,badarg} -> Invalid arguments
+%%  
+is_remote_host(HostName) when is_list(HostName) ->
+ 
+ % Retrieve the JANET Simulator host name
+ JSimHostName = net_adm:localhost(),
+
+ if
+  
+  % If the HostName maps to the
+  % localhost, it is not a remote host
+  HostName == JSimHostName orelse
+  HostName == "localhost"  orelse
+  HostName == "127.0.0.1"  ->
+   false;
+   
+  % Otherwise, it is a remote host
+  true ->
+   true
+ end;
+ 
+is_remote_host(_NonListHostName) ->
+ {error,badarg}. 
+ 
+
+%% DESCRIPTION:  Checks if a hostname belongs to the list of
+%%               allowed hosts JANET nodes can be deployed in
+%%
+%% ARGUMENTS:    - HostName: The host name to check
+%%
+%% RETURNS:      - true           -> The host belongs to the list of allowed
+%%                                   hosts where JANET nodes can be deployed in
+%%               - false          -> The host does NOT belong to the list of
+%%                                   allowed hosts JANET nodes can be deployed in
 %%               - {error,badarg} -> Invalid arguments
 %%
-is_os_port_available(Port) when is_integer(Port), Port > 0 ->
+is_allowed_node_host(HostName) when is_list(HostName) ->
+
+ % Retrieve the list of nodes JANET nodes can be
+ % deployed in from the 'nodes_hosts' environment variable
+ {ok,NodesHosts} = application:get_env(janet_simulator,nodes_hosts),
+ 
+ % If the HostName belong to the list of allowed
+ % hosts return 'true', otherwise 'false'
+ lists:member(HostName,NodesHosts);
+  
+is_allowed_node_host(_NonListHostName) ->
+ {error,badarg}.
+ 
+ 
+%% DESCRIPTION:  Checks if a port is currently available in the local host OS
+%%
+%% ARGUMENTS:    - Port:   The port to check the availability (integer > 0)
+%%
+%% RETURNS:      - true           -> Port currently available in the local host OS
+%%               - false          -> Port not currently available in the local host OS
+%%               - {error,badarg} -> Invalid arguments
+%%
+is_localhost_port_available(Port) when is_integer(Port), Port > 0 ->
 
  % Attempt to bind the process to the port in
  % the host OS using a default configuration
@@ -617,15 +693,82 @@ is_os_port_available(Port) when is_integer(Port), Port > 0 ->
   
   _ ->
   
-   % If the binding was unsuccessful the port
-   % is not currently available in the host OS
+   % If the binding was unsuccessful the port is
+   % not currently available in the local host OS
    false
  end;
    
-is_os_port_available(_) ->
+is_localhost_port_available(_Port) ->
  {error,badarg}.
+
+
+%% DESCRIPTION:  Checks if a port is currently available in a remote host OS
+%%
+%% ARGUMENTS:    - HostName: The host where to check for the port availability (a list)
+%%               - Port:     The port to check the availability (integer > 0)
+%%
+%% RETURNS:      - true           -> Port POSSIBLY* available in the remote host OS
+%%               - false          -> Port not currently available in the remote host OS
+%%               - {error,badarg} -> Invalid arguments
+%%
+%% TODO*: In its current implementation this function ensures the port to be available only
+%%        if the remote host maps in fact to the localhost, where, given the special-purpose
+%%        scope of the simulation system and the fact that controller nodes (and more precisely
+%%        their 'ctr_resthandler' modules) are capable of handling port allocation conflicts,
+%%        a distributed synchronous port availability mechanism is left to future developments
+%%
+is_remotehost_port_available(HostName,Port) when is_list(HostName), is_integer(Port), Port > 0 ->
  
+ % Check if HostName is a remote host
+ case is_remote_host(HostName) of
  
+  % If it is not, check for the Port
+  % to be available in the localhost
+  false ->
+   is_localhost_port_available(Port);
+  
+  % Otherwise ASSUME* the port to
+  % be available on the remote host
+  true ->
+   is_localhost_port_available(Port)
+ end;
+ 
+is_remotehost_port_available(_HostName,_Port) ->
+ {error,badarg}.
+
+
+%% DESCRIPTION:  Returns the effective hostname of a JANET node to be
+%%               spawned depending on the JANET Simulator distributed mode
+%%
+%% ARGUMENTS:    - HostName: The candidate (or distributed) node hostname (a list)
+%%
+%% RETURNS:      - EffectiveHostName -> The effective hostname to be used for the node
+%%                                      depending on the JANET Simulator distributed mode
+%%               - {error,badarg} -> Invalid arguments
+%%
+get_effective_hostname(HostName) when is_list(HostName) ->
+
+ % Retrieve the 'distributed_mode' environment variable
+ {ok,DistributedMode} = application:get_env(distributed_mode),
+    
+ % Depending on whether distributed mode is enabled
+ case DistributedMode of
+  
+  % If it is, the node effective hostname is given
+  % by its candidate (or distributed) hostname
+  true ->
+   HostName;
+   
+  % Otherwise if distributed mode is disable the effective hostname
+  % is given by the JANET SImulator hostname (i.e. the localhost) 
+  false ->
+   net_adm:localhost()
+ end;
+ 
+get_effective_hostname(_NonListHostName) -> 
+ {error,badarg}.
+
+  
 %%====================================================================================================================================
 %%                                                  APPLICATIONS UTILITY FUNCTIONS
 %%====================================================================================================================================

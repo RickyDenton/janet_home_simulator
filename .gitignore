@@ -1,5 +1,6 @@
 *.beam
 *.dump
+db/mnesia.db/
 
 # From REBAR3
 _checkouts
@@ -26,4 +27,3 @@ ebin
 .edts
 env
 src/vendored/r3_safe_erl_term.erl
-*.db

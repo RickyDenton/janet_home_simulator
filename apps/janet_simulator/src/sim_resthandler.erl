@@ -22,9 +22,8 @@
 %% ======================================================== INIT_HANDLER ======================================================== %%
 init_handler(_) ->
  
- % Retrieve the 'sim_rest_port' and 'remote_rest_client' environment variables
+ % Retrieve the 'sim_rest_port' environment variable
  {ok,SimRESTPort} = application:get_env(sim_rest_port),
- {ok,RemoteRESTClient} = application:get_env(remote_rest_client),
  
  % Define the REST listener name
  ListenerName = sim_resthandler,
@@ -36,7 +35,7 @@ init_handler(_) ->
  Paths = [
           % RESOURCE: /location/:loc_id
 		  % ALLOWED METHODS: 
-          %   - PUT    -> add_location(Loc_id,Name,User,Port)
+          %   - PUT    -> add_location(Loc_id,Name,User,Port,HostName)
           %   - POST   -> update_loc_name(Loc_id,Name)
           %   - DELETE -> delete_location(Loc_id)
 		  %
@@ -56,7 +55,7 @@ init_handler(_) ->
 	     ],
 			
  % Return the initialization tuple to the behaviour engine
- {ok,SimRESTPort,RemoteRESTClient,ListenerName,Paths}.
+ {ok,SimRESTPort,ListenerName,Paths}.
  
  
 %% ============================================================ INIT ============================================================ %%
@@ -84,6 +83,10 @@ err_to_code_msg({port_already_taken,Port}) ->
 % Trying to add a location whose port is currently unavailable in the host OS
 err_to_code_msg({host_port_taken,Port}) ->
  {412,io_lib:format("<ERROR> The specified \"port\" (~w) is currently unavailable in the host OS",[Port])};
+
+% Trying to deploy the location controller on an unallowed nodes host
+err_to_code_msg({invalid_hostname,HostName}) ->
+ {406,io_lib:format("<ERROR> The specified \"hostname\" (~s) does not belong to the list of allowed hosts where JANET nodes can be deployed in",[HostName])};
 
 % The location was added into the database, but an internal error occured in starting its controller node
 err_to_code_msg({controller_not_started,InternalError}) ->
@@ -144,7 +147,7 @@ os_port_conflict(RESTPort) ->
 
 %% ALLOWED METHODS:
 %% ---------------
-%%   - PUT    -> add_location(Loc_id,Name,User,Port)
+%%   - PUT    -> add_location(Loc_id,Name,User,Port,HostName)
 %%   - POST   -> update_loc_name(Loc_id,Name)
 %%   - DELETE -> delete_location(Loc_id)
 %%
@@ -168,13 +171,14 @@ res_loc_handler(Req) ->
  {OpHandlerName,ExpBodyParams} =
  case Method of
  
-  % PUT -> add_location(Loc_id,Name,User,Port)
+  % PUT -> add_location(Loc_id,Name,User,Port,HostName)
   <<"PUT">> ->
    {add_location_handler,    % Operation handler name
     [
-     {name,list,optional},   % "Name" parameter (optional)
-     {user,list,optional},   % "User" parameter (optional)
-     {port,integer,30000}    % "Port" parameter (>= 30000)
+     {name,list,optional},     % "Name" parameter     (optional)
+     {user,list,optional},     % "User" parameter     (optional)
+     {port,integer,30000},     % "Port" parameter     (>= 30000)
+	 {hostname,list,required}  % "HostName" parameter (required)
 	]
    };
 
@@ -200,14 +204,14 @@ res_loc_handler(Req) ->
  
 %% ADD_LOCATION (PUT /location/:loc_id)
 %% ============
-add_location_handler(Req,[Loc_id,Name,User,Port]) ->
+add_location_handler(Req,[Loc_id,Name,User,Port,HostName]) ->
  
  % Attempt to add the location and start its associated controller node
- case jsim:add_location(Loc_id,Name,User,Port) of
+ case jsim:add_location(Loc_id,Name,User,Port,HostName) of
   {ok,ok} ->
    
    % If the location was added and its controller node was started, report the success of the operation
-   io:format("[~p]: Added location (loc_id = ~w, name = ~p, user = ~p, port = ~w)~n",[?FUNCTION_NAME,Loc_id,Name,User,Port]),
+   io:format("[~p]: Added location (loc_id = ~w, name = ~p, user = ~p, port = ~w, hostname = ~s)~n",[?FUNCTION_NAME,Loc_id,Name,User,Port,HostName]),
    
    % Define the success HTTP response to be replied to the client
    cowboy_req:reply(201,Req);
@@ -225,6 +229,10 @@ add_location_handler(Req,[Loc_id,Name,User,Port]) ->
   % Trying to add a location whose port is currently unavailable in the host OS
   {error,host_port_taken} ->
    throw({host_port_taken,Port});
+   
+  % Trying to deploy the location controller on an unallowed nodes host
+  {error,invalid_hostname} ->
+   throw({invalid_hostname,HostName});
    
   % The location was added into the database, but an
   % internal error occured in starting its controller node

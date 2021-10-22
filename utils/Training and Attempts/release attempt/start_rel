@@ -1,0 +1,2 @@
+#!/bin/bash
+rebar3 release && ./_build/default/rel/janet_simulator/bin/janet_simulator console

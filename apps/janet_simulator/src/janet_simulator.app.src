@@ -4,13 +4,15 @@
  janet_simulator,				            % Application Name
  [
   {description,"JANET Home Simulator"},   	% Application Description
-  {vsn,"0.0.1"},							% Application Version
+  {vsn,"0.9.0"},							% Application Version
   {modules,[jsim,db,utils,sup_jsim,         % Application-specific Modules
             sup_locs,locs_init,sup_loc,
 			loc_devs_init,ctr_manager,
-			dev_manager,gen_resthandler,
-			sim_resthandler]},
-  {registered,[sup_locs]},                  % Application Registered Names
+			dev_manager,node_starter,
+			gen_resthandler,
+			sim_resthandler,
+			sim_hostsmonitor]},
+  {registered,[sup_locs,sim_hostsmonitor]}, % Application Registered Names
   {applications,[mnesia,stdlib,kernel]},    % Application Dependencies
   {mod,{jsim,[]}},                          % Application Callback Module and Arguments([] = 'normal')
   {licenses, ["Apache 2.0"]},               % Licenses (added by Rebar3)
