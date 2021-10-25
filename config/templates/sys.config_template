@@ -35,8 +35,8 @@
 
    % NODES_HOSTS
    % ===========
-   % DESCRIPTION:    The list of hostnames JANET
-   %                 nodes can be deployed in
+   % DESCRIPTION:    The list of hostnames where
+   %                 JANET nodes can be deployed in
    % ALLOWED VALUES: [list()/string()]
    % NOTE:           If the JANET Simulator host is to be included, use the
    %                 full machine name (e.g. "MyComputer") over "localhost"
