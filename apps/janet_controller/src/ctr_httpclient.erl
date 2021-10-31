@@ -13,6 +13,7 @@
 		 conn_state,        % Whether the Controller has established a connection with the remote REST server ('connecting'|'online')
 		 conn_pid,          % The PID of the Gun connection process maintaining a connection with the remote REST server
 		 conn_ref,          % The reference used for monitoring the Gun connection process
+		 rest_path,         % The remote REST server path where to send device state and connectivity updates
 		 streams_refs,      % The list of references associated with HTTP requests pending a response
 		 devconn_backlog,   % The backlog of postponed device connection updates to be sent to the remote REST server (a list)
          devcfg_backlog     % The backlog of postponed device configuration updates to be sent to the remote REST server (a list)
@@ -53,6 +54,9 @@ handle_continue(init,_SrvState) ->
   % Retrieve the user the location belongs to [REMOTE SERVER COMPATIBILITY]
  {ok,Loc_user} = application:get_env(janet_controller,loc_user),
 
+ % Retrieve the remote REST server path
+ {ok,RemoteRESTServerPath} = application:get_env(janet_controller,remote_rest_server_path),
+
  % Ensure that all dependencies of the Gun HTTP client have been started
  {ok,_GunDepsStarted} = application:ensure_all_started(gun),
  
@@ -66,7 +70,7 @@ handle_continue(init,_SrvState) ->
  {ConnPid,ConnRef} = gun_spawn(),
  
  % Return the server initial state 
- {noreply,#httpcstate{loc_id = Loc_id, loc_user = Loc_user, conn_state = connecting, conn_pid = ConnPid, conn_ref = ConnRef, streams_refs = [], devconn_backlog = [], devcfg_backlog = []}}.
+ {noreply,#httpcstate{loc_id = Loc_id, loc_user = Loc_user, conn_state = connecting, conn_pid = ConnPid, conn_ref = ConnRef, rest_path = RemoteRESTServerPath, streams_refs = [], devconn_backlog = [], devcfg_backlog = []}}.
 
 
 %% ===================================================== HANDLE_CALL (STUB) ===================================================== %% 
@@ -104,12 +108,12 @@ handle_call(Request,From,SrvState=#httpcstate{loc_id=Loc_id}) ->
 %%
 
 %% Controller ONLINE -> Push the device connection update to the remote REST server 
-handle_cast({dev_conn_update,Dev_id,DevConnState,DevHandlerPid,Timestamp},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state=online,conn_pid=ConnPid,streams_refs=StreamsRefs})
+handle_cast({dev_conn_update,Dev_id,DevConnState,DevHandlerPid,Timestamp},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state=online,conn_pid=ConnPid,rest_path=RESTPath,streams_refs=StreamsRefs})
                                                                                                when is_integer(Dev_id), Dev_id > 0, node(DevHandlerPid) =:= node()  ->
  
  % Attempt to send the device connection update, obtaining the stream
  % reference associated with the HTTP request enclosed in a list
- DevConnStreamRef = send_devconn_updates([{Dev_id,DevConnState,Timestamp}],ConnPid,Loc_user,Loc_id),
+ DevConnStreamRef = send_devconn_updates([{Dev_id,DevConnState,Timestamp}],ConnPid,Loc_user,Loc_id,RESTPath),
  
  % Append the "DevConnStreamRef" into the 'streams_refs" state variable
  {noreply,SrvState#httpcstate{streams_refs = StreamsRefs ++ DevConnStreamRef}};
@@ -145,12 +149,12 @@ handle_cast({dev_conn_update,Dev_id,DevConnState,DevHandlerPid,Timestamp},SrvSta
 %%
 
 %% Controller ONLINE -> Push the device configuration update to the remote REST server 
-handle_cast({dev_config_update,DevCfgUpdates,DevHandlerPid},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state=online,conn_pid=ConnPid,streams_refs=StreamsRefs})
+handle_cast({dev_config_update,DevCfgUpdates,DevHandlerPid},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state=online,conn_pid=ConnPid,rest_path=RESTPath,streams_refs=StreamsRefs})
                                                                                   when is_list(DevCfgUpdates), node(DevHandlerPid) =:= node() ->
  
  % Attempt to send the device configuration update, obtaining the
  % stream reference associated with the HTTP request enclosed in a list
- DevCfgStreamRef = send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id),
+ DevCfgStreamRef = send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id,RESTPath),
  
  % Append the "DevCfgStreamRef" into the 'streams_refs" state variable
  {noreply,SrvState#httpcstate{streams_refs = StreamsRefs ++ DevCfgStreamRef}};
@@ -195,7 +199,7 @@ handle_cast(Request,SrvState=#httpcstate{loc_id=Loc_id}) ->
 %% NEW STATE: Update the 'conn_state' to 'online', clear both backlogs, and append the StreamRefs
 %%            associated with sending thebacklogs, if any, to the 'streams_refs' state variable
 %%
-handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state='connecting',conn_pid=ConnPid,devconn_backlog=ConnBacklog,devcfg_backlog=CfgBacklog,streams_refs=StreamsRefs}) ->
+handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state='connecting',conn_pid=ConnPid,rest_path=RESTPath,devconn_backlog=ConnBacklog,devcfg_backlog=CfgBacklog,streams_refs=StreamsRefs}) ->
  
  % Log that the controller is now connected to the remote REST server
  %% [TODO]: Remove when ready?
@@ -210,8 +214,8 @@ handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_us
  %
  % NOTE: If a backlog is empty, an empty list is returned
  %
- ConnBacklogRef = send_devconn_updates(ConnBacklog,ConnPid,Loc_user,Loc_id),
- CfgBacklogRef = send_devcfg_updates(CfgBacklog,ConnPid,Loc_user,Loc_id),
+ ConnBacklogRef = send_devconn_updates(ConnBacklog,ConnPid,Loc_user,Loc_id,RESTPath),
+ CfgBacklogRef = send_devcfg_updates(CfgBacklog,ConnPid,Loc_user,Loc_id,RESTPath),
 
  % Update the connection state to 'online', clear both backlogs, and
  % append their stream references to the 'streams_refs' state variable
@@ -543,19 +547,20 @@ append_to_backlog(Backlog,NewElems,Loc_id,BacklogName) when is_list(Backlog), is
 %%               - ConnPid:        The PID of the Gun connection process
 %%               - Loc_user:       The user the location belongs to [REMOTE SERVER COMPATIBILITY]
 %%               - Loc_id:         The controller's location ID (logging purposes)
+%%               - RESTPath:       The remote REST server path where to send the device connectivity updates
 %%
 %% RETURNS:      - [DevConnStreamRef] -> The stream reference associated with the HTTP request of sending
 %%                                       the list of device connection updates enclosed in a list
 %%               - []                 -> If an empty DevConnUpdates list was passed
 %% 
-send_devconn_updates([],_ConnPid,_Loc_user,_Loc_id) ->
+send_devconn_updates([],_ConnPid,_Loc_user,_Loc_id,_RESTPath) ->
 
  % If there are no device connection updates
  % to be sent, simply return an empty list
  [];
  
-send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevConnUpdates), is_pid(ConnPid),
-                                                                  is_list(Loc_user), is_integer(Loc_id), Loc_id > 0 ->
+send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id,RESTPath) when is_list(DevConnUpdates), is_pid(ConnPid),
+                                                                           is_list(Loc_user), is_integer(Loc_id), Loc_id > 0 ->
 
  % Attempt to encode the device connection updates in JSON format
  case devconns_to_json(DevConnUpdates,Loc_user) of
@@ -573,7 +578,7 @@ send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCon
    % device connection updates, obtaining the stream reference associated with the HTTP request
    DevConnStreamRef = gun:post(
                                ConnPid,                                     % PID of the Gun connection process
-                               "/deviceUpdate",                             % Resource path in the remote REST server
+                               RESTPath,                                    % Resource path in the remote REST server
 		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
                                ReqBody                                      % Request body
 			  	  	          ), 
@@ -582,10 +587,10 @@ send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCon
    [DevConnStreamRef]
  end;
 
-send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id) ->
+send_devconn_updates(DevConnUpdates,ConnPid,Loc_user,Loc_id,RESTPath) ->
 
  % If invalid arguments were passed, report the error
- io:format("[ctr_httpclient-~w]: <FATAL> Invalid arguments passed to 'send_devconn_updates' (DevConnUpdates = ~p, ConnPid = ~p, Loc_user = ~p, Loc_id = ~p), dropping the updates~n",[Loc_id,DevConnUpdates,ConnPid,Loc_user,Loc_id]),
+ io:format("[ctr_httpclient-~w]: <FATAL> Invalid arguments passed to 'send_devconn_updates' (DevConnUpdates = ~p, ConnPid = ~p, Loc_user = ~p, Loc_id = ~p, RESTPath = ~p), dropping the updates~n",[Loc_id,DevConnUpdates,ConnPid,Loc_user,Loc_id,RESTPath]),
  
  % Return an empty list
  [].
@@ -619,19 +624,20 @@ devconns_to_json(DevConnUpdates,Loc_user) ->
 %%               - ConnPid:        The PID of the Gun connection process
 %%               - Loc_user:       The user the location belongs to [REMOTE SERVER COMPATIBILITY]
 %%               - Loc_id:         The controller's location ID (logging purposes)
+%%               - RESTPath:       The remote REST server path where to send the device configuration updates
 %%
 %% RETURNS:      - [DevCfgStreamRef] -> The stream reference associated with the HTTP request of sending
 %%                                      the list of device configuration updates enclosed in a list
 %%               - []                -> If an empty DevCfgUpdates list was passed
 %% 
-send_devcfg_updates([],_ConnPid,_Loc_user,_Loc_id) ->
+send_devcfg_updates([],_ConnPid,_Loc_user,_Loc_id,_RESTPath) ->
 
  % If there are no device configuration updates
  % to be sent, simply return an empty list
  [];
  
-send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCfgUpdates), is_pid(ConnPid),
-                                                                is_list(Loc_user), is_integer(Loc_id), Loc_id > 0 ->
+send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id,RESTPath) when is_list(DevCfgUpdates), is_pid(ConnPid), is_list(Loc_user),
+                                                                         is_integer(Loc_id), Loc_id > 0, is_list(RESTPath) ->
 
  % Attempt to encode the device configuration updates in JSON format
  case devcfgs_to_json(DevCfgUpdates,Loc_user) of
@@ -649,7 +655,7 @@ send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCfgUp
    % device configuration updates, obtaining the stream reference associated with the HTTP request
    DevCfgStreamRef = gun:patch(
                                ConnPid,                                     % PID of the Gun connection process
-                               "/deviceUpdate",                             % Resource path in the remote REST server
+                               RESTPath,                                    % Resource path in the remote REST server
 		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
                                ReqBody                                      % Request body
 			  	  	          ), 
@@ -658,10 +664,10 @@ send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) when is_list(DevCfgUp
    [DevCfgStreamRef]
  end;
 
-send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id) ->
+send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id,RESTPath) ->
 
  % If invalid arguments were passed, report the error
- io:format("[ctr_httpclient-~w]: <FATAL> Invalid arguments passed to 'send_devcfg_updates' (DevCfgUpdates = ~p, ConnPid = ~p, Loc_user = ~p, Loc_id = ~p), dropping the updates~n",[Loc_id,DevCfgUpdates,ConnPid,Loc_user,Loc_id]),
+ io:format("[ctr_httpclient-~w]: <FATAL> Invalid arguments passed to 'send_devcfg_updates' (DevCfgUpdates = ~p, ConnPid = ~p, Loc_user = ~p, Loc_id = ~p, RESTPath = ~p), dropping the updates~n",[Loc_id,DevCfgUpdates,ConnPid,Loc_user,Loc_id,RESTPath]),
  
  % Return an empty list
  [].

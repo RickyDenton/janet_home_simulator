@@ -33,6 +33,15 @@
    {remote_rest_server_port,50505},
 
 
+   % REMOTE_REST_SERVER_PATH
+   % =======================
+   % DESCRIPTION:    The remote REST server path where to send
+   %                 device state and connectivity updates
+   % ALLOWED VALUES: list()/string()
+
+   {remote_rest_server_path,"/RESTServer/deviceUpdate"},
+
+
    % NODES_HOSTS
    % ===========
    % DESCRIPTION:    The list of hostnames where

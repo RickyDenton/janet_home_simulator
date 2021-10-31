@@ -227,12 +227,13 @@ handle_cast({node_start_success,CtrNode,AppInfo,NodeStarterPID},SrvState=#ctrmgr
  % 'ctr_sublocation' and 'ctr_device' Mnesia tables
  {ok,CtrSublocTable,CtrDeviceTable} = prepare_ctr_tables(Loc_id),
  
- % Retrieve the remote REST server address and port
+ % Retrieve the remote REST server address, port and path
  {ok,RemoteRESTServerAddr} = application:get_env(remote_rest_server_addr),
  {ok,RemoteRESTServerPort} = application:get_env(remote_rest_server_port),
+ {ok,RemoteRESTServerPath} = application:get_env(remote_rest_server_path),
 
  % Attempt to start the JANET Controller application on the controller node
- ok = rpc:call(CtrNode,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTServerAddr,RemoteRESTServerPort,Loc_user]),
+ ok = rpc:call(CtrNode,jctr,run,[Loc_id,CtrSublocTable,CtrDeviceTable,self(),CtrRESTPort,RemoteRESTServerAddr,RemoteRESTServerPort,RemoteRESTServerPath,Loc_user]),
  
  % Update the 'ctr_node' state variable to the complete name of the controller node
  % and await for the registration request of the controller's 'ctr_simserver' process

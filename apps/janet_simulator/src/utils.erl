@@ -317,7 +317,7 @@ get_devtype_default_config(fan) ->
 
 % Light
 get_devtype_default_config(light) ->
- #lightcfg{onoff = off, brightness = 50, colorsetting = "white"};
+ #lightcfg{onoff = off, brightness = 50, colorsetting = "#FFFFFF"};
 
 % Door
 get_devtype_default_config(door) ->
