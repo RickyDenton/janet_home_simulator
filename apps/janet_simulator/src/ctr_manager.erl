@@ -305,7 +305,7 @@ handle_cast(Request,SrvState=#ctrmgrstate{loc_id=Loc_id}) ->
 
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
-%% CONTROLLER NODE DOWN
+%% CONTROLLER_NODE_DOWN
 %% --------------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
 %% WHEN:      When the monitored 'ctr_simserver' process on the controller
@@ -315,42 +315,34 @@ handle_cast(Request,SrvState=#ctrmgrstate{loc_id=Loc_id}) ->
 %%            2) The PID of the process that was monitored (the 'ctr_simserver' process)
 %%            3) The reason for the monitored process's termination
 %% MATCHES:   (always) (when the monitor reference and the PID of the monitored process match the ones in the server's state)
-%% ACTIONS:   1) Report the Reason for the controller node termination
-%%            2) Update the controller state in the 'ctrmanager' table to "BOOTING"
-%%            3) Attempt to restart the the controller node via the handle_continue(start_controller_node,SrvState) callback
+%% ACTIONS:   If the 'ctr_simserver' process crashed before the monitor could be established (Reason = noproc), log the error, and
+%%            then stop the manager with the same Reason (normalizing it by prefixing 'ctr_simserver' if 'normal' or 'shutdown')
 %% ANSWER:    -
-%% NEW STATE: Update the server 'ctr_state to 'booting' and reset all other state variables apart from the location ID (loc_id)
+%% NEW STATE: -
+%%
+%% NOTE:      The manager is manually stopped even for "recoverable" errors (=/= 'noproc','noconnection','normal')
+%%            without waiting for the exit signal with such Reason to be received from the node for it appears that
+%%            links established via the slave:start_link/5 function are unidirectional...
 %%
 handle_info({'DOWN',MonRef,process,CtrSrvPid,Reason},SrvState) when MonRef =:= SrvState#ctrmgrstate.ctr_srv_mon, CtrSrvPid =:= SrvState#ctrmgrstate.ctr_srv_pid ->
 
- % Report the Reason for the controller node termination
+ % If the 'ctr_simserver' crashed before the monitor could be established (Reason = noproc) log the
+ % error, and normalize the error Reason if 'normal' or 'shutdown' by prefixing it with 'ctr_simserver'
+ NormalizedReason =
  case Reason of
- 
-  % The 'ctr_simserver' crashed before the monitor could be
-  % established (or was never spawned in the first place)
   noproc ->
-   io:format("[ctr_mgr-~w]: <ERROR> The controller's 'ctr_simserver' process was not found, attempting to restart the controller node~n",[SrvState#ctrmgrstate.loc_id]);
- 
-  % Connection with the controller's host was lost
-  noconnection ->
-   io:format("[ctr_mgr-~w]: <WARNING> Lost connection with the controller node's host, attempting to restart the controller node~n",[SrvState#ctrmgrstate.loc_id]);
- 
-  % Unknown termination reason
-  UnknownReason ->
-   io:format("[ctr_mgr-~w]: <WARNING> Controller node terminated with unknown reason \"~w\", attempting to restart it~n",[SrvState#ctrmgrstate.loc_id,UnknownReason])
+   io:format("[ctr_mgr-~w]: <ERROR> The controller's 'ctr_simserver' process was not found, the manager will now stop~n",[SrvState#ctrmgrstate.loc_id]);
+  normal ->
+   ctr_simserver_exit_normal;
+  shutdown ->
+   ctr_simserver_exit_shutdown;
+  _ ->
+   Reason
  end,
  
- % Explicitly stop the controller node for preventing reconnection
- % attempts from the 'slave' library should it come back online
- slave:stop(SrvState#ctrmgrstate.ctr_node),
+ % Stop the manager with the normalized error reason
+ {stop,NormalizedReason,SrvState};
  
- % Update the controller node state to "BOOTING" in the 'ctrmanager' table 
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#ctrmanager{loc_id=SrvState#ctrmgrstate.loc_id,mgr_pid=self(),status="BOOTING"}) end),	
- 
- % Update the server 'ctr_state' to 'booting', reset all other state variables apart from the location ID
- % and attempt to restart the controller node via the handle(start_controller_node,SrvState) callback
- {noreply,#ctrmgrstate{ctr_state = booting, loc_id = SrvState#ctrmgrstate.loc_id, _ = none},{continue,start_controller_node}};
-
 
 %% NODE_STARTER PROCESS TERMINATED
 %% -------------------------------
@@ -374,9 +366,10 @@ handle_info({'EXIT',NodeStarterPID,normal},SrvState=#ctrmgrstate{nodestarter_pid
  {noreply,SrvState#ctrmgrstate{nodestarter_pid = none}};
  
 % Exit Reason =/= normal => Report the error and stop the manager with such Reason
-handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#ctrmgrstate{nodestarter_pid = NodeStarterPID}) ->
+handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#ctrmgrstate{loc_id = Loc_id, nodestarter_pid = NodeStarterPID}) ->
+ io:format("[ctr_mgr-~w]: <FATAL> The node_starter process has crashed (reason = ~w), the manager will now stop~n",[Loc_id,NodeStarterError]),
  {stop,{node_starter_terminated,NodeStarterError},SrvState}.
- 
+
 
 %% ========================================================== TERMINATE ========================================================== %% 
 
@@ -388,7 +381,7 @@ handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#ctrmgrstate{nodes
 %% 4) The 'node_starter' process failed to start the controller node
 %% 5) The 'node_starter' process exited with Reason =/= 'normal
 %%
-terminate(_,SrvState) ->
+terminate(Reason,SrvState) ->
  
  % If still active, remove the monitor towards the controller's 'ctr_simserver'
  % process, also flushing possible notifications from the message queue  
@@ -408,11 +401,40 @@ terminate(_,SrvState) ->
  if
  
   % If the JANET Simulator is not stopping and the controller was
-  % booted, print a message reporting that its node is stopping
+  % booted, print a message reporting why the node stopped
   JANETStopping =:= false andalso SrvState#ctrmgrstate.ctr_state =/= booting ->
-   io:format("[ctr_mgr-~w]: Controller node stopped~n",[SrvState#ctrmgrstate.loc_id]);
- 
-  % In all other cases, do not report anything
+   case Reason of
+  
+    % The controller node has been temporarily stopped
+    shutdown ->
+     io:format("[ctr_mgr-~w]: Controller node stopped~n",[SrvState#ctrmgrstate.loc_id]);
+
+    % Connection with the controller node's host was lost
+    noconnection ->
+     io:format("[ctr_mgr-~w]: <WARNING> Lost connection with the controller node's host, the manager will now stop~n",[SrvState#ctrmgrstate.loc_id]);
+      
+    % The manager is exiting with reason 'normal'
+	%
+	% NOTE: This does not match when an error occured in starting the controller on
+	%       its nodes host (NODE_START_FAILURE cast()) since ctr_state =/= booting
+	%
+	normal ->
+	 io:format("[ctr_mgr-~w]: <FATAL> The manager is exiting with reason 'normal'~n",[SrvState#ctrmgrstate.loc_id]);
+
+    % The 'ctr_simserver' process exited with reason 'normal'
+    ctr_simserver_exit_normal ->
+     io:format("[ctr_mgr-~w]: <FATAL> The 'ctr_simserver' process exited with reason 'normal', the manager will now stop~n",[SrvState#ctrmgrstate.loc_id]);
+
+    % The 'ctr_simserver' process exited with reason 'shutdown'
+    ctr_simserver_exit_shutdown ->
+     io:format("[ctr_mgr-~w]: <ERROR> The 'ctr_simserver' process exited with reason 'shutdown', the manager will now stop~n",[SrvState#ctrmgrstate.loc_id]);
+
+    % In all other cases the controller node has crashed, with its Reason already being logged by the logger kernel module
+    _ ->
+	 io:format("[ctr_mgr-~w]: <ERROR> Controller node crashed~n",[SrvState#ctrmgrstate.loc_id])
+   end;
+	
+  % Otherwise if the JANET Simulator is stopping or the controller had not booted, do not report anything
   true -> 
    ok
  end.

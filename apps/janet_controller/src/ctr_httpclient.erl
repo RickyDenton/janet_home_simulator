@@ -202,8 +202,7 @@ handle_cast(Request,SrvState=#httpcstate{loc_id=Loc_id}) ->
 handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_user=Loc_user,conn_state='connecting',conn_pid=ConnPid,rest_path=RESTPath,devconn_backlog=ConnBacklog,devcfg_backlog=CfgBacklog,streams_refs=StreamsRefs}) ->
  
  % Log that the controller is now connected to the remote REST server
- %% [TODO]: Remove when ready?
- io:format("[ctr_httpclient-~w]: Uplink established~n",[Loc_id]),
+  % io:format("[ctr_httpclient-~w]: Uplink established~n",[Loc_id]),
  
  % Inform the 'ctr_manager' in the JANET Simulator passing by the 'ctr_simserver'
  % that the controller is now connected with the remote REST server
@@ -243,11 +242,10 @@ handle_info({gun_up,ConnPid,_Protocol},SrvState=#httpcstate{loc_id=Loc_id,loc_us
 %%            will periodically attempt to reconnect with the remote REST server, sending
 %%            a 'gun_up' message when it succeeds
 %%
-handle_info({gun_down,ConnPid,_Protocol,Reason,_KilledStreams},SrvState=#httpcstate{loc_id=Loc_id,conn_state=online,conn_pid=ConnPid}) ->
+handle_info({gun_down,ConnPid,_Protocol,_Reason,_KilledStreams},SrvState=#httpcstate{loc_id=_Loc_id,conn_state=online,conn_pid=ConnPid}) ->
  
  % Report that the controller is no longer connected with the remote REST server
- %% [TODO]: Remove when ready?
- io:format("[ctr_httpclient-~w]: Uplink down (reason = ~p)~n",[Loc_id,Reason]),
+  % io:format("[ctr_httpclient-~w]: Uplink down (reason = ~p)~n",[Loc_id,Reason]),
  
  % Inform the 'ctr_manager' in the JANET Simulator passing by the 'ctr_simserver'
  % that the controller is no longer connected with the remote REST server
@@ -382,19 +380,21 @@ handle_info({'DOWN',ConnRef,process,ConnPid,Reason},SrvState=#httpcstate{loc_id=
 %% Server termination when the Gun connection process is alive
 terminate(_,_SrvState=#httpcstate{conn_pid=ConnPid}) when is_pid(ConnPid)->
 
- %% [TODO]: Send controller stop message here?
- 
  % Stop the Gun connection process
- ok = gun:close(ConnPid),
- 
+ ok = gun:close(ConnPid);
+  
+ %% NOTE: This has been disabled to the Gun application taking very long to stop
+ %%       (it will be stopped however by the init process with the whole node) 
  % Stop the Gun application
- ok = application:stop(gun);
+ % ok = application:stop(gun); 
  
 %% Server termination when the Gun connection process is NOT alive
 terminate(_,_SrvState) ->
  
+ %% NOTE: This has been disabled to the Gun application taking very long to stop
+ %%       (it will be stopped however by the init process with the whole node) 
  % Ensure the Gun application to be stopped
- application:stop(gun),
+ % ok = application:stop(gun); 
  
  % Terminate
  ok.
@@ -653,12 +653,12 @@ send_devcfg_updates(DevCfgUpdates,ConnPid,Loc_user,Loc_id,RESTPath) when is_list
   
    % Otherwise if the encoding was successful, asynchronosuly send the remote REST server the
    % device configuration updates, obtaining the stream reference associated with the HTTP request
-   DevCfgStreamRef = gun:patch(
-                               ConnPid,                                     % PID of the Gun connection process
-                               RESTPath,                                    % Resource path in the remote REST server
-		     			       [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
-                               ReqBody                                      % Request body
-			  	  	          ), 
+   DevCfgStreamRef = gun:post(
+                              ConnPid,                                     % PID of the Gun connection process
+                              RESTPath,                                    % Resource path in the remote REST server
+		     			      [{<<"content-type">>, "application/json"}],  % Request "Content-Type" header
+                              ReqBody                                      % Request body
+			  	  	         ), 
  
    % Return the stream reference enclosed in a list
    [DevCfgStreamRef]

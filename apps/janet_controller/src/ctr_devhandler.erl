@@ -191,7 +191,7 @@ handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= S
  
  % Stop the 'ctr_devhandler' server (reason = 'normal' because no errors should be propagated to the 'sup_devhandlers' supervisor)
  {stop,normal,SrvState}.
-
+ 
 
 %% ========================================================== TERMINATE ========================================================== %% 
 

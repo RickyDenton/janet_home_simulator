@@ -4,7 +4,7 @@
  janet_controller,				                     % Application Name
  [
   {description,"JANET Home Controller"},	         % Application Description
-  {vsn,"0.9.0"},							         % Application Version
+  {vsn,"1.0.0"},							         % Application Version
   {modules,[jctr,ctr_db,sup_jctr,ctr_simserver,      % Application-specific Modules
             sup_devhandlers,ctr_devhandler,
 			ctr_pairserver,ctr_resthandler,

@@ -1128,31 +1128,56 @@ ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) ->
    %                         (if both controller node and the JANET Simulator are running)
    %
    try gen_ctr_command(Loc_id,ctr_db,DBFun,CtrArgsList) of	
-    
-	% If a reply was received from the controller node, concatenate it
-	% with the result(s) of the database operation on the Simulator
+	{error,_Reason} ->
+	
+	 % If the database operation on the controller node returned an error, the associated data
+	 % inconsistency with the JANET Simulator database must be fixed by restarting the controller
+	 restart_controller_consistency(Loc_id),
+	 
+	 % Concatenate the result of the database operation on the JANET Simulator
+	 % with an atom informing that the data inconsistency has been fixed
+	 print_ctr_db_sync_result(SimDBRes,consistency_fixed);
+	 
 	CtrDBRes ->
+	
+	 % Otherwise if the database operation on the controller node was successful,
+	 % concatenate it to the result(s) of the operation on the JANET Simulator database
 	 print_ctr_db_sync_result(SimDBRes,CtrDBRes)
    catch
-   
-    % If the JANET Simulator is not running, just return the
-	% result(s) of the database operation on the Simulator
     {error,janet_not_running} ->
+	
+     % If the JANET Simulator is not running, just return the
+  	 % result(s) of the database operation on the Simulator
      SimDBRes; 
- 
-    % If the assocaited controller is not running, just return
-	% the result(s) of the database operation on the Simulator
+
     {error,node_stopped} ->
+   
+     % If the associated controller is not running, just return
+ 	 % the result(s) of the database operation on the Simulator
      SimDBRes;
 
-    % If an error occured in attempting to mirror the operation in 
-	% the database of the associated controller, concatenate it
-	% with the result(s) of the database operation on the Simulator
-    CtrDBError ->
-	 print_ctr_db_sync_result(SimDBRes,CtrDBError)
+    _CtrDBError ->
+	
+	 % Otherwise if an error occured in mirroring the database operation in the controller node, the
+	 % associated data inconsistency with the JANET Simulator database must be fixed by restarting it
+     restart_controller_consistency(Loc_id),
+   
+   	 % Concatenate the result of the database operation on the JANET Simulator
+	 % with an atom informing that the data inconsistency has been fixed
+	 print_ctr_db_sync_result(SimDBRes,consistency_fixed)
    end
  end.
 
+%% Restarts a controller node so to fix a data inconsistency between its database and the JANET
+%% Simulator database (ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) helper function)
+restart_controller_consistency(Loc_id) ->
+
+ % Retrieve the controller manager PID
+ {_,CtrMgrPid,_} = db:get_manager_info(controller,Loc_id),
+ 
+ % Restart the controller manager by sending it an exit signal
+ exit(CtrMgrPid,db_consistency_error).
+ 
 %% Concatenates the result of a database operation in the JANET Simulator with the result of its mirroring in the
 %% associated location controller into a tuple (ctr_db_sync(DBFun,SimArgsList,CtrArgsList,Loc_id) helper function) 
 print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_atom(SimDBRes), is_atom(CtrDBRes) ->
@@ -1164,7 +1189,7 @@ print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_atom(Ctr
 print_ctr_db_sync_result(SimDBRes,CtrDBRes) when is_tuple(SimDBRes), is_tuple(CtrDBRes) ->
  list_to_tuple(tuple_to_list(SimDBRes) ++ [CtrDBRes]).
  
-
+ 
 %%====================================================================================================================================
 %%                                        PRIVATE JANET NODES STOP AND RESTART HELPER FUNCTIONS
 %%====================================================================================================================================

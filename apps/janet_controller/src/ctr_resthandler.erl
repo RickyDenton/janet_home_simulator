@@ -122,38 +122,18 @@ err_to_code_msg({invalid_hostname,HostName}) ->
 err_to_code_msg({device_not_started,Dev_id,InternalError}) ->
  {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was added, but an internal error occured in starting its node: ~p",[Dev_id,InternalError])};
 
-% The device was added into the Simulator database, but internal errors occured in
-% starting its node and in adding it into the Controller database (should NEVER happen)
-err_to_code_msg({add_dev_start_ctrdb_fail,Dev_id,InternalSimError,CtrDBError}) ->
- {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was added in the Simulator database, but internal errors occured in " ++
-                    "starting its node (~p) and in adding it into the Controller database (~p)",[Dev_id,InternalSimError,CtrDBError])};   
-
 %% UPDATE_DEV_SUBLOC + DELETE_DEVICE (POST /device/:dev_id + DELETE /device/:dev_id)
 %% ---------------------------------
 % Trying to operate on a device that does not exist
 err_to_code_msg({device_not_exists,Dev_id}) ->
  {404,io_lib:format("<ERROR> A device with such \"dev_id\" (~w) does not exist",[Dev_id])};
 
-%% UPDATE_DEV_SUBLOC (POST /device/:dev_id)
-%% -----------------
-% The device sublocation was updated in the Simulator but
-% not in the Controller database (should NEVER happen)
-err_to_code_msg({ctrdb_update_dev_subloc_fail,Dev_id,CtrDBError}) ->
- {500,io_lib:format("<SERVER ERROR> Sublocation of device with \"dev_id\" ~w was updated in the Simulator database, but "
-                    "an internal error occured in updating it in the Controller database (~p)",[Dev_id,CtrDBError])};   
-
 %% DELETE_DEVICE (DELETE /device/:dev_id)
 %% -------------
 % The device was deleted, but an internal error occured in stopping its node
 err_to_code_msg({device_node_not_stopped,Dev_id,InternalError}) ->
  {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was deleted, but an internal error occured in stopping its node (~p)",[Dev_id,InternalError])};   
-   
-% The device was deleted from the Simulator database, but internal errors occured in
-% stopping its node and deleting it from the Controller database (should NEVER happen)
-err_to_code_msg({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError}) ->
- {500,io_lib:format("<SERVER ERROR> The device of \"dev_id\" ~w was deleted from the Simulator database, but internal errors occured " ++
-                    "in stopping its node (~p) and in deleting it from the Controller database (~p)",[Dev_id,InternalError,CtrDBError])};   
-   
+
 %% DEVCOMMANDS (PATCH /device)
 %% -----------
 % HTTP request body could not be interpreted in JSON format
@@ -439,12 +419,7 @@ add_device_handler(Req,[Dev_id,Name,Subloc_id,CapitalType,HostName]) ->
    
   % The device was added into the database, but an internal error occured in starting its node
   {ok,InternalError,ok} ->
-   throw({device_not_started,Dev_id,InternalError});
-
-  % The device was added into the Simulator database, but an internal error occured
-  % starting its node AND in adding it into the Controller database (should NEVER happen)
-  {ok,InternalSimError,CtrDBError} ->
-   throw({add_dev_start_ctrdb_fail,Dev_id,InternalSimError,CtrDBError})
+   throw({device_not_started,Dev_id,InternalError})
  end. 
  
 
@@ -487,12 +462,7 @@ update_dev_subloc_handler(Req,[Dev_id,Subloc_id]) ->
   % Trying to update the sublocation of a device in a different location
   % (throw that the device does not exist in the current location)
   {error,different_locations} ->
-   throw({device_not_exists,Dev_id});
-   
-  % The device sublocation was updated in the Simulator but
-  % not in the Controller database (should NEVER happen)
-  {ok,CtrDBError} ->
-   throw({ctrdb_update_dev_subloc_fail,Dev_id,CtrDBError})
+   throw({device_not_exists,Dev_id})
  end. 
 
 
@@ -545,12 +515,7 @@ delete_device_handler(Req,[Dev_id]) ->
 
   % The device was deleted, but an internal error occured in stopping its node
   {ok,InternalError,ok} ->
-   throw({device_node_not_stopped,Dev_id,InternalError});
-   
-  % The device was deleted from the Simulator database, but internal errors occured in
-  % stopping its node and deleting it from the Controller database (should NEVER happen)
-  {ok,InternalError,CtrDBError} ->
-   throw({delete_dev_start_ctrdb_fail,Dev_id,InternalError,CtrDBError})
+   throw({device_node_not_stopped,Dev_id,InternalError})
  end. 
 
 
@@ -644,10 +609,39 @@ sim_db_sync(DBFun,SimArgsList,CtrArgsList) ->
    
   SimDBRes ->
    
-   % If the JANET Simulator database operation was successful, regardless of the results of its
-   % side-effects, if any (which are carried in the "SimDBRes" variable), attempt to mirror such
-   % operation in the location controller, concatenating in order the results of the two operations
-   print_sim_db_sync_result(SimDBRes,apply(ctr_db,DBFun,CtrArgsList))
+   % If the JANET Simulator database operation was successful, regardless of the results of its side-effects, if
+   % any (which are carried in the "SimDBRes" variable), attempt to mirror such operation in the controller database
+   case apply(ctr_db,DBFun,CtrArgsList) of
+   
+    % If an error occured in mirroring the operation in the controller database, the data inconsistency with
+	% the JANET Simulator database must be fixed by restarting the controller node, which is performed by:
+    %
+	% 1) CONCEALING the error from the REST client, returning him that the operation was successful
+	% 2) Spawning a temporary process which, after a delay allowing the 'ctr_resthandler' to reply
+	%    the "success" of the operation to the client, stops the JANET Controller application
+    %
+    {error,CtrDBError} ->
+	
+	 % Retrieve the controller's location ID
+     {ok,Loc_id} = application:get_env(janet_controller,loc_id),
+
+	 % Log that the controller node will soon be restarted to
+	 % fix the inconsistency with the JANET Simulator database
+     io:format("[ctr_resthandler~w]: <CONSISTENCY ERROR> The controller node will be restarted due to an inconsistency with the JANET Simulator database (DBFun = ~0p, SimArgsList = ~0p, SimDBRes = ~0p, CtrDBError = ~0p)~n",[Loc_id,DBFun,SimArgsList,SimDBRes,CtrDBError]),
+
+	 % Spawn a temporary process which, after a delay allowing to reply the client
+	 % that the operation was successful, stops the JANET controller application
+	 spawn_link(fun() -> timer:sleep(250), application:stop(janet_controller) end),
+	 
+	 % Concatenate the result of the database operation in the JANET Simulator with a fake
+	 % 'ok' concealing the error occured in mirroring the operation in the JANET Controller
+     print_sim_db_sync_result(SimDBRes,ok);
+	 
+	% Otherwise if the operation in the controller database was successful ('ok'),
+	% concatenate it with the result of the successful operation in the JANET Simulator
+	CtrDBSuccess ->
+	 print_sim_db_sync_result(SimDBRes,CtrDBSuccess)
+  end
  end.
    
    

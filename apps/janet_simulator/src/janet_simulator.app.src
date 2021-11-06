@@ -4,7 +4,7 @@
  janet_simulator,				            % Application Name
  [
   {description,"JANET Home Simulator"},   	% Application Description
-  {vsn,"0.9.0"},							% Application Version
+  {vsn,"1.0.0"},							% Application Version
   {modules,[jsim,db,utils,sup_jsim,         % Application-specific Modules
             sup_locs,locs_init,sup_loc,
 			loc_devs_init,ctr_manager,

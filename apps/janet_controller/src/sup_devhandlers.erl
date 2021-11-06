@@ -15,8 +15,8 @@ init(_) ->
    %% ==================================================== SUPERVISOR FLAGS ==================================================== %%
    {
     simple_one_for_one,   % RestartStrategy (simple_one_for_one for optimization purposes since all its children are of the same type)
-	1,                    % MaxRestarts
-	30                    % TimePeriod for MaxRestarts
+	0,                    % MaxRestarts
+    1                     % TimePeriod for MaxRestarts
    },
    
    %% =========================================== SUPERVISOR CHILDREN SPECIFICATIONS =========================================== %%

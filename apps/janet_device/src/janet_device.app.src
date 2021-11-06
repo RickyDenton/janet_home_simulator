@@ -4,7 +4,7 @@
  janet_device, 				                         % Application Name
  [
   {description,"JANET Home Device"},	             % Application Description
-  {vsn,"0.9.0"},							         % Application Version
+  {vsn,"1.0.0"},							         % Application Version
   {modules,[jdev,sup_jdev,dev_server,dev_statem]},   % Application-specific Modules                            
   {registered,[dev_server,dev_statem]},              % Application Registered Names
   {applications,[stdlib,kernel]},                    % Application Dependencies

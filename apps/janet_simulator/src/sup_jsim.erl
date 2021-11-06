@@ -41,6 +41,16 @@ init(_) ->
 	 [locs_init]                        % Child Modules (For Release Handling Purposes)
     },
 	
+	%% --------- The JANET Simulator remote hosts monitor (sim_hostsmonitor) --------- %%
+    {
+     sim_hostsmonitor,		            % ChildID
+     {sim_hostsmonitor,start_link,[]},  % Child Start Function
+ 	 permanent,                         % Child Restart Policy 
+	 8000,                              % Child Sub-tree Max Shutdown Time
+	 worker,                  	        % Child Type
+	 [sim_hostsmonitor]                 % Child Modules (For Release Handling Purposes)
+    },
+	
 	%% ------------- The JANET Simulator REST handler (sim_resthandler) ------------- %%
     {
      sim_resthandler,		            % ChildID
@@ -49,16 +59,6 @@ init(_) ->
 	 5000,                              % Child Sub-tree Max Shutdown Time
 	 worker,                  	        % Child Type
 	 [sim_resthandler]                  % Child Modules (For Release Handling Purposes)
-    },
-
-    %% --------- The JANET Simulator remote hosts monitor (sim_hostsmonitor) --------- %%
-    {
-     sim_hostsmonitor,		            % ChildID
-     {sim_hostsmonitor,start_link,[]},  % Child Start Function
- 	 permanent,                         % Child Restart Policy 
-	 8000,                              % Child Sub-tree Max Shutdown Time
-	 worker,                  	        % Child Type
-	 [sim_hostsmonitor]                 % Child Modules (For Release Handling Purposes)
     }
    ] 
   }

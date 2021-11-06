@@ -365,7 +365,7 @@ handle_cast(Request,SrvState=#devmgrstate{dev_id=Dev_id}) ->
  
 %% ========================================================= HANDLE_INFO ========================================================= %%  
 
-%% DEVICE NODE DOWN
+%% DEVICE_NODE_DOWN
 %% ----------------
 %% SENDER:    The Erlang Run-Time System (ERTS)
 %% WHEN:      When the monitored 'dev_server' process on the device 
@@ -375,44 +375,34 @@ handle_cast(Request,SrvState=#devmgrstate{dev_id=Dev_id}) ->
 %%            2) The PID of the process that was monitored (the 'dev_server' process)
 %%            3) The reason for the monitored process's termination
 %% MATCHES:   (always) (when the monitor reference and the PID of the monitored process match the ones in the server's state)
-%% ACTIONS:   1) Report the Reason for the device node termination
-%%            2) Update the device state in the 'devmanager' table to "BOOTING"
-%%            3) Attempt to restart the the device node via the handle_continue(start_device_node,SrvState) callback
+%% ACTIONS:   If the 'dev_server' process crashed before the monitor could be established (Reason = noproc), log the error, and
+%%            then stop the manager with the same Reason (normalizing it by prefixing 'dev_server' if 'normal' or 'shutdown')
 %% ANSWER:    -
-%% NEW STATE: Update the server 'dev_state' to 'booting' and reset all other state variables apart from the
-%%            device ID (dev_id), its location ID (loc_id) and the hostname of its controller node (ctr_hostname)
+%% NEW STATE: -
+%%
+%% NOTE:      The manager is manually stopped even for "recoverable" errors (=/= 'noproc','noconnection','normal')
+%%            without waiting for the exit signal with such Reason to be received from the node for it appears that
+%%            links established via the slave:start_link/5 function are unidirectional...
 %%
 handle_info({'DOWN',MonRef,process,DevSrvPid,Reason},SrvState) when MonRef =:= SrvState#devmgrstate.dev_srv_mon, DevSrvPid =:= SrvState#devmgrstate.dev_srv_pid ->
 
- % Report the Reason for the device node termination
+ % If the 'dev_server' crashed before the monitor could be established (Reason = noproc) log the
+ % error, and normalize the error Reason if 'normal' or 'shutdown' by prefixing it with 'dev_server'
+ NormalizedReason =
  case Reason of
- 
-  % The 'dev_server' crashed before the monitor could be
-  % established (or was never spawned in the first place)
   noproc ->
-   io:format("[dev_mgr-~w]: <ERROR> The device's 'dev_server' process was not found, attempting to restart the device node~n",[SrvState#devmgrstate.dev_id]);
- 
-  % Connection with the controller's host was lost
-  noconnection ->
-   io:format("[dev_mgr-~w]: <WARNING> Lost connection with the device node's host, attempting to restart the device node~n",[SrvState#devmgrstate.dev_id]);
- 
-  % Unknown termination reason
-  UnknownReason ->
-   io:format("[dev_mgr-~w]: <WARNING> Device node terminated with unknown reason \"~w\", attempting to restart it~n",[SrvState#devmgrstate.dev_id,UnknownReason])
+   io:format("[dev_mgr-~w]: <ERROR> The device's 'dev_server' process was not found, the manager will now stop~n",[SrvState#devmgrstate.dev_id]);
+  normal ->
+   dev_server_exit_normal;
+  shutdown ->
+   dev_server_exit_shutdown;
+  _ ->
+   Reason
  end,
  
- % Explicitly stop the device node for preventing reconnection
- % attempts from the 'slave' library should it come back online
- slave:stop(SrvState#devmgrstate.dev_node),
+ % Stop the manager with the normalized error reason
+ {stop,NormalizedReason,SrvState};
  
- % Update the device node state to "BOOTING" in the 'devmanager' table
- {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(#devmanager{dev_id=SrvState#devmgrstate.dev_id,loc_id=SrvState#devmgrstate.loc_id,mgr_pid=self(),status="BOOTING"}) end),
- 
- % Update the server 'dev_state' to 'booting', reset all other state variables apart from the device ID, location ID and the
- % hostname of the controller node, and attempt to restart the device node via the handle(start_device_node,SrvState) callback
- {noreply,#devmgrstate{dev_state = booting, dev_id = SrvState#devmgrstate.dev_id, loc_id = SrvState#devmgrstate.loc_id,
-                        ctr_hostname = SrvState#devmgrstate.ctr_hostname, _ = none},{continue,start_device_node}};
-				   
 
 %% NODE_STARTER PROCESS TERMINATED
 %% -------------------------------
@@ -436,7 +426,8 @@ handle_info({'EXIT',NodeStarterPID,normal},SrvState=#devmgrstate{nodestarter_pid
  {noreply,SrvState#devmgrstate{nodestarter_pid = none}};
  
 % Exit Reason =/= normal => Report the error and stop the manager with such Reason
-handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#devmgrstate{nodestarter_pid = NodeStarterPID}) ->
+handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#devmgrstate{dev_id = Dev_id, nodestarter_pid = NodeStarterPID}) ->
+ io:format("[dev_mgr-~w]: <FATAL> The node_starter process has crashed (reason = ~w), the manager will now stop~n",[Dev_id,NodeStarterError]),
  {stop,{node_starter_terminated,NodeStarterError},SrvState}.
  
  
@@ -450,7 +441,7 @@ handle_info({'EXIT',NodeStarterPID,NodeStarterError},SrvState=#devmgrstate{nodes
 %% 4) The 'node_starter' process failed to start the device node
 %% 5) The 'node_starter' process exited with Reason =/= 'normal
 %%
-terminate(_,SrvState) ->
+terminate(Reason,SrvState) ->
  
  % If still active, remove the monitor towards the device's 'dev_server'
  % process, also flushing possible notifications from the message queue  
@@ -470,12 +461,41 @@ terminate(_,SrvState) ->
  if
  
   % If the JANET Simulator is not stopping and the device was
-  % booted, print a message reporting that the its node is stopping
+  % booted, print a message reporting why the node stopped
   JANETStopping =:= false andalso SrvState#devmgrstate.dev_state =/= booting ->
-   io:format("[dev_mgr-~w]: Device node stopped~n",[SrvState#devmgrstate.dev_id]);
+   case Reason of
+  
+    % The device node has been temporarily stopped
+    shutdown ->
+     io:format("[dev_mgr-~w]: Device node stopped~n",[SrvState#devmgrstate.dev_id]);
  
-  % In all other cases, print nothing
-  true ->
+    % Connection with the device node's host was lost
+    noconnection ->
+     io:format("[dev_mgr-~w]: <WARNING> Lost connection with the device node's host, the manager will now stop~n",[SrvState#devmgrstate.dev_id]);
+   
+    % The manager is exiting with reason 'normal'
+	%
+	% NOTE: This does not match when an error occured in starting the device on
+	%       its nodes host (NODE_START_FAILURE cast()) since dev_state =/= booting
+	%
+	normal ->
+	 io:format("[dev_mgr-~w]: <FATAL> The manager is exiting with reason 'normal'~n",[SrvState#devmgrstate.dev_id]);
+	 
+    % The 'dev_server' process exited with reason 'normal'
+    dev_server_exit_normal ->
+     io:format("[dev_mgr-~w]: <FATAL> The 'dev_server' process exited with reason 'normal', the manager will now stop~n",[SrvState#devmgrstate.dev_id]);
+
+    % The 'dev_server' process exited with reason 'shutdown'
+    dev_server_exit_shutdown ->
+     io:format("[dev_mgr-~w]: <ERROR> The 'dev_server' process exited with reason 'shutdown', the manager will now stop~n",[SrvState#devmgrstate.dev_id]);
+	 
+    % In all other cases the device node has crashed, with its Reason already being logged by the logger kernel module
+    _ ->
+	 io:format("[dev_mgr-~w]: <ERROR> Device node crashed~n",[SrvState#devmgrstate.dev_id])
+   end;  
+	
+  % Otherwise if the JANET Simulator is stopping or the device had not booted, do not report anything
+  true -> 
    ok
  end.
 
